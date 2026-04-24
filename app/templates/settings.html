@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Settings · Novel Hub{% endblock %}
+{% block content %}
+<section class="page">
+  <div class="panel"><h2>Settings</h2><p class="muted">系统信息仅展示路径与状态，不泄露敏感密码。</p></div>
+  <div class="panel settings-list">
+    <div><span>Vault Root</span><code>{{ vault_root }}</code></div>
+    <div><span>Database</span><code>{{ db_path }}</code></div>
+    <div><span>Backup Dir</span><code>{{ backup_root }}</code></div>
+    <div><span>登录状态</span><strong>{{ login_state }}</strong></div>
+    <div><span>操作日志</span><strong>{{ log_count }}</strong></div>
+  </div>
+  <div class="panel">
+    <h3>Syncthing 提醒</h3>
+    <p class="muted">如果 VPS 会写入 Markdown，Syncthing 文件夹应配置为 <strong>Send &amp; Receive</strong>，避免同步冲突。</p>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}World · {{ project }}{% endblock %}
+{% block content %}
+<section class="page">
+  <div class="panel row-between"><h2>{{ project }} · World</h2><a class="btn" href="/projects/{{ project }}">返回项目</a></div>
+  <div class="dashboard-grid">
+    {% for category, rows in categories.items() %}
+    <article class="panel">
+      <h3>{{ category }}</h3>
+      {% if rows %}
+        {% for item in rows %}
+          <button class="list-item plain" hx-get="/projects/{{ project }}/notes/world/{{ item.filename }}" hx-target="#world-preview">
+            <div><strong>{{ item.name }}</strong><p class="muted">{{ item.word_count }} 字</p></div>
+          </button>
+        {% endfor %}
+      {% else %}
+      <p class="muted">暂无条目</p>
+      {% endif %}
+    </article>
+    {% endfor %}
+  </div>
+  <div id="world-preview" class="panel">请选择一个条目查看预览。</div>
+</section>
+{% endblock %}

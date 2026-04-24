@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Characters · {{ project }}{% endblock %}
+{% block content %}
+<section class="page">
+  <div class="panel row-between"><h2>{{ project }} · Characters</h2><a class="btn" href="/projects/{{ project }}">返回项目</a></div>
+  <div class="project-grid">
+    {% for item in items %}
+    <article class="panel">
+      <h3>{{ item.name }}</h3>
+      <p class="muted">{{ item.word_count }} 字 · {{ item.modified.strftime('%Y-%m-%d %H:%M') }} UTC</p>
+      <p>{{ item.excerpt or '暂无摘要' }}</p>
+      <button class="btn" hx-get="/projects/{{ project }}/notes/characters/{{ item.filename }}" hx-target="#note-preview">预览</button>
+    </article>
+    {% else %}
+    <div class="panel empty-state">characters/ 目录暂无人物卡。</div>
+    {% endfor %}
+  </div>
+  <div id="note-preview" class="panel"></div>
+</section>
+{% endblock %}

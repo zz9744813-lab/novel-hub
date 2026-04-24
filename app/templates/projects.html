@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Projects - Novel Hub{% endblock %}
+{% block content %}
+<section class="card">
+  <h2>小说项目</h2>
+  <table>
+    <tr><th>项目</th><th>章节数</th><th>总字数</th><th>最近更新</th><th>操作</th></tr>
+    {% for p in projects %}
+    <tr>
+      <td>{{ p.name }}</td>
+      <td>{{ p.chapters }}</td>
+      <td>{{ p.total_words }}</td>
+      <td>{% if p.latest %}{{ p.latest.strftime('%Y-%m-%d %H:%M') }} UTC{% endif %}</td>
+      <td>
+        <a href="/projects/{{ p.name }}/chapters">Chapters</a>
+        <a href="/projects/{{ p.name }}/characters">Characters</a>
+        <a href="/projects/{{ p.name }}/world">World</a>
+        <a href="/projects/{{ p.name }}/export">Export</a>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
+{% endblock %}

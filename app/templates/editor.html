@@ -1,28 +1,106 @@
 {% extends "base.html" %}
-{% block title %}Editor - {{ filename }}{% endblock %}
+{% block title %}{{ project }} / {{ filename }} · Novel Hub{% endblock %}
+{% block body_class %}editor-page{% endblock %}
+{% block topbar %}
+<header class="topbar editor-topbar">
+  <div class="topbar-left"><a href="/">Novel Hub</a><span class="crumb">/ <a href="/projects/{{ project }}">{{ project }}</a> / {{ filename }}</span></div>
+  <div class="topbar-center" id="save-state">已加载</div>
+  <div class="topbar-right">
+    <button class="icon-btn" data-action="theme">🌗</button>
+    <button class="icon-btn" data-action="focus">专注模式</button>
+    <button class="icon-btn" data-action="typewriter">打字机</button>
+    <button class="icon-btn" data-action="toggle-left">左栏</button>
+    <button class="icon-btn" data-action="toggle-right">右栏</button>
+    <a class="icon-btn" href="/logout">退出</a>
+  </div>
+</header>
+{% endblock %}
 {% block content %}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/markdown/markdown.min.js"></script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css"/>
+<section class="workspace" data-editor-workspace>
+  <aside class="sidebar left" data-panel="left">
+    <h3>{{ project }}</h3>
+    <p class="muted">{{ project_words }} / {{ goal }} 字</p>
+    <div class="progress"><i style="width:{% if goal %}{{ (project_words / goal * 100)|round|int }}{% else %}0{% endif %}%"></i></div>
+    <form action="/projects/{{ project }}/chapters/new" method="post" class="inline-form compact">
+      <input name="title" placeholder="新章节" required>
+      <button class="btn">+</button>
+    </form>
+    <div class="tree">
+      {% for c in chapters %}
+      <a class="tree-item {% if c.filename == filename %}active{% endif %}" href="/projects/{{ project }}/editor/{{ c.filename }}">
+        <div>
+          <strong>{{ c.title }}</strong>
+          <small>{{ c.word_count }} 字</small>
+        </div>
+        <span class="badge {{ c.status }}">{{ c.status }}</span>
+      </a>
+      {% endfor %}
+    </div>
+  </aside>
 
-<section class="card">
-<h2>编辑 {{ filename }}</h2>
-<form hx-post="/projects/{{ project }}/editor/{{ filename }}" hx-target="#save-result" method="post" id="editor-form">
-  <div class="fm-grid">
-    <input name="title" placeholder="title" value="{{ frontmatter.get('title','') }}" />
-    <input name="chapter" placeholder="chapter" value="{{ frontmatter.get('chapter','') }}" />
-    <input name="status" placeholder="status" value="{{ frontmatter.get('status','draft') }}" />
-    <input name="volume" placeholder="volume" value="{{ frontmatter.get('volume','') }}" />
-    <input name="tags" placeholder="tags,a,b" value="{{ (frontmatter.get('tags',[])|join(',')) }}" />
-  </div>
-  <textarea id="body" name="body">{{ body }}</textarea>
-  <div class="actions">
-    <button type="submit">保存</button>
-    <button type="button" hx-post="/projects/{{ project }}/preview" hx-include="#editor-form" hx-target="#preview">预览</button>
-  </div>
-</form>
-<div id="save-result"></div>
+  <section class="editor-center">
+    <form id="editor-form" hx-post="/projects/{{ project }}/editor/{{ filename }}" hx-target="#save-result" method="post">
+      <div class="editor-header">
+        <input class="chapter-title" name="title" value="{{ frontmatter.title }}" placeholder="章节标题" />
+        <div class="editor-meta-inline">
+          <span>{{ active.word_count if active else 0 }} 字</span>
+          <span id="saved-at">--</span>
+          <label>字号
+            <select id="font-size-picker">
+              <option value="small">小</option>
+              <option value="medium" selected>中</option>
+              <option value="large">大</option>
+            </select>
+          </label>
+          <button class="btn btn-primary" type="submit">保存</button>
+          <button class="btn" type="button" hx-post="/projects/{{ project }}/preview" hx-include="#editor-form" hx-target="#preview">预览</button>
+        </div>
+      </div>
+
+      <div class="editor-canvas">
+        <textarea id="body" name="body">{{ body }}</textarea>
+      </div>
+
+      <div id="save-result"></div>
+    </form>
+    <section class="panel preview-panel"><h4>预览</h4><div id="preview"></div></section>
+  </section>
+
+  <aside class="sidebar right" data-panel="right">
+    <h3>Chapter Meta</h3>
+    <input type="hidden" name="title" form="editor-form" value="{{ frontmatter.title }}" data-title-mirror>
+    <label>chapter<input name="chapter" form="editor-form" value="{{ frontmatter.chapter }}"></label>
+    <label>status
+      <select name="status" form="editor-form">
+        {% for s in ['idea','outline','draft','rewrite','polish','done','published'] %}
+          <option value="{{ s }}" {% if frontmatter.status == s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>volume<input name="volume" form="editor-form" value="{{ frontmatter.volume }}"></label>
+
+    <div class="tag-field" data-tag-field data-target="tags"><span>tags</span><div class="chips"></div><input data-input placeholder="回车添加"></div>
+    <input type="hidden" name="tags" form="editor-form" value="{{ frontmatter.tags|join(',') }}" data-hidden="tags">
+
+    <div class="tag-field" data-tag-field data-target="characters"><span>characters</span><div class="chips"></div><input data-input placeholder="回车添加"></div>
+    <input type="hidden" name="characters" form="editor-form" value="{{ frontmatter.characters|join(',') }}" data-hidden="characters">
+
+    <div class="tag-field" data-tag-field data-target="locations"><span>locations</span><div class="chips"></div><input data-input placeholder="回车添加"></div>
+    <input type="hidden" name="locations" form="editor-form" value="{{ frontmatter.locations|join(',') }}" data-hidden="locations">
+
+    <div class="tag-field" data-tag-field data-target="warnings"><span>warnings</span><div class="chips"></div><input data-input placeholder="回车添加"></div>
+    <input type="hidden" name="warnings" form="editor-form" value="{{ frontmatter.warnings|join(',') }}" data-hidden="warnings">
+
+    <label>pov<input name="pov" form="editor-form" value="{{ frontmatter.pov }}"></label>
+    <label>draft_version<input name="draft_version" form="editor-form" value="{{ frontmatter.draft_version }}"></label>
+    <label>synopsis<textarea name="synopsis" form="editor-form">{{ frontmatter.synopsis }}</textarea></label>
+    <label>notes<textarea name="notes" form="editor-form">{{ frontmatter.notes }}</textarea></label>
+  </aside>
 </section>
-<section class="card"><h3>预览</h3><div id="preview"></div></section>
+{% endblock %}
+{% block scripts %}
 <script src="/static/js/editor.js"></script>
 {% endblock %}

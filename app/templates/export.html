@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Export · Novel Hub{% endblock %}
+{% block content %}
+<section class="page">
+  <div class="panel"><h2>导出中心</h2><p class="muted">保留 TXT 导出，导出文件写入各项目 exports/ 目录。</p></div>
+  <div class="project-grid">
+    {% for p in projects %}
+    <article class="panel">
+      <h3>{{ p.name }}</h3>
+      <p class="muted">{{ p.chapter_count }} 章 · {{ p.total_words }} 字</p>
+      <button class="btn btn-primary" hx-post="/export/{{ p.name }}" hx-target="#export-result">导出 TXT</button>
+      <a class="btn" href="/projects/{{ p.name }}/export">直接下载</a>
+    </article>
+    {% endfor %}
+  </div>
+  <div id="export-result" class="panel"></div>
+</section>
+{% endblock %}

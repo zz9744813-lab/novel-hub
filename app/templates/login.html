@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>Login - Novel Hub</title><link rel="stylesheet" href="/static/css/style.css" /></head>
+<body class="login-page">
+  <form method="post" class="card login-card">
+    <h2>Novel Hub 登录</h2>
+    <label>管理密码</label>
+    <input type="password" name="password" required />
+    {% if error %}<p class="error">{{ error }}</p>{% endif %}
+    <button type="submit">登录</button>
+  </form>
+</body>
+</html>

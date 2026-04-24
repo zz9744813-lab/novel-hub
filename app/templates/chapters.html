@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Chapters - {{ project }}{% endblock %}
+{% block content %}
+<section class="card">
+  <h2>{{ project }} / chapters</h2>
+  <table>
+    <tr><th>标题</th><th>章节号</th><th>状态</th><th>字数</th><th>修改时间</th><th></th></tr>
+    {% for c in chapters %}
+    <tr>
+      <td>{{ c.title }}</td><td>{{ c.chapter }}</td><td>{{ c.status }}</td><td>{{ c.word_count }}</td>
+      <td>{{ c.modified.strftime('%Y-%m-%d %H:%M') }} UTC</td>
+      <td><a href="/projects/{{ project }}/editor/{{ c.filename }}">编辑</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
+{% endblock %}

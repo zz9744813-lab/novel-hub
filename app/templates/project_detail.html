@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}{{ project }} · Novel Hub{% endblock %}
+{% block content %}
+<section class="page">
+  <div class="panel row-between">
+    <div>
+      <h2>{{ project }}</h2>
+      <p class="muted">总字数 {{ project_info.total_words }} · 章节 {{ project_info.chapter_count }} · 角色 {{ project_info.character_count }} · 世界观 {{ project_info.world_count }}</p>
+    </div>
+    <div class="row-gap">
+      <form action="/projects/{{ project }}/chapters/new" method="post" class="inline-form">
+        <input name="title" placeholder="新章节标题" required>
+        <button class="btn btn-primary">新建章节</button>
+      </form>
+      <a class="btn" href="/projects/{{ project }}/characters">Characters</a>
+      <a class="btn" href="/projects/{{ project }}/world">World</a>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>章节筛选</h3>
+    <div class="filter-row">
+      <a class="chip {% if status_filter == 'all' %}active{% endif %}" href="/projects/{{ project }}">all</a>
+      {% for s in status_options %}
+      <a class="chip {% if status_filter == s %}active{% endif %}" href="/projects/{{ project }}?status={{ s }}">{{ s }}</a>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="panel">
+    {% if chapters %}
+    <div class="chapter-list">
+      {% for c in chapters %}
+      <a class="list-item" href="/projects/{{ project }}/editor/{{ c.filename }}">
+        <div>
+          <strong>{{ c.title }}</strong>
+          <p class="muted">第 {{ c.chapter or '-' }} 章 · {{ c.word_count }} 字</p>
+        </div>
+        <span class="badge {{ c.status }}">{{ c.status }}</span>
+      </a>
+      {% endfor %}
+    </div>
+    {% else %}
+      <div class="empty-state">暂无章节，先创建第一章。</div>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

@@ -1,13 +1,20 @@
 <!doctype html>
-<html lang="zh-CN">
-<head><meta charset="UTF-8"><title>Login - Novel Hub</title><link rel="stylesheet" href="/static/css/style.css" /></head>
-<body class="login-page">
-  <form method="post" class="card login-card">
-    <h2>Novel Hub 登录</h2>
-    <label>管理密码</label>
-    <input type="password" name="password" required />
-    {% if error %}<p class="error">{{ error }}</p>{% endif %}
-    <button type="submit">登录</button>
-  </form>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Login · Novel Hub</title>
+  <link rel="stylesheet" href="/static/css/app.css" />
+</head>
+<body class="login-body">
+  <section class="login-panel">
+    <h1>Novel Hub</h1>
+    <p class="muted">沉浸式小说创作工作台</p>
+    <form method="post">
+      <label>管理员密码</label>
+      <input type="password" name="password" required autocomplete="current-password" />
+      {% if error %}<p class="error">{{ error }}</p>{% endif %}
+      <button class="btn btn-primary" type="submit">登录</button>
+    </form>
+  </section>
 </body>
 </html>

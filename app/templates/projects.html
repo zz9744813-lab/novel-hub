@@ -1,24 +1,36 @@
 {% extends "base.html" %}
-{% block title %}Projects - Novel Hub{% endblock %}
+{% block title %}Projects · Novel Hub{% endblock %}
 {% block content %}
-<section class="card">
-  <h2>小说项目</h2>
-  <table>
-    <tr><th>项目</th><th>章节数</th><th>总字数</th><th>最近更新</th><th>操作</th></tr>
+<section class="page">
+  <div class="panel row-between">
+    <h2>Projects</h2>
+    <form class="inline-form" action="/projects/new" method="post">
+      <input name="name" placeholder="新项目名称" required />
+      <button class="btn btn-primary" type="submit">新建项目</button>
+    </form>
+  </div>
+
+  {% if projects %}
+  <div class="project-grid">
     {% for p in projects %}
-    <tr>
-      <td>{{ p.name }}</td>
-      <td>{{ p.chapters }}</td>
-      <td>{{ p.total_words }}</td>
-      <td>{% if p.latest %}{{ p.latest.strftime('%Y-%m-%d %H:%M') }} UTC{% endif %}</td>
-      <td>
-        <a href="/projects/{{ p.name }}/chapters">Chapters</a>
-        <a href="/projects/{{ p.name }}/characters">Characters</a>
-        <a href="/projects/{{ p.name }}/world">World</a>
-        <a href="/projects/{{ p.name }}/export">Export</a>
-      </td>
-    </tr>
+    <article class="panel project-card">
+      <div class="row-between">
+        <h3>{{ p.name }}</h3>
+        <span class="badge">{{ p.status }}</span>
+      </div>
+      <p class="muted">{{ p.chapter_count }} 章 · {{ p.total_words }} 字</p>
+      <p class="muted">角色 {{ p.character_count }} · 世界观 {{ p.world_count }}</p>
+      <div class="progress"><i style="width: {{ p.progress }}%"></i></div>
+      <p class="muted">目标进度 {{ p.progress }}%</p>
+      <p class="muted">最近更新：{% if p.latest %}{{ p.latest.strftime('%Y-%m-%d %H:%M') }} UTC{% else %}--{% endif %}</p>
+      <a class="btn btn-primary" href="/projects/{{ p.name }}">进入项目</a>
+    </article>
     {% endfor %}
-  </table>
+  </div>
+  {% else %}
+  <div class="panel empty-state">
+    <p>还没有项目。在 <code>/root/ObsidianVault/Novels</code> 下创建目录，或使用上方按钮创建。</p>
+  </div>
+  {% endif %}
 </section>
 {% endblock %}

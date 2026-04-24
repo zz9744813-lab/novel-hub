@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Editor - {{ filename }}{% endblock %}
+{% block content %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/markdown/markdown.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css"/>
+
+<section class="card">
+<h2>编辑 {{ filename }}</h2>
+<form hx-post="/projects/{{ project }}/editor/{{ filename }}" hx-target="#save-result" method="post" id="editor-form">
+  <div class="fm-grid">
+    <input name="title" placeholder="title" value="{{ frontmatter.get('title','') }}" />
+    <input name="chapter" placeholder="chapter" value="{{ frontmatter.get('chapter','') }}" />
+    <input name="status" placeholder="status" value="{{ frontmatter.get('status','draft') }}" />
+    <input name="volume" placeholder="volume" value="{{ frontmatter.get('volume','') }}" />
+    <input name="tags" placeholder="tags,a,b" value="{{ (frontmatter.get('tags',[])|join(',')) }}" />
+  </div>
+  <textarea id="body" name="body">{{ body }}</textarea>
+  <div class="actions">
+    <button type="submit">保存</button>
+    <button type="button" hx-post="/projects/{{ project }}/preview" hx-include="#editor-form" hx-target="#preview">预览</button>
+  </div>
+</form>
+<div id="save-result"></div>
+</section>
+<section class="card"><h3>预览</h3><div id="preview"></div></section>
+<script src="/static/js/editor.js"></script>
+{% endblock %}

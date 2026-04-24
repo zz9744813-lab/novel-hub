@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Novel Hub{% endblock %}
+{% block content %}
+<section class="grid">
+  <article class="card"><h3>总字数</h3><p>{{ total_words }}</p></article>
+  <article class="card"><h3>今日新增</h3><p>{{ today_added }}</p></article>
+  <article class="card"><h3>项目数</h3><p>{{ projects|length }}</p></article>
+</section>
+
+<section class="card">
+  <h2>最近修改章节</h2>
+  <table>
+    <tr><th>项目</th><th>章节</th><th>状态</th><th>字数</th><th>修改时间(UTC)</th></tr>
+    {% for c in recent_chapters %}
+    <tr>
+      <td>{{ c.project }}</td>
+      <td>{{ c.title }}</td>
+      <td>{{ c.status }}</td>
+      <td>{{ c.word_count }}</td>
+      <td>{{ c.modified.strftime('%Y-%m-%d %H:%M') }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
+{% endblock %}

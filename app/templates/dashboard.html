@@ -1,64 +1,112 @@
 {% extends "base.html" %}
 {% block title %}Dashboard · Novel Hub{% endblock %}
 {% block content %}
-<section class="page page-dashboard">
-  <div class="panel hero">
-    <h2>写作仪表盘</h2>
-    <p class="muted">聚焦今天，稳定推进你的长篇。</p>
-    <div class="stats-inline">
-      <div><span>今日新增</span><strong>{{ today_words }}</strong></div>
-      <div><span>总字数</span><strong>{{ total_words }}</strong></div>
-      <div><span>项目数</span><strong>{{ projects|length }}</strong></div>
-      <div><span>日目标</span><strong>{{ daily_goal }}</strong></div>
+<section class="flex flex-col gap-6">
+  <div class="bg-panel border border-border_color rounded-xl p-6 shadow-sm relative overflow-hidden">
+    <div class="absolute inset-0 opacity-5 pointer-events-none" style="background-image: radial-gradient(var(--accent) 1px, transparent 1px); background-size: 20px 20px;"></div>
+    <div class="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+      <div>
+        <h2 class="text-3xl font-bold mb-2">写作仪表盘</h2>
+        <p class="text-muted">聚焦今天，稳定推进你的长篇。</p>
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 w-full md:w-auto">
+        <div class="bg-bg border border-border_color rounded-lg p-4 min-w-[120px]">
+          <span class="block text-sm text-muted mb-1">今日新增</span>
+          <strong class="text-2xl text-accent">{{ today_words }}</strong>
+        </div>
+        <div class="bg-bg border border-border_color rounded-lg p-4 min-w-[120px]">
+          <span class="block text-sm text-muted mb-1">总字数</span>
+          <strong class="text-2xl">{{ total_words }}</strong>
+        </div>
+        <div class="bg-bg border border-border_color rounded-lg p-4 min-w-[120px]">
+          <span class="block text-sm text-muted mb-1">项目数</span>
+          <strong class="text-2xl">{{ projects|length }}</strong>
+        </div>
+        <div class="bg-bg border border-border_color rounded-lg p-4 min-w-[120px]">
+          <span class="block text-sm text-muted mb-1">日目标</span>
+          <strong class="text-2xl">{{ daily_goal }}</strong>
+        </div>
+      </div>
     </div>
   </div>
 
-  <div class="dashboard-grid">
-    <article class="panel">
-      <h3>最近 7 天趋势</h3>
-      <div class="trend-placeholder">
+  <div class="grid lg:grid-cols-3 gap-6">
+    <article class="bg-panel border border-border_color rounded-xl p-6 shadow-sm lg:col-span-2 flex flex-col">
+      <h3 class="text-lg font-semibold mb-6 flex items-center gap-2">
+        <svg class="w-5 h-5 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"></path></svg>
+        最近 7 天趋势
+      </h3>
+      <div class="flex-1 flex items-end justify-between gap-2 h-40 mb-4 border-b border-border_color/50 pb-2">
         {% for t in trend %}
-        <div class="bar"><span>{{ t.day }}</span><i style="height: {{ 10 + t.words }}%"></i></div>
-        {% endfor %}
-      </div>
-      <p class="muted">暂无历史写作数据，后续将根据保存日志自动生成趋势。</p>
-    </article>
-
-    <article class="panel">
-      <h3>快速入口</h3>
-      <div class="quick-actions">
-        {% if quick_project %}
-        <a class="btn btn-primary" href="/projects/{{ quick_project }}">继续写作</a>
-        {% else %}
-        <button class="btn" disabled>继续写作</button>
-        {% endif %}
-        <a class="btn" href="/projects">查看项目</a>
-        <a class="btn" href="/export">导出</a>
-        <button class="btn" disabled title="示例项目按钮预留">创建示例项目</button>
-      </div>
-    </article>
-
-    <article class="panel span-2">
-      <h3>最近修改章节</h3>
-      {% if recent_chapters %}
-      <div class="list">
-        {% for c in recent_chapters %}
-        <a class="list-item" href="/projects/{{ c.project }}/editor/{{ c.filename }}">
-          <div>
-            <strong>{{ c.title }}</strong>
-            <p class="muted">{{ c.project }} · {{ c.word_count }} 字</p>
+        <div class="flex-1 flex flex-col items-center justify-end gap-2 group">
+          <div class="w-full max-w-[40px] bg-accent/20 rounded-t-md group-hover:bg-accent/40 transition-colors relative" style="height: {{ 10 + t.words }}%">
+            <div class="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-panel border border-border_color text-xs rounded px-2 py-1 pointer-events-none whitespace-nowrap z-10">{{ t.words }} 字</div>
+            <div class="w-full h-1 bg-accent absolute top-0 left-0 rounded-t-md"></div>
           </div>
-          <span class="badge {{ c.status }}">{{ c.status }}</span>
-        </a>
+          <span class="text-xs text-muted">{{ t.day }}</span>
+        </div>
         {% endfor %}
       </div>
-      {% else %}
-      <div class="empty-state">
-        <p>在 <code>/root/ObsidianVault/Novels</code> 下创建你的第一部作品。</p>
-        <button class="btn" disabled>创建示例项目</button>
+      <p class="text-xs text-muted text-center">暂无历史写作数据，后续将根据保存日志自动生成趋势。</p>
+    </article>
+
+    <article class="bg-panel border border-border_color rounded-xl p-6 shadow-sm flex flex-col">
+      <h3 class="text-lg font-semibold mb-6 flex items-center gap-2">
+        <svg class="w-5 h-5 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+        快速入口
+      </h3>
+      <div class="grid grid-cols-1 gap-3 mt-auto">
+        {% if quick_project %}
+        <a class="w-full flex items-center justify-center gap-2 bg-accent text-white hover:bg-accent/90 border border-accent rounded-lg px-4 py-3 text-sm font-medium transition-colors" href="/projects/{{ quick_project }}">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path></svg>
+          继续写作
+        </a>
+        {% else %}
+        <button class="w-full flex items-center justify-center gap-2 bg-border_color/30 text-muted border border-border_color rounded-lg px-4 py-3 text-sm font-medium cursor-not-allowed" disabled>
+          继续写作
+        </button>
+        {% endif %}
+        <div class="grid grid-cols-2 gap-3">
+          <a class="flex items-center justify-center gap-2 bg-bg border border-border_color hover:border-accent/50 rounded-lg px-4 py-3 text-sm font-medium transition-colors" href="/projects">
+            所有项目
+          </a>
+          <a class="flex items-center justify-center gap-2 bg-bg border border-border_color hover:border-accent/50 rounded-lg px-4 py-3 text-sm font-medium transition-colors" href="/export">
+            批量导出
+          </a>
+        </div>
       </div>
-      {% endif %}
     </article>
   </div>
+
+  <article class="bg-panel border border-border_color rounded-xl p-6 shadow-sm">
+    <div class="flex items-center justify-between mb-6">
+      <h3 class="text-lg font-semibold flex items-center gap-2">
+        <svg class="w-5 h-5 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        最近修改章节
+      </h3>
+    </div>
+    {% if recent_chapters %}
+    <div class="grid gap-3 lg:grid-cols-2">
+      {% for c in recent_chapters %}
+      <a class="group border border-border_color rounded-xl p-4 hover:border-accent/50 hover:bg-bg/50 transition-all flex items-start justify-between gap-4" href="/projects/{{ c.project }}/editor/{{ c.filename }}">
+        <div class="min-w-0">
+          <strong class="block text-base mb-1 truncate group-hover:text-accent transition-colors">{{ c.title }}</strong>
+          <p class="text-sm text-muted truncate flex items-center gap-2">
+            <span class="bg-bg border border-border_color px-1.5 py-0.5 rounded text-[11px]">{{ c.project }}</span>
+            <span>{{ c.word_count }} 字</span>
+          </p>
+        </div>
+        <span class="text-[11px] font-medium px-2 py-0.5 rounded-full border border-border_color text-muted uppercase shrink-0">{{ c.status }}</span>
+      </a>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="border-2 border-dashed border-border_color rounded-xl p-12 text-center flex flex-col items-center justify-center">
+      <svg class="w-12 h-12 mb-4 text-border_color" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
+      <p class="text-muted mb-4">在 <code>/root/ObsidianVault/Novels</code> 下创建你的第一部作品。</p>
+      <button class="bg-border_color/30 text-muted border border-border_color rounded-lg px-4 py-2 text-sm font-medium cursor-not-allowed" disabled>创建示例项目</button>
+    </div>
+    {% endif %}
+  </article>
 </section>
 {% endblock %}

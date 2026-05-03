@@ -6,14 +6,17 @@ import shutil
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+import json
 from typing import Any
 
 import markdown
 import yaml
 from dotenv import load_dotenv
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
+
+from app.services.ai_client import generate_ai_content
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -33,6 +36,11 @@ app = FastAPI(title="Novel Hub")
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "app" / "static"), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "app" / "templates"))
+
+def inject_locale(request: Request):
+    return get_setting("locale", "zh-CN")
+
+templates.env.globals["get_locale"] = inject_locale
 
 FRONTMATTER_PATTERN = re.compile(r"^---\n(.*?)\n---\n?", re.DOTALL)
 STATUS_ORDER = ["idea", "outline", "draft", "rewrite", "polish", "done", "published"]
@@ -59,6 +67,20 @@ def _ensure_under_root(path: Path, root: Path) -> Path:
 def require_auth(request: Request) -> None:
     if not request.session.get("authed"):
         raise HTTPException(status_code=401, detail="auth required")
+
+
+def get_setting(key: str, default: str = "") -> str:
+    with get_conn() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else default
+
+
+def set_setting(key: str, value: str) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value)
+        )
 
 
 def get_conn() -> sqlite3.Connection:
@@ -90,6 +112,15 @@ def init_db() -> None:
                 target TEXT,
                 created_at TEXT NOT NULL,
                 detail TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS ai_pipelines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                data TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             );
             """
         )
@@ -341,6 +372,97 @@ def projects_page(request: Request) -> Response:
         return RedirectResponse("/login", status_code=303)
     return templates.TemplateResponse("projects.html", {"request": request, "projects": scan_projects()})
 
+@app.get("/ai-pipeline", response_class=HTMLResponse)
+def ai_pipeline_global(request: Request) -> Response:
+    if not request.session.get("authed"):
+        return RedirectResponse("/login", status_code=303)
+    return templates.TemplateResponse("ai/pipeline.html", {"request": request, "projects": scan_projects(), "project": None})
+
+@app.get("/ai-pipeline/{project}", response_class=HTMLResponse)
+def ai_pipeline_project(request: Request, project: str) -> Response:
+    if not request.session.get("authed"):
+        return RedirectResponse("/login", status_code=303)
+    safe_project = safe_slug(project, fallback="project")
+
+    # Load pipeline data from DB
+    stages_data = {}
+    with get_conn() as conn:
+        rows = conn.execute("SELECT stage, data FROM ai_pipelines WHERE project = ?", (safe_project,)).fetchall()
+        for row in rows:
+            try:
+                stages_data[row["stage"]] = json.loads(row["data"])
+            except:
+                pass
+
+    return templates.TemplateResponse("ai/pipeline.html", {
+        "request": request,
+        "projects": scan_projects(),
+        "project": safe_project,
+        "stages_data": stages_data
+    })
+
+@app.post("/ai-pipeline/{project}/save")
+async def ai_pipeline_save(request: Request, project: str) -> Response:
+    require_auth(request)
+    safe_project = safe_slug(project, fallback="project")
+    data = await request.json()
+
+    with get_conn() as conn:
+        for stage_data in data:
+            stage_id = stage_data.get("id")
+            if not stage_id: continue
+
+            # Delete old data for this stage
+            conn.execute("DELETE FROM ai_pipelines WHERE project = ? AND stage = ?", (safe_project, stage_id))
+
+            # Insert new data
+            conn.execute(
+                "INSERT INTO ai_pipelines(project, stage, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                (safe_project, stage_id, json.dumps(stage_data), utc_now().isoformat(), utc_now().isoformat())
+            )
+
+    return JSONResponse(content={"status": "ok"})
+
+@app.post("/ai-pipeline/select-project")
+def ai_pipeline_select(request: Request, project: str = Form(...)) -> Response:
+    require_auth(request)
+    safe_project = safe_slug(project, fallback="project")
+    return RedirectResponse(url=f"/ai-pipeline/{safe_project}", status_code=303)
+
+@app.post("/ai-pipeline/{project}/generate")
+async def ai_pipeline_generate(request: Request, project: str) -> Response:
+    require_auth(request)
+    data = await request.json()
+    stage = data.get("stage", "")
+    context = data.get("context", "")
+
+    api_key = get_setting("ai_api_key", "")
+    base_url = get_setting("ai_base_url", "https://api.openai.com/v1")
+    model = get_setting("ai_model", "gpt-3.5-turbo")
+
+    if not api_key:
+        return JSONResponse(status_code=400, content={"error": "AI API Key 未配置，请前往设置页面配置。"})
+
+    system_prompt = "你是一个专业的网文小说创作助手。"
+
+    if stage == "world":
+        system_prompt += "请根据用户的初步想法，生成几个核心角色和世界观设定的卡片节点。每个节点需要有标题和详细描述。"
+    elif stage == "outline":
+        system_prompt += "请根据世界观和角色设定，生成故事的分卷大纲节点。"
+    elif stage == "chapters":
+        system_prompt += "请根据分卷大纲，将其拆解为具体的章节细纲节点。"
+    elif stage == "draft":
+        system_prompt += "请根据章节细纲，扩写出几千字的正文草稿（这里我们先生成一个梗概演示）。"
+
+    user_prompt = f"当前上下文信息：\n{context}\n\n请为我生成下一步的创作内容，请直接返回内容，条理清晰。"
+
+    content = await generate_ai_content(api_key, base_url, model, system_prompt, user_prompt)
+
+    if not content:
+        return JSONResponse(status_code=500, content={"error": "AI 生成失败，请检查配置或网络。"})
+
+    return JSONResponse(content={"result": content})
+
 
 @app.post("/projects/new", response_class=HTMLResponse)
 def create_project(request: Request, name: str = Form(...)) -> Response:
@@ -591,6 +713,11 @@ def settings_page(request: Request) -> Response:
         return RedirectResponse("/login", status_code=303)
     with get_conn() as conn:
         log_count = conn.execute("SELECT COUNT(1) as c FROM operation_logs").fetchone()["c"]
+
+    ai_api_key = get_setting("ai_api_key", "")
+    ai_base_url = get_setting("ai_base_url", "https://api.openai.com/v1")
+    ai_model = get_setting("ai_model", "gpt-3.5-turbo")
+
     return templates.TemplateResponse(
         "settings.html",
         {
@@ -600,5 +727,32 @@ def settings_page(request: Request) -> Response:
             "backup_root": str(BACKUP_ROOT),
             "login_state": "已登录",
             "log_count": log_count,
+            "ai_api_key": ai_api_key,
+            "ai_base_url": ai_base_url,
+            "ai_model": ai_model,
         },
     )
+
+@app.post("/settings/ai")
+def update_ai_settings(
+    request: Request,
+    ai_api_key: str = Form(""),
+    ai_base_url: str = Form(""),
+    ai_model: str = Form(""),
+) -> Response:
+    require_auth(request)
+    set_setting("ai_api_key", ai_api_key)
+    set_setting("ai_base_url", ai_base_url)
+    set_setting("ai_model", ai_model)
+    log_operation("update_ai_settings")
+    return RedirectResponse(url="/settings", status_code=303)
+
+@app.post("/settings/locale")
+def update_locale(request: Request, locale: str = Form(...)) -> Response:
+    require_auth(request)
+    if locale in ["zh-CN", "en-US", "ja-JP"]:
+        set_setting("locale", locale)
+    log_operation("update_locale", detail=locale)
+    # Redirect back to the referrer or home
+    referer = request.headers.get("referer", "/")
+    return RedirectResponse(url=referer, status_code=303)

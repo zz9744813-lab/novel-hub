@@ -3,7 +3,8 @@
   const body = document.body;
   const toast = document.getElementById('toast');
 
-  const storedTheme = localStorage.getItem('novelhub-theme');
+  // We use Alpine.js for theme now, but keep this for backward compatibility if needed
+  const storedTheme = localStorage.getItem('theme');
   if (storedTheme) root.setAttribute('data-theme', storedTheme);
 
   function showToast(msg) {
@@ -17,12 +18,8 @@
     const btn = e.target.closest('[data-action]');
     if (!btn) return;
     const action = btn.dataset.action;
-    if (action === 'theme') {
-      const next = root.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
-      root.setAttribute('data-theme', next);
-      localStorage.setItem('novelhub-theme', next);
-      showToast(next === 'dark' ? '已切换深色' : '已切换浅色');
-    }
+
+    // Theme action is handled by Alpine.js in base.html
     if (action === 'focus') {
       body.dataset.focus = body.dataset.focus === 'on' ? 'off' : 'on';
       showToast(body.dataset.focus === 'on' ? '专注模式已开启' : '专注模式已关闭');

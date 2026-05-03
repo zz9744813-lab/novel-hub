@@ -1,18 +1,75 @@
 {% extends "base.html" %}
 {% block title %}Settings · Novel Hub{% endblock %}
 {% block content %}
-<section class="page">
-  <div class="panel"><h2>Settings</h2><p class="muted">系统信息仅展示路径与状态，不泄露敏感密码。</p></div>
-  <div class="panel settings-list">
-    <div><span>Vault Root</span><code>{{ vault_root }}</code></div>
-    <div><span>Database</span><code>{{ db_path }}</code></div>
-    <div><span>Backup Dir</span><code>{{ backup_root }}</code></div>
-    <div><span>登录状态</span><strong>{{ login_state }}</strong></div>
-    <div><span>操作日志</span><strong>{{ log_count }}</strong></div>
+<section class="max-w-4xl mx-auto w-full flex flex-col gap-6">
+  <div class="bg-panel border border-border_color rounded-xl p-6 shadow-sm">
+    <h2 class="text-2xl font-semibold mb-2">Settings</h2>
+    <p class="text-muted text-sm">系统信息仅展示路径与状态，不泄露敏感密码。</p>
   </div>
-  <div class="panel">
-    <h3>Syncthing 提醒</h3>
-    <p class="muted">如果 VPS 会写入 Markdown，Syncthing 文件夹应配置为 <strong>Send &amp; Receive</strong>，避免同步冲突。</p>
+
+  <div class="grid md:grid-cols-2 gap-6">
+    <div class="flex flex-col gap-6">
+      <div class="bg-panel border border-border_color rounded-xl p-6 shadow-sm">
+        <h3 class="text-lg font-medium mb-4 flex items-center gap-2">
+            <svg class="w-5 h-5 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+            System Info
+        </h3>
+        <div class="flex flex-col gap-3">
+          <div class="flex justify-between items-center py-2 border-b border-border_color/50 last:border-0">
+            <span class="text-sm text-muted">Vault Root</span>
+            <code class="text-xs bg-bg px-2 py-1 rounded border border-border_color">{{ vault_root }}</code>
+          </div>
+          <div class="flex justify-between items-center py-2 border-b border-border_color/50 last:border-0">
+            <span class="text-sm text-muted">Database</span>
+            <code class="text-xs bg-bg px-2 py-1 rounded border border-border_color">{{ db_path }}</code>
+          </div>
+          <div class="flex justify-between items-center py-2 border-b border-border_color/50 last:border-0">
+            <span class="text-sm text-muted">Backup Dir</span>
+            <code class="text-xs bg-bg px-2 py-1 rounded border border-border_color">{{ backup_root }}</code>
+          </div>
+          <div class="flex justify-between items-center py-2 border-b border-border_color/50 last:border-0">
+            <span class="text-sm text-muted">登录状态</span>
+            <strong class="text-sm text-accent">{{ login_state }}</strong>
+          </div>
+          <div class="flex justify-between items-center py-2 border-b border-border_color/50 last:border-0">
+            <span class="text-sm text-muted">操作日志</span>
+            <strong class="text-sm">{{ log_count }}</strong>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-panel border border-border_color rounded-xl p-6 shadow-sm">
+        <h3 class="text-lg font-medium mb-3 flex items-center gap-2">
+            <svg class="w-5 h-5 text-warning" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+            Syncthing 提醒
+        </h3>
+        <p class="text-sm text-muted leading-relaxed">如果 VPS 会写入 Markdown，Syncthing 文件夹应配置为 <strong class="text-text_color">Send &amp; Receive</strong>，避免同步冲突。</p>
+      </div>
+    </div>
+
+    <div class="flex flex-col gap-6">
+      <div class="bg-panel border border-border_color rounded-xl p-6 shadow-sm">
+        <h3 class="text-lg font-medium mb-4 flex items-center gap-2">
+          <svg class="w-5 h-5 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+          AI Pipeline Configuration
+        </h3>
+        <form action="/settings/ai" method="post" class="flex flex-col gap-4">
+          <div class="flex flex-col gap-1.5">
+            <label class="text-sm font-medium text-muted">API Key</label>
+            <input type="password" name="ai_api_key" value="{{ ai_api_key }}" placeholder="sk-..." class="w-full bg-bg border border-border_color rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" />
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <label class="text-sm font-medium text-muted">Base URL</label>
+            <input type="text" name="ai_base_url" value="{{ ai_base_url }}" placeholder="https://api.openai.com/v1" class="w-full bg-bg border border-border_color rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" />
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <label class="text-sm font-medium text-muted">Model</label>
+            <input type="text" name="ai_model" value="{{ ai_model }}" placeholder="gpt-3.5-turbo" class="w-full bg-bg border border-border_color rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" />
+          </div>
+          <button type="submit" class="mt-2 bg-accent text-white hover:bg-accent/90 border border-accent rounded-lg px-4 py-2 text-sm font-medium transition-colors w-full">Save AI Settings</button>
+        </form>
+      </div>
+    </div>
   </div>
 </section>
 {% endblock %}

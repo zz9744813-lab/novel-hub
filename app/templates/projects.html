@@ -1,34 +1,56 @@
 {% extends "base.html" %}
 {% block title %}Projects · Novel Hub{% endblock %}
 {% block content %}
-<section class="page">
-  <div class="panel row-between">
-    <h2>Projects</h2>
-    <form class="inline-form" action="/projects/new" method="post">
-      <input name="name" placeholder="新项目名称" required />
-      <button class="btn btn-primary" type="submit">新建项目</button>
+<section class="flex flex-col gap-6">
+  <div class="bg-panel border border-border_color rounded-xl p-6 flex items-center justify-between shadow-sm">
+    <h2 class="text-2xl font-semibold">Projects</h2>
+    <form class="flex items-center gap-3" action="/projects/new" method="post">
+      <input name="name" placeholder="新项目名称" required class="bg-transparent border border-border_color rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" />
+      <button class="bg-accent text-white hover:bg-accent/90 border border-accent rounded-lg px-4 py-2 text-sm font-medium transition-colors" type="submit">新建项目</button>
     </form>
   </div>
 
   {% if projects %}
-  <div class="project-grid">
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
     {% for p in projects %}
-    <article class="panel project-card">
-      <div class="row-between">
-        <h3>{{ p.name }}</h3>
-        <span class="badge">{{ p.status }}</span>
+    <article class="bg-panel border border-border_color rounded-xl p-5 hover:border-accent/50 transition-colors shadow-sm flex flex-col group">
+      <div class="flex items-start justify-between mb-4">
+        <h3 class="text-lg font-semibold group-hover:text-accent transition-colors">{{ p.name }}</h3>
+        <span class="text-[11px] font-medium px-2 py-0.5 rounded-full border border-border_color text-muted uppercase">{{ p.status }}</span>
       </div>
-      <p class="muted">{{ p.chapter_count }} 章 · {{ p.total_words }} 字</p>
-      <p class="muted">角色 {{ p.character_count }} · 世界观 {{ p.world_count }}</p>
-      <div class="progress"><i style="width: {{ p.progress }}%"></i></div>
-      <p class="muted">目标进度 {{ p.progress }}%</p>
-      <p class="muted">最近更新：{% if p.latest %}{{ p.latest.strftime('%Y-%m-%d %H:%M') }} UTC{% else %}--{% endif %}</p>
-      <a class="btn btn-primary" href="/projects/{{ p.name }}">进入项目</a>
+
+      <div class="grid grid-cols-2 gap-4 mb-5 text-sm">
+        <div>
+          <span class="block text-muted text-xs mb-1">内容</span>
+          <p class="font-medium">{{ p.chapter_count }} 章 / {{ p.total_words }} 字</p>
+        </div>
+        <div>
+          <span class="block text-muted text-xs mb-1">世界观</span>
+          <p class="font-medium">{{ p.character_count }} 角色 / {{ p.world_count }} 设定</p>
+        </div>
+      </div>
+
+      <div class="mt-auto pt-4 border-t border-border_color/50">
+        <div class="flex justify-between text-xs text-muted mb-2">
+          <span>进度目标</span>
+          <span>{{ p.progress }}%</span>
+        </div>
+        <div class="h-2 rounded-full bg-border_color overflow-hidden mb-3">
+          <div class="h-full bg-accent transition-all duration-500" style="width: {{ p.progress }}%"></div>
+        </div>
+        <div class="flex items-center justify-between mt-4">
+          <span class="text-xs text-muted">{% if p.latest %}{{ p.latest.strftime('%Y-%m-%d %H:%M') }}{% else %}--{% endif %}</span>
+          <a class="text-sm font-medium text-accent hover:text-accent/80 transition-colors flex items-center gap-1" href="/projects/{{ p.name }}">
+            进入项目 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+          </a>
+        </div>
+      </div>
     </article>
     {% endfor %}
   </div>
   {% else %}
-  <div class="panel empty-state">
+  <div class="bg-panel border border-dashed border-border_color rounded-xl p-12 text-center text-muted">
+    <svg class="w-12 h-12 mx-auto mb-4 text-border_color" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
     <p>还没有项目。在 <code>/root/ObsidianVault/Novels</code> 下创建目录，或使用上方按钮创建。</p>
   </div>
   {% endif %}

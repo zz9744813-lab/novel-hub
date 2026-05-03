@@ -3,7 +3,7 @@
 {% block content %}
 <section class="max-w-4xl mx-auto w-full flex flex-col gap-6">
   <div class="bg-panel border border-border_color rounded-xl p-6 shadow-sm">
-    <h2 class="text-2xl font-semibold mb-2">Settings</h2>
+    <h2 class="text-2xl font-semibold mb-2" x-text="$store.i18n.t('settings_title')">Settings</h2>
     <p class="text-muted text-sm">系统信息仅展示路径与状态，不泄露敏感密码。</p>
   </div>
 
@@ -66,7 +66,7 @@
             <label class="text-sm font-medium text-muted">Model</label>
             <input type="text" name="ai_model" value="{{ ai_model }}" placeholder="gpt-3.5-turbo" class="w-full bg-bg border border-border_color rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" />
           </div>
-          <button type="submit" class="mt-2 bg-accent text-white hover:bg-accent/90 border border-accent rounded-lg px-4 py-2 text-sm font-medium transition-colors w-full">Save AI Settings</button>
+          <button type="submit" class="mt-2 bg-accent text-white hover:bg-accent/90 border border-accent rounded-lg px-4 py-2 text-sm font-medium transition-colors w-full" x-text="$store.i18n.t('save_ai_settings')">Save AI Settings</button>
         </form>
       </div>
     </div>

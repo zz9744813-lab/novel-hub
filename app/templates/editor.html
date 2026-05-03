@@ -1,17 +1,35 @@
 {% extends "base.html" %}
 {% block title %}{{ project }} / {{ filename }} · Novel Hub{% endblock %}
-{% block body_class %}editor-page{% endblock %}
+{% block body_class %}editor-page overflow-hidden{% endblock %}
 {% block topbar %}
-<header class="topbar editor-topbar">
-  <div class="topbar-left"><a href="/">Novel Hub</a><span class="crumb">/ <a href="/projects/{{ project }}">{{ project }}</a> / {{ filename }}</span></div>
-  <div class="topbar-center" id="save-state">已加载</div>
-  <div class="topbar-right">
-    <button class="icon-btn" data-action="theme">🌗</button>
-    <button class="icon-btn" data-action="focus">专注模式</button>
-    <button class="icon-btn" data-action="typewriter">打字机</button>
-    <button class="icon-btn" data-action="toggle-left">左栏</button>
-    <button class="icon-btn" data-action="toggle-right">右栏</button>
-    <a class="icon-btn" href="/logout">退出</a>
+<header class="h-12 border-b border-border_color flex items-center justify-between px-4 bg-bg/95 backdrop-blur shrink-0">
+  <div class="flex items-center gap-2 text-sm font-medium">
+    <a href="/" class="hover:text-accent transition-colors flex items-center gap-2">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path></svg>
+    </a>
+    <span class="text-muted">/</span>
+    <a href="/projects/{{ project }}" class="text-muted hover:text-text_color transition-colors">{{ project }}</a>
+    <span class="text-muted">/</span>
+    <span class="text-accent">{{ filename }}</span>
+  </div>
+  <div class="text-xs font-mono px-3 py-1 bg-panel rounded-full border border-border_color" id="save-state">已加载</div>
+  <div class="flex items-center gap-1.5">
+    <button class="p-1.5 rounded-md text-muted hover:text-accent hover:bg-accent/10 border border-transparent transition-all" data-action="theme" title="切换主题">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path></svg>
+    </button>
+    <button class="p-1.5 rounded-md text-muted hover:text-accent hover:bg-accent/10 border border-transparent transition-all" data-action="focus" title="专注模式">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"></path></svg>
+    </button>
+    <button class="p-1.5 rounded-md text-muted hover:text-accent hover:bg-accent/10 border border-transparent transition-all" data-action="typewriter" title="打字机模式">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+    </button>
+    <div class="w-px h-4 bg-border_color mx-1"></div>
+    <button class="p-1.5 rounded-md text-muted hover:text-text_color hover:bg-panel border border-transparent transition-all" data-action="toggle-left" title="切换左栏">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h8m-8 6h16"></path></svg>
+    </button>
+    <button class="p-1.5 rounded-md text-muted hover:text-text_color hover:bg-panel border border-transparent transition-all" data-action="toggle-right" title="切换右栏">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M12 12h8m-8 6h8"></path></svg>
+    </button>
   </div>
 </header>
 {% endblock %}
@@ -19,85 +37,147 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/markdown/markdown.min.js"></script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css"/>
-<section class="workspace" data-editor-workspace>
-  <aside class="sidebar left" data-panel="left">
-    <h3>{{ project }}</h3>
-    <p class="muted">{{ project_words }} / {{ goal }} 字</p>
-    <div class="progress"><i style="width:{% if goal %}{{ (project_words / goal * 100)|round|int }}{% else %}0{% endif %}%"></i></div>
-    <form action="/projects/{{ project }}/chapters/new" method="post" class="inline-form compact">
-      <input name="title" placeholder="新章节" required>
-      <button class="btn">+</button>
-    </form>
-    <div class="tree">
+<section class="flex-1 flex overflow-hidden bg-bg" data-editor-workspace>
+  <aside class="sidebar w-64 bg-sidebar border-r border-border_color flex flex-col shrink-0 transition-all duration-300 left" data-panel="left">
+    <div class="p-4 border-b border-border_color flex flex-col gap-3">
+      <div class="flex items-center justify-between">
+        <h3 class="font-semibold truncate pr-2">{{ project }}</h3>
+        <span class="text-xs text-muted font-medium bg-panel px-1.5 py-0.5 rounded border border-border_color shrink-0">{{ project_words }}字</span>
+      </div>
+      <div class="h-1.5 rounded-full bg-border_color overflow-hidden">
+        <div class="h-full bg-accent transition-all duration-500" style="width:{% if goal %}{{ (project_words / goal * 100)|round|int }}{% else %}0{% endif %}%"></div>
+      </div>
+      <form action="/projects/{{ project }}/chapters/new" method="post" class="flex gap-2">
+        <input name="title" placeholder="新章节..." required class="flex-1 bg-bg border border-border_color rounded px-2.5 py-1.5 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all">
+        <button class="bg-panel border border-border_color hover:border-accent hover:text-accent rounded px-2.5 py-1.5 text-sm transition-colors">+</button>
+      </form>
+    </div>
+    <div class="flex-1 overflow-y-auto p-2 flex flex-col gap-1 custom-scrollbar">
       {% for c in chapters %}
-      <a class="tree-item {% if c.filename == filename %}active{% endif %}" href="/projects/{{ project }}/editor/{{ c.filename }}">
-        <div>
-          <strong>{{ c.title }}</strong>
-          <small>{{ c.word_count }} 字</small>
+      <a class="flex flex-col p-2 rounded-lg border border-transparent hover:bg-panel transition-colors {% if c.filename == filename %}bg-accent/10 border-accent/30 text-accent{% else %}text-muted hover:text-text_color{% endif %}" href="/projects/{{ project }}/editor/{{ c.filename }}">
+        <div class="flex items-center justify-between gap-2 mb-1">
+          <strong class="text-sm font-medium truncate {% if c.filename == filename %}text-accent{% endif %}">{{ c.title }}</strong>
+          <span class="text-[10px] uppercase border border-current px-1 py-0.5 rounded-sm opacity-60 shrink-0">{{ c.status }}</span>
         </div>
-        <span class="badge {{ c.status }}">{{ c.status }}</span>
+        <small class="text-xs opacity-70">{{ c.word_count }} 字</small>
       </a>
       {% endfor %}
     </div>
   </aside>
 
-  <section class="editor-center">
-    <form id="editor-form" hx-post="/projects/{{ project }}/editor/{{ filename }}" hx-target="#save-result" method="post">
-      <div class="editor-header">
-        <input class="chapter-title" name="title" value="{{ frontmatter.title }}" placeholder="章节标题" />
-        <div class="editor-meta-inline">
-          <span>{{ active.word_count if active else 0 }} 字</span>
-          <span id="saved-at">--</span>
-          <label>字号
-            <select id="font-size-picker">
+  <section class="flex-1 overflow-y-auto flex flex-col relative custom-scrollbar bg-panel shadow-sm mx-0 md:mx-2 my-0 md:my-2 rounded-none md:rounded-xl border-x md:border border-border_color">
+    <form id="editor-form" hx-post="/projects/{{ project }}/editor/{{ filename }}" hx-target="#save-result" method="post" class="flex flex-col flex-1">
+      <div class="sticky top-0 z-10 bg-panel/95 backdrop-blur border-b border-border_color p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <input class="text-2xl font-bold bg-transparent border-0 outline-none w-full md:w-auto placeholder:text-border_color" name="title" value="{{ frontmatter.title }}" placeholder="章节标题" />
+        <div class="flex items-center gap-3 text-sm text-muted shrink-0">
+          <span class="bg-bg border border-border_color px-2 py-1 rounded text-xs">{{ active.word_count if active else 0 }} 字</span>
+          <span id="saved-at" class="text-xs">--</span>
+          <div class="h-4 w-px bg-border_color mx-1"></div>
+          <div class="flex items-center gap-1.5">
+            <span class="text-xs">Aa</span>
+            <select id="font-size-picker" class="bg-bg border border-border_color rounded px-2 py-1 text-xs focus:outline-none focus:border-accent">
               <option value="small">小</option>
               <option value="medium" selected>中</option>
               <option value="large">大</option>
             </select>
-          </label>
-          <button class="btn btn-primary" type="submit">保存</button>
-          <button class="btn" type="button" hx-post="/projects/{{ project }}/preview" hx-include="#editor-form" hx-target="#preview">预览</button>
+          </div>
+          <button class="bg-bg border border-border_color hover:border-accent/50 rounded px-3 py-1.5 text-xs font-medium transition-colors" type="button" hx-post="/projects/{{ project }}/preview" hx-include="#editor-form" hx-target="#preview">预览</button>
+          <button class="bg-accent text-white hover:bg-accent/90 border border-accent rounded px-4 py-1.5 text-xs font-medium transition-colors" type="submit">保存</button>
         </div>
       </div>
 
-      <div class="editor-canvas">
-        <textarea id="body" name="body">{{ body }}</textarea>
+      <div class="flex-1 p-4 md:p-8 max-w-4xl mx-auto w-full">
+        <textarea id="body" name="body" class="w-full h-full bg-transparent border-0 outline-none resize-none font-serif text-lg leading-relaxed text-text_color placeholder:text-muted/50">{{ body }}</textarea>
       </div>
 
       <div id="save-result"></div>
     </form>
-    <section class="panel preview-panel"><h4>预览</h4><div id="preview"></div></section>
+    <section class="border-t border-border_color bg-bg p-4 md:p-8">
+      <h4 class="text-sm font-medium text-muted uppercase tracking-wider mb-4">预览</h4>
+      <div id="preview" class="max-w-4xl mx-auto prose prose-invert prose-p:leading-relaxed prose-p:font-serif"></div>
+    </section>
   </section>
 
-  <aside class="sidebar right" data-panel="right">
-    <h3>Chapter Meta</h3>
-    <input type="hidden" name="title" form="editor-form" value="{{ frontmatter.title }}" data-title-mirror>
-    <label>chapter<input name="chapter" form="editor-form" value="{{ frontmatter.chapter }}"></label>
-    <label>status
-      <select name="status" form="editor-form">
-        {% for s in ['idea','outline','draft','rewrite','polish','done','published'] %}
-          <option value="{{ s }}" {% if frontmatter.status == s %}selected{% endif %}>{{ s }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>volume<input name="volume" form="editor-form" value="{{ frontmatter.volume }}"></label>
+  <aside class="sidebar w-72 bg-sidebar border-l border-border_color flex flex-col shrink-0 transition-all duration-300 right" data-panel="right">
+    <div class="p-4 border-b border-border_color flex items-center justify-between">
+      <h3 class="font-semibold text-sm">元信息配置</h3>
+    </div>
+    <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-5 custom-scrollbar">
+      <input type="hidden" name="title" form="editor-form" value="{{ frontmatter.title }}" data-title-mirror>
 
-    <div class="tag-field" data-tag-field data-target="tags"><span>tags</span><div class="chips"></div><input data-input placeholder="回车添加"></div>
-    <input type="hidden" name="tags" form="editor-form" value="{{ frontmatter.tags|join(',') }}" data-hidden="tags">
+      <div class="grid grid-cols-2 gap-4">
+        <label class="flex flex-col gap-1.5 text-xs text-muted">
+          章节号
+          <input name="chapter" form="editor-form" value="{{ frontmatter.chapter }}" class="bg-bg border border-border_color rounded px-2.5 py-1.5 text-sm text-text_color focus:outline-none focus:border-accent">
+        </label>
+        <label class="flex flex-col gap-1.5 text-xs text-muted">
+          卷标
+          <input name="volume" form="editor-form" value="{{ frontmatter.volume }}" class="bg-bg border border-border_color rounded px-2.5 py-1.5 text-sm text-text_color focus:outline-none focus:border-accent">
+        </label>
+      </div>
 
-    <div class="tag-field" data-tag-field data-target="characters"><span>characters</span><div class="chips"></div><input data-input placeholder="回车添加"></div>
-    <input type="hidden" name="characters" form="editor-form" value="{{ frontmatter.characters|join(',') }}" data-hidden="characters">
+      <label class="flex flex-col gap-1.5 text-xs text-muted">
+        状态
+        <select name="status" form="editor-form" class="bg-bg border border-border_color rounded px-2.5 py-1.5 text-sm text-text_color focus:outline-none focus:border-accent appearance-none">
+          {% for s in ['idea','outline','draft','rewrite','polish','done','published'] %}
+            <option value="{{ s }}" {% if frontmatter.status == s %}selected{% endif %}>{{ s|upper }}</option>
+          {% endfor %}
+        </select>
+      </label>
 
-    <div class="tag-field" data-tag-field data-target="locations"><span>locations</span><div class="chips"></div><input data-input placeholder="回车添加"></div>
-    <input type="hidden" name="locations" form="editor-form" value="{{ frontmatter.locations|join(',') }}" data-hidden="locations">
+      <div class="h-px bg-border_color/50 my-1"></div>
 
-    <div class="tag-field" data-tag-field data-target="warnings"><span>warnings</span><div class="chips"></div><input data-input placeholder="回车添加"></div>
-    <input type="hidden" name="warnings" form="editor-form" value="{{ frontmatter.warnings|join(',') }}" data-hidden="warnings">
+      <div class="tag-field flex flex-col gap-1.5 text-xs text-muted" data-tag-field data-target="tags">
+        <span>标签 (Tags)</span>
+        <div class="chips flex flex-wrap gap-1.5 mb-1 empty:hidden"></div>
+        <input data-input placeholder="输入并回车添加" class="bg-bg border border-border_color rounded px-2.5 py-1.5 text-sm text-text_color focus:outline-none focus:border-accent">
+      </div>
+      <input type="hidden" name="tags" form="editor-form" value="{{ frontmatter.tags|join(',') }}" data-hidden="tags">
 
-    <label>pov<input name="pov" form="editor-form" value="{{ frontmatter.pov }}"></label>
-    <label>draft_version<input name="draft_version" form="editor-form" value="{{ frontmatter.draft_version }}"></label>
-    <label>synopsis<textarea name="synopsis" form="editor-form">{{ frontmatter.synopsis }}</textarea></label>
-    <label>notes<textarea name="notes" form="editor-form">{{ frontmatter.notes }}</textarea></label>
+      <div class="tag-field flex flex-col gap-1.5 text-xs text-muted" data-tag-field data-target="characters">
+        <span>出场角色 (Characters)</span>
+        <div class="chips flex flex-wrap gap-1.5 mb-1 empty:hidden"></div>
+        <input data-input placeholder="输入并回车添加" class="bg-bg border border-border_color rounded px-2.5 py-1.5 text-sm text-text_color focus:outline-none focus:border-accent">
+      </div>
+      <input type="hidden" name="characters" form="editor-form" value="{{ frontmatter.characters|join(',') }}" data-hidden="characters">
+
+      <div class="tag-field flex flex-col gap-1.5 text-xs text-muted" data-tag-field data-target="locations">
+        <span>涉及地点 (Locations)</span>
+        <div class="chips flex flex-wrap gap-1.5 mb-1 empty:hidden"></div>
+        <input data-input placeholder="输入并回车添加" class="bg-bg border border-border_color rounded px-2.5 py-1.5 text-sm text-text_color focus:outline-none focus:border-accent">
+      </div>
+      <input type="hidden" name="locations" form="editor-form" value="{{ frontmatter.locations|join(',') }}" data-hidden="locations">
+
+      <div class="h-px bg-border_color/50 my-1"></div>
+
+      <div class="grid grid-cols-2 gap-4">
+        <label class="flex flex-col gap-1.5 text-xs text-muted">
+          视角 (POV)
+          <input name="pov" form="editor-form" value="{{ frontmatter.pov }}" class="bg-bg border border-border_color rounded px-2.5 py-1.5 text-sm text-text_color focus:outline-none focus:border-accent">
+        </label>
+        <label class="flex flex-col gap-1.5 text-xs text-muted">
+          草稿版本
+          <input name="draft_version" form="editor-form" value="{{ frontmatter.draft_version }}" class="bg-bg border border-border_color rounded px-2.5 py-1.5 text-sm text-text_color focus:outline-none focus:border-accent">
+        </label>
+      </div>
+
+      <label class="flex flex-col gap-1.5 text-xs text-muted">
+        本章梗概 (Synopsis)
+        <textarea name="synopsis" form="editor-form" class="bg-bg border border-border_color rounded px-2.5 py-1.5 text-sm text-text_color focus:outline-none focus:border-accent resize-y min-h-[80px]">{{ frontmatter.synopsis }}</textarea>
+      </label>
+
+      <label class="flex flex-col gap-1.5 text-xs text-muted">
+        备忘录 (Notes)
+        <textarea name="notes" form="editor-form" class="bg-bg border border-border_color rounded px-2.5 py-1.5 text-sm text-text_color focus:outline-none focus:border-accent resize-y min-h-[80px]">{{ frontmatter.notes }}</textarea>
+      </label>
+
+      <div class="tag-field flex flex-col gap-1.5 text-xs text-muted" data-tag-field data-target="warnings">
+        <span>警告信息 (Warnings)</span>
+        <div class="chips flex flex-wrap gap-1.5 mb-1 empty:hidden"></div>
+        <input data-input placeholder="输入并回车添加" class="bg-bg border border-border_color rounded px-2.5 py-1.5 text-sm text-text_color focus:outline-none focus:border-accent">
+      </div>
+      <input type="hidden" name="warnings" form="editor-form" value="{{ frontmatter.warnings|join(',') }}" data-hidden="warnings">
+    </div>
   </aside>
 </section>
 {% endblock %}

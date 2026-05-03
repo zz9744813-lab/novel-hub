@@ -19,3 +19,16 @@ INFO:     127.0.0.1:49586 - "GET /ai-pipeline/TestProject HTTP/1.1" 200 OK
 INFO:     127.0.0.1:49586 - "POST /settings/locale HTTP/1.1" 303 See Other
 INFO:     127.0.0.1:49586 - "GET /ai-pipeline/TestProject HTTP/1.1" 200 OK
 INFO:     127.0.0.1:49586 - "GET /settings HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58460 - "GET /login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58460 - "POST /login HTTP/1.1" 303 See Other
+INFO:     127.0.0.1:58460 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58234 - "GET /static/js/ui.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58460 - "GET /static/css/app.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58234 - "GET /projects HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58234 - "POST /projects/new HTTP/1.1" 303 See Other
+INFO:     127.0.0.1:58234 - "GET /projects/TestProject HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58234 - "GET /projects/TestProject HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58234 - "GET /ai-pipeline/TestProject HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58234 - "POST /settings/locale HTTP/1.1" 303 See Other
+INFO:     127.0.0.1:58234 - "GET /ai-pipeline/TestProject HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58234 - "GET /settings HTTP/1.1" 200 OK

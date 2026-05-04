@@ -45,13 +45,34 @@ SECRET_KEY = os.getenv("NOVELHUB_SECRET_KEY", "change-me")
 DAILY_GOAL_WORDS = int(os.getenv("NOVELHUB_DAILY_GOAL", "2000"))
 PROJECT_GOAL_WORDS = int(os.getenv("NOVELHUB_PROJECT_GOAL", "100000"))
 
-app = FastAPI(title="Novel Hub")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    NOVELS_ROOT.mkdir(parents=True, exist_ok=True)
+    BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
+    init_db()
+    needs_note_rebuild = get_setting("fts_needs_rebuild", "0") == "1"
+    for p in [item.name for item in NOVELS_ROOT.iterdir() if item.is_dir()]:
+        list_chapters(p, sync=True)
+        if needs_note_rebuild:
+            _reindex_notes_for_project(p)
+    if needs_note_rebuild:
+        set_setting("fts_needs_rebuild", "0")
+    yield
+    # shutdown: nothing
+
+
+app = FastAPI(title="Novel Hub", lifespan=lifespan)
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
-app.add_middleware(
-    CSRFMiddleware,
-    secret=SECRET_KEY,
-    exempt_urls=[r"^/api/.*", r"^/login$", r"^/projects/.*/editor/.*", r"^/projects/.*/chapters", r"^/projects/.*/rename", r"^/projects/.*/notes/.*", r"^/projects/.*/hooks/.*", r"^/settings/.*", r"^/export/.*", r"^/projects/.*/snapshots", r"^/projects/.*/backups/.*", r".*"]
-)
+# CSRF middleware temporarily disabled — re-enable after adding tokens to all forms
+# app.add_middleware(
+#     CSRFMiddleware,
+#     secret=SECRET_KEY,
+#     exempt_urls=[r"^/api/.*", r"^/login$"],
+# )
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, lambda r, e: JSONResponse({"detail": "too many attempts"}, status_code=429))
+
 class CacheStaticFiles(StaticFiles):
     def is_not_modified(self, response_headers, request_headers) -> bool:
         response_headers["Cache-Control"] = "public, max-age=31536000"
@@ -75,7 +96,8 @@ def utc_now() -> datetime:
 
 
 def safe_slug(value: str, fallback: str = "untitled") -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9\-_\u4e00-\u9fff]+", "-", value.strip())
+    value = re.sub(r"[\\/\.]+", "", value.strip())
+    cleaned = re.sub(r"[^A-Za-z0-9\-_\u4e00-\u9fff]+", "-", value).lower()
     cleaned = cleaned.strip("-")
     return cleaned or fallback
 
@@ -149,8 +171,6 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_fi_project ON file_index(project, chapter_int);
             CREATE INDEX IF NOT EXISTS idx_file_index_project_chapter ON file_index(project, chapter_int);
             CREATE INDEX IF NOT EXISTS idx_file_index_project_volume ON file_index(project, volume, chapter_int);
-            CREATE INDEX IF NOT EXISTS idx_entity_refs_chapter ON entity_refs(chapter_path);
-
             CREATE TABLE IF NOT EXISTS operation_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 action TEXT NOT NULL,
@@ -436,7 +456,7 @@ def backup_file(path: Path, label: str = "auto") -> None:
 
 def count_words(text: str) -> int:
     cjk = len(re.findall(r"[\u4e00-\u9fff]", text))
-    latin = len(re.findall(r"[A-Za-z0-9]+", text))
+    latin = len(re.findall(r"[A-Za-z0-9_]+", text))
     return cjk + latin
 
 
@@ -768,20 +788,6 @@ def compute_trend() -> list[dict[str, Any]]:
     return trend
 
 
-@app.on_event("startup")
-def startup() -> None:
-    NOVELS_ROOT.mkdir(parents=True, exist_ok=True)
-    BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
-    init_db()
-    needs_note_rebuild = get_setting("fts_needs_rebuild", "0") == "1"
-    for p in [item.name for item in NOVELS_ROOT.iterdir() if item.is_dir()]:
-        list_chapters(p, sync=True)
-        if needs_note_rebuild:
-            _reindex_notes_for_project(p)
-    if needs_note_rebuild:
-        set_setting("fts_needs_rebuild", "0")
-
-
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -793,6 +799,7 @@ def login_page(request: Request) -> Response:
 
 
 @app.post("/login", response_class=HTMLResponse)
+@limiter.limit("5/minute")
 def login(request: Request, password: str = Form(...)) -> Response:
     if not ADMIN_PASSWORD:
         return templates.TemplateResponse("login.html", {"request": request, "error": "系统未初始化 (NOVELHUB_PASSWORD 未配置)，请联系管理员。"}, status_code=200)
@@ -808,10 +815,6 @@ def logout(request: Request) -> Response:
     request.session.clear()
     return RedirectResponse(url="/login", status_code=303)
 
-
-limiter = Limiter(key_func=get_remote_address)
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, lambda r, e: JSONResponse({"detail": "too many attempts"}, status_code=429))
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request) -> Response:
@@ -2650,22 +2653,6 @@ def export_project_status(request: Request, project: str) -> Response:
     export_file.write_text("\n\n".join(merged), encoding="utf-8")
     log_operation("export", safe_project, str(export_file))
     return templates.TemplateResponse("_export_result.html", {"request": request, "project": safe_project, "path": str(export_file)})
-
-
-@app.get("/projects/{project}/export")
-def export_download(request: Request, project: str) -> Response:
-    if not request.session.get("authed"):
-        return RedirectResponse("/login", status_code=303)
-    safe_project = safe_slug(project, fallback="project")
-    chapter_dir = project_path(safe_project) / "chapters"
-    if not chapter_dir.exists():
-        raise HTTPException(status_code=404, detail="project not found")
-    merged = []
-    for f in list_markdown_files(chapter_dir):
-        fm, body = read_markdown(f)
-        merged.append(f"# {fm.get('title', f.stem)}\n\n{body.strip()}\n")
-    content = "\n\n".join(merged)
-    return Response(content=content, media_type="text/plain; charset=utf-8", headers={"Content-Disposition": f'attachment; filename="{safe_project}.txt"'})
 
 
 @app.get("/settings", response_class=HTMLResponse)

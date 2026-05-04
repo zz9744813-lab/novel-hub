@@ -123,7 +123,7 @@
         {% endif %}
       </div>
       <div class="text-xs text-muted font-mono" id="global-save-state" x-text="$store.i18n.t('system_ready')">System Ready</div>
-      <div class="flex items-center gap-3">
+      <div class="hidden md:flex items-center gap-3">
 {% if project %}
 <a href="/projects/{{ project }}/outline" class="flex items-center gap-1.5 px-3 py-1.5 rounded-md hover:bg-panel transition-colors text-sm">大纲</a>
 <a href="/projects/{{ project }}/threads-board" class="flex items-center gap-1.5 px-3 py-1.5 rounded-md hover:bg-panel transition-colors text-sm">伏笔</a>
@@ -154,6 +154,25 @@
         <a href="/logout" class="p-1.5 rounded-md text-muted hover:text-danger hover:bg-danger/10 border border-transparent transition-all" :title="$store.i18n.t('nav_logout')">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
         </a>
+      </div>
+      <div x-data="{ navOpen: false }" class="md:hidden">
+        <button @click="navOpen = !navOpen" class="p-2 rounded-md text-muted hover:text-text_color hover:bg-panel border border-border_color" aria-label="Open navigation">☰</button>
+        <div x-show="navOpen"
+             x-transition
+             @click.outside="navOpen = false"
+             style="display: none;"
+             class="fixed inset-y-0 right-0 w-64 bg-panel z-40 p-6 flex flex-col gap-3 border-l border-border_color shadow-xl">
+          <a href="/" class="hover:text-accent">仪表盘</a>
+          {% if project %}
+          <a href="/projects/{{ project }}" class="hover:text-accent">{{ project }}</a>
+          <a href="/projects/{{ project }}/outline" class="hover:text-accent">大纲</a>
+          <a href="/projects/{{ project }}/threads-board" class="hover:text-accent">伏笔</a>
+          <a href="/projects/{{ project }}/timeline" class="hover:text-accent">时间线</a>
+          <a href="/projects/{{ project }}/entities" class="hover:text-accent">实体</a>
+          {% endif %}
+          <a href="/settings" class="hover:text-accent">设置</a>
+          <a href="/logout" class="hover:text-danger">登出</a>
+        </div>
       </div>
     </header>
     {% endblock %}

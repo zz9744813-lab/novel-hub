@@ -6,3 +6,8 @@ PyYAML==6.0.2
 python-multipart==0.0.20
 markdown==3.8
 itsdangerous==2.2.0
+cryptography==46.0.7
+EbookLib==0.20
+starlette-csrf==3.0.0
+slowapi==0.1.9
+pytest==9.0.3

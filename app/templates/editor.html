@@ -28,6 +28,17 @@
     <button class="p-1.5 rounded-md text-muted hover:text-text_color hover:bg-panel border border-transparent transition-all" data-action="toggle-left" title="切换左栏">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h8m-8 6h16"></path></svg>
     </button>
+    <div class="w-px h-4 bg-border_color mx-1"></div>
+    <!-- T2.6 Mode Toggle -->
+    <div class="flex bg-panel rounded-md p-0.5 border border-border_color scale-90" x-data="{ mode: 'full' }" @editor-mode-change.window="mode = $event.detail">
+        <button class="px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider transition-all" 
+                :class="mode === 'full' ? 'bg-bg text-accent shadow-sm' : 'text-muted hover:text-text_color'"
+                @click="$dispatch('set-editor-mode', 'full')">Full</button>
+        <button class="px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider transition-all" 
+                :class="mode === 'scene' ? 'bg-bg text-accent shadow-sm' : 'text-muted hover:text-text_color'"
+                @click="$dispatch('set-editor-mode', 'scene')">Scene</button>
+    </div>
+    <div class="w-px h-4 bg-border_color mx-1"></div>
     <button class="p-1.5 rounded-md text-muted hover:text-text_color hover:bg-panel border border-transparent transition-all" data-action="toggle-right" title="切换右栏">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M12 12h8m-8 6h8"></path></svg>
     </button>
@@ -80,34 +91,47 @@
     </div>
   </aside>
 
-  <section class="flex-1 overflow-y-auto flex flex-col relative custom-scrollbar bg-panel shadow-sm mx-0 md:mx-2 my-0 md:my-2 rounded-none md:rounded-xl border-x md:border border-border_color">
-    <form id="editor-form" hx-post="/projects/{{ project }}/editor/{{ filename }}" hx-target="#save-result" method="post" class="flex flex-col flex-1">
-      <div class="sticky top-0 z-10 bg-panel/95 backdrop-blur border-b border-border_color p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <input class="text-2xl font-bold bg-transparent border-0 outline-none w-full md:w-auto placeholder:text-border_color" name="title" value="{{ frontmatter.title }}" placeholder="章节标题" />
-        <div class="flex items-center gap-3 text-sm text-muted shrink-0">
-          <span class="bg-bg border border-border_color rounded px-2.5 py-1.5 text-xs text-muted" data-live-wordcount>{{ active.word_count if active else 0 }} 字</span>
-          <span id="saved-at" class="text-xs">--</span>
-          <div class="h-4 w-px bg-border_color mx-1"></div>
-          <div class="flex items-center gap-1.5">
-            <span class="text-xs">Aa</span>
-            <select id="font-size-picker" class="bg-bg border border-border_color rounded px-2 py-1 text-xs focus:outline-none focus:border-accent">
-              <option value="small">小</option>
-              <option value="medium" selected>中</option>
-              <option value="large">大</option>
-            </select>
+  <section class="flex-1 overflow-y-auto flex flex-col relative custom-scrollbar bg-panel shadow-sm mx-0 md:mx-2 my-0 md:my-2 rounded-none md:rounded-xl border-x md:border border-border_color" 
+           x-data="{ mode: 'full' }" @set-editor-mode.window="mode = $event.detail; $dispatch('editor-mode-change', mode)">
+    
+    <!-- Full Mode -->
+    <div x-show="mode === 'full'" class="flex-1 flex flex-col">
+        <form id="editor-form" hx-post="/projects/{{ project }}/editor/{{ filename }}" hx-target="#save-result" method="post" class="flex flex-col flex-1">
+          <div class="sticky top-0 z-10 bg-panel/95 backdrop-blur border-b border-border_color p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <input class="text-2xl font-bold bg-transparent border-0 outline-none w-full md:w-auto placeholder:text-border_color" name="title" value="{{ frontmatter.title }}" placeholder="章节标题" />
+            <div class="flex items-center gap-3 text-sm text-muted shrink-0">
+              <span class="bg-bg border border-border_color rounded px-2.5 py-1.5 text-xs text-muted" data-live-wordcount>{{ active.word_count if active else 0 }} 字</span>
+              <span id="saved-at" class="text-xs">--</span>
+              <div class="h-4 w-px bg-border_color mx-1"></div>
+              <div class="flex items-center gap-1.5">
+                <span class="text-xs">Aa</span>
+                <select id="font-size-picker" class="bg-bg border border-border_color rounded px-2 py-1 text-xs focus:outline-none focus:border-accent">
+                  <option value="small">小</option>
+                  <option value="medium" selected>中</option>
+                  <option value="large">大</option>
+                </select>
+              </div>
+              <button class="bg-bg border border-border_color hover:border-accent/50 rounded px-3 py-1.5 text-xs font-medium transition-colors" type="button" hx-post="/projects/{{ project }}/preview" hx-include="#editor-form" hx-target="#preview">预览</button>
+              <button class="bg-accent text-white hover:bg-accent/90 border border-accent rounded px-4 py-1.5 text-xs font-medium transition-colors" type="submit">保存</button>
+            </div>
           </div>
-          <button class="bg-bg border border-border_color hover:border-accent/50 rounded px-3 py-1.5 text-xs font-medium transition-colors" type="button" hx-post="/projects/{{ project }}/preview" hx-include="#editor-form" hx-target="#preview">预览</button>
-          <button class="bg-accent text-white hover:bg-accent/90 border border-accent rounded px-4 py-1.5 text-xs font-medium transition-colors" type="submit">保存</button>
+
+          <div class="flex-1 p-4 md:p-8 max-w-4xl mx-auto w-full">
+            <textarea id="body" name="body" class="w-full h-full bg-transparent border-0 outline-none resize-none font-serif text-lg leading-relaxed text-text_color placeholder:text-muted/50">{{ body }}</textarea>
+            <div id="cm-editor-container"></div>
+          </div>
+
+          <input type="hidden" name="_loaded_mtime" value="{{ mtime }}">
+          <div id="save-result"></div>
+        </form>
+    </div>
+
+    <!-- Scene Mode (T2.6) -->
+    <div x-show="mode === 'scene'" style="display: none;" class="flex-1 overflow-y-auto p-4 md:p-8 bg-panel/30" id="scene-editor-list">
+        <div class="max-w-4xl mx-auto flex flex-col gap-8 pb-32">
+            <div class="text-center py-20 text-muted italic">正在加载场景数据...</div>
         </div>
-      </div>
-
-      <div class="flex-1 p-4 md:p-8 max-w-4xl mx-auto w-full">
-        <textarea id="body" name="body" class="w-full h-full bg-transparent border-0 outline-none resize-none font-serif text-lg leading-relaxed text-text_color placeholder:text-muted/50">{{ body }}</textarea>
-      </div>
-
-      <input type="hidden" name="_loaded_mtime" value="{{ mtime }}">
-      <div id="save-result"></div>
-    </form>
+    </div>
     <section class="border-t border-border_color bg-bg p-4 md:p-8">
       <h4 class="text-sm font-medium text-muted uppercase tracking-wider mb-4">预览</h4>
       <div id="preview" class="max-w-4xl mx-auto prose prose-invert prose-p:leading-relaxed prose-p:font-serif"></div>

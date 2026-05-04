@@ -233,6 +233,14 @@ def init_db() -> None:
                 content BLOB
             );
             CREATE INDEX IF NOT EXISTS idx_snapshots_chapter ON snapshots(chapter_path, created_at);
+            CREATE VIRTUAL TABLE IF NOT EXISTS entity_fts USING fts5(
+                id UNINDEXED,
+                project UNINDEXED,
+                name,
+                aliases,
+                properties,
+                tokenize='unicode61 remove_diacritics 2'
+            );
             """
         )
         try:
@@ -1035,6 +1043,20 @@ def project_detail(request: Request, project: str, status: str | None = None) ->
     project_info = next((p for p in scan_projects() if p["name"] == safe_project), None)
     if not project_info:
         raise HTTPException(status_code=404, detail="project not found")
+        
+    # T3.4 Calculate C-Route Stats
+    with get_conn() as conn:
+        counts = conn.execute(
+            """SELECT 
+               COUNT(CASE WHEN kind='character' THEN 1 END) as character_count,
+               COUNT(CASE WHEN kind='location' THEN 1 END) as location_count,
+               COUNT(CASE WHEN kind='thread' THEN 1 END) as thread_count
+               FROM entities WHERE project=?""", (safe_project,)).fetchone()
+        
+        project_info["character_count"] = counts["character_count"]
+        project_info["location_count"] = counts["location_count"]
+        project_info["thread_count"] = counts["thread_count"]
+        
     chapters = list_chapters(safe_project)
     if status and status in STATUS_ORDER:
         chapters = [c for c in chapters if c["status"] == status]
@@ -1689,6 +1711,10 @@ async def api_create_entity(request: Request) -> Response:
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (ent_id, project, kind, name, json.dumps(data.get("aliases", [])), json.dumps(data.get("properties", {})), now, now)
         )
+        conn.execute(
+            "INSERT INTO entity_fts (id, project, name, aliases, properties) VALUES (?, ?, ?, ?, ?)",
+            (ent_id, project, name, json.dumps(data.get("aliases", [])), json.dumps(data.get("properties", {})))
+        )
     return JSONResponse(content={"status": "ok", "id": ent_id})
 
 @app.put("/api/entities/{ent_id}")
@@ -1702,6 +1728,14 @@ async def api_update_entity(request: Request, ent_id: str) -> Response:
                WHERE id=?""",
             (data["name"], json.dumps(data.get("aliases", [])), json.dumps(data.get("properties", {})), utc_now().isoformat(), ent_id)
         )
+        conn.execute("DELETE FROM entity_fts WHERE id=?", (ent_id,))
+        # Get project back
+        entity = conn.execute("SELECT project FROM entities WHERE id=?", (ent_id,)).fetchone()
+        if entity:
+            conn.execute(
+                "INSERT INTO entity_fts (id, project, name, aliases, properties) VALUES (?, ?, ?, ?, ?)",
+                (ent_id, entity["project"], data["name"], json.dumps(data.get("aliases", [])), json.dumps(data.get("properties", {})))
+            )
     return JSONResponse(content={"status": "ok"})
 
 @app.delete("/api/entities/{ent_id}")
@@ -1709,6 +1743,7 @@ def api_delete_entity(request: Request, ent_id: str) -> Response:
     require_auth(request)
     with get_conn() as conn:
         conn.execute("DELETE FROM entities WHERE id=?", (ent_id,))
+        conn.execute("DELETE FROM entity_fts WHERE id=?", (ent_id,))
         conn.execute("DELETE FROM entity_relations WHERE source_id=? OR target_id=?", (ent_id, ent_id))
         conn.execute("DELETE FROM entity_refs WHERE entity_id=?", (ent_id,))
     return JSONResponse(content={"status": "ok"})
@@ -1793,6 +1828,42 @@ def entities_page(request: Request, project: str, kind: str = None) -> Response:
         )
 
 
+@app.get("/projects/{project}/graph", response_class=HTMLResponse)
+def graph_page(request: Request, project: str) -> Response:
+    require_auth(request)
+    return templates.TemplateResponse("graph.html", {"request": request, "project": project})
+
+
+@app.get("/api/entity-relations")
+def api_list_relations(request: Request, project: str) -> Response:
+    require_auth(request)
+    with get_conn() as conn:
+        relations = conn.execute("SELECT * FROM entity_relations WHERE project = ?", (project,)).fetchall()
+        return JSONResponse(content={"status": "ok", "relations": [dict(r) for r in relations]})
+
+
+@app.get("/projects/{project}/timeline", response_class=HTMLResponse)
+def timeline_page(request: Request, project: str) -> Response:
+    require_auth(request)
+    safe_project = safe_slug(project, fallback="project")
+    chapters = list_chapters(safe_project)
+    
+    with get_conn() as conn:
+        all_scenes = conn.execute("SELECT * FROM scenes WHERE project = ? ORDER BY chapter_path, seq", (safe_project,)).fetchall()
+        
+    # Group scenes by chapter_path
+    scene_map = {}
+    for s in all_scenes:
+        path = s["chapter_path"]
+        if path not in scene_map: scene_map[path] = []
+        scene_map[path].append(dict(s))
+        
+    for ch in chapters:
+        ch["scenes"] = scene_map.get(ch["path"], [])
+        
+    return templates.TemplateResponse("timeline.html", {"request": request, "project": safe_project, "chapters": chapters})
+
+
 @app.get("/projects/{project}/entities/{ent_id}", response_class=HTMLResponse)
 def entity_detail_page(request: Request, project: str, ent_id: str) -> Response:
     require_auth(request)
@@ -1824,6 +1895,26 @@ def entity_detail_page(request: Request, project: str, ent_id: str) -> Response:
             }
         )
 
+
+@app.put("/api/scenes/{sc_id}")
+async def api_update_scene(request: Request, sc_id: str) -> Response:
+    require_auth(request)
+    data = await request.json()
+    with get_conn() as conn:
+        conn.execute(
+            """UPDATE scenes SET 
+               title=?, pov=?, location_id=?, summary=?, status=?
+               WHERE id=?""",
+            (data.get("title"), data.get("pov"), data.get("location_id"), data.get("summary"), data.get("status"), sc_id)
+        )
+    return JSONResponse(content={"status": "ok"})
+
+@app.delete("/api/scenes/{sc_id}")
+def api_delete_scene(request: Request, sc_id: str) -> Response:
+    require_auth(request)
+    with get_conn() as conn:
+        conn.execute("DELETE FROM scenes WHERE id=?", (sc_id,))
+    return JSONResponse(content={"status": "ok"})
 
 @app.get("/api/projects/{project}/outline")
 def api_get_outline(request: Request, project: str) -> Response:

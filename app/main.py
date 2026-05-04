@@ -267,90 +267,77 @@ def normalize_meta(fm: dict[str, Any], stem: str) -> dict[str, Any]:
     }
 
 
-def list_chapters(project: str) -> list[dict[str, Any]]:
+def list_chapters(project: str, sync: bool = False) -> list[dict[str, Any]]:
     folder = project_path(project) / "chapters"
     rows: list[dict[str, Any]] = []
     with get_conn() as conn:
+        if sync:
+            db_rows = conn.execute(
+                "SELECT path, word_count, updated_at, title, chapter, chapter_int, status, volume, mtime "
+                "FROM file_index WHERE project=? ORDER BY chapter_int, path",
+                (project,)
+            ).fetchall()
+            cached_map = {r["path"]: dict(r) for r in db_rows}
+            
+            for f in list_markdown_files(folder):
+                mtime = f.stat().st_mtime
+                f_str = str(f)
+                cached = cached_map.get(f_str)
+                
+                if not cached or cached.get("mtime") != mtime:
+                    fm, body = read_markdown(f)
+                    meta = normalize_meta(fm, f.stem)
+                    words = count_words(body)
+                    try:
+                        chapter_int = int(meta["chapter"])
+                    except ValueError:
+                        chapter_int = 0
+                        
+                    conn.execute(
+                        """
+                        INSERT INTO file_index(path, project, word_count, updated_at, title, chapter, chapter_int, status, volume, mtime)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(path) DO UPDATE SET
+                            project=excluded.project,
+                            word_count=excluded.word_count,
+                            updated_at=excluded.updated_at,
+                            title=excluded.title,
+                            chapter=excluded.chapter,
+                            chapter_int=excluded.chapter_int,
+                            status=excluded.status,
+                            volume=excluded.volume,
+                            mtime=excluded.mtime
+                        """,
+                        (f_str, project, words, utc_now().isoformat(), meta["title"], meta["chapter"], chapter_int, meta["status"], meta["volume"], mtime)
+                    )
+                    
+                    conn.execute("DELETE FROM chapter_fts WHERE path=?", (f_str,))
+                    conn.execute("INSERT INTO chapter_fts(path, project, title, body) VALUES (?, ?, ?, ?)", 
+                                 (f_str, project, meta["title"], body))
+
         db_rows = conn.execute(
             "SELECT path, word_count, updated_at, title, chapter, chapter_int, status, volume, mtime "
             "FROM file_index WHERE project=? ORDER BY chapter_int, path",
             (project,)
         ).fetchall()
         
-        cached_map = {r["path"]: dict(r) for r in db_rows}
-        
-        for f in list_markdown_files(folder):
-            mtime = f.stat().st_mtime
-            f_str = str(f)
-            cached = cached_map.get(f_str)
-            
-            if not cached or cached.get("mtime") != mtime:
-                fm, body = read_markdown(f)
-                meta = normalize_meta(fm, f.stem)
-                words = count_words(body)
-                
-                try:
-                    chapter_int = int(meta["chapter"])
-                except ValueError:
-                    chapter_int = 0
-                    
-                conn.execute(
-                    """
-                    INSERT INTO file_index(path, project, word_count, updated_at, title, chapter, chapter_int, status, volume, mtime)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(path) DO UPDATE SET
-                        project=excluded.project,
-                        word_count=excluded.word_count,
-                        updated_at=excluded.updated_at,
-                        title=excluded.title,
-                        chapter=excluded.chapter,
-                        chapter_int=excluded.chapter_int,
-                        status=excluded.status,
-                        volume=excluded.volume,
-                        mtime=excluded.mtime
-                    """,
-                    (f_str, project, words, utc_now().isoformat(), meta["title"], meta["chapter"], chapter_int, meta["status"], meta["volume"], mtime)
-                )
-                
-                conn.execute("DELETE FROM chapter_fts WHERE path=?", (f_str,))
-                conn.execute("INSERT INTO chapter_fts(path, project, title, body) VALUES (?, ?, ?, ?)", 
-                             (f_str, project, meta["title"], body))
-                
-                rows.append({
-                    "filename": f.name,
-                    "title": meta["title"],
-                    "chapter": meta["chapter"],
-                    "status": meta["status"],
-                    "volume": meta["volume"],
-                    "word_count": words,
-                    "modified": datetime.fromtimestamp(mtime, tz=timezone.utc),
-                    "meta": meta,
-                })
-            else:
-                rows.append({
-                    "filename": f.name,
-                    "title": cached["title"],
-                    "chapter": cached["chapter"],
-                    "status": cached["status"],
-                    "volume": cached["volume"],
-                    "word_count": cached["word_count"],
-                    "modified": datetime.fromtimestamp(cached["mtime"], tz=timezone.utc),
-                    "meta": {
-                        "title": cached["title"],
-                        "chapter": cached["chapter"],
-                        "status": cached["status"],
-                        "volume": cached["volume"]
-                    }
-                })
-
-    def _sort_key(x):
-        try:
-            c_int = int(x["chapter"])
-        except ValueError:
-            c_int = 0
-        return (c_int, x["filename"])
-        
-    rows.sort(key=_sort_key)
+        for r in db_rows:
+            f = Path(r["path"])
+            rows.append({
+                "filename": f.name,
+                "title": r["title"],
+                "chapter": r["chapter"],
+                "status": r["status"],
+                "volume": r["volume"],
+                "word_count": r["word_count"],
+                "modified": datetime.fromtimestamp(r["mtime"], tz=timezone.utc),
+                "meta": {
+                    "title": r["title"],
+                    "chapter": r["chapter"],
+                    "status": r["status"],
+                    "volume": r["volume"],
+                }
+            })
     return rows
 
 
@@ -919,7 +906,8 @@ def editor_page(request: Request, project: str, filename: str) -> Response:
         raise HTTPException(status_code=404, detail="chapter not found")
     fm, body = read_markdown(path)
     meta = normalize_meta(fm, path.stem)
-    chapters = list_chapters(safe_project)
+    # Editor uses DB index directly without scanning
+    chapters = list_chapters(safe_project, sync=False)
     active = next((c for c in chapters if c["filename"] == path.name), None)
     
     active_idx = next((i for i, c in enumerate(chapters) if c["filename"] == path.name), 0)
@@ -948,7 +936,8 @@ def editor_page(request: Request, project: str, filename: str) -> Response:
 def sidebar_chapters(request: Request, project: str, q: str = "", active: str = "") -> Response:
     require_auth(request)
     safe_project = safe_slug(project, fallback="project")
-    chapters = list_chapters(safe_project)
+    # Project detail triggers index sync
+    chapters = list_chapters(safe_project, sync=True)
     
     if q:
         q = q.lower()

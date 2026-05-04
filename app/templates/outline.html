@@ -30,7 +30,7 @@
 
     <div x-show="loading" class="flex items-center justify-center py-20 text-muted italic">Loading outline...</div>
 
-    <div x-show="!loading" class="grid grid-cols-4 gap-4 bg-panel border border-border_color rounded-xl p-4 min-h-[600px] overflow-x-auto">
+    <div x-show="!loading" class="grid grid-cols-1 md:grid-cols-4 gap-4 bg-panel border border-border_color rounded-xl p-4 min-h-[600px] overflow-x-auto">
         <!-- Project/Volumes -->
         <div class="flex flex-col gap-2">
             <h3 class="text-xs font-bold text-muted uppercase tracking-widest px-2 mb-2">Volumes</h3>
@@ -75,11 +75,26 @@
         </div>
 
         <!-- Chapters -->
-        <div class="flex flex-col gap-2 col-span-2">
+        <div class="flex flex-col gap-2 md:col-span-2" :class="(!selectedVolume && 'hidden md:flex')">
             <h3 class="text-xs font-bold text-muted uppercase tracking-widest px-2 mb-2">Chapters</h3>
             <div class="grid grid-cols-1 gap-2">
                 <template x-for="c in filteredChapters" :key="c.path">
                     <div class="p-3 bg-bg border border-border_color rounded hover:border-accent transition-all group flex flex-col gap-2 relative cursor-pointer" @click="selectedChapter = c.path" :class="selectedChapter === c.path ? 'border-accent' : ''">
+                                                <button class="absolute top-2 right-2 text-[10px] bg-accent/10 text-accent px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                                @click.stop="
+                                    const n = prompt('拆成多少场景？', '4');
+                                    if (!n) return;
+                                    const fname = c.path.split(/[/\\]/).pop();
+                                    $el.textContent = '...';
+                                    fetch(`/api/projects/{{ project }}/ai/outline/scene`, {
+                                        method: 'POST', headers: {'Content-Type':'application/json'},
+                                        body: JSON.stringify({chapter: fname, count: parseInt(n)})
+                                    }).then(r => r.json()).then(d => {
+                                        if (d.status === 'ok') { alert('已拆为 ' + d.scenes.length + ' 场景'); location.reload(); }
+                                        else alert('失败：' + (d.detail || ''));
+                                        $el.textContent = '✂';
+                                    });
+                                ">✂</button>
                         <div class="flex items-center justify-between pr-12">
                             <a :href="`/projects/{{ project }}/editor/${c.path.split(/[\\\\/]/).pop()}`" class="font-bold text-sm hover:text-accent transition-colors" x-text="c.title"></a>
                         </div>
@@ -98,7 +113,7 @@
         </div>
 
         <!-- Scenes -->
-        <div class="flex flex-col gap-2">
+        <div class="flex flex-col gap-2" :class="(!selectedChapter && 'hidden md:flex')">
             <h3 class="text-xs font-bold text-muted uppercase tracking-widest px-2 mb-2">Scenes</h3>
             <div class="flex flex-col gap-1">
                 <template x-show="selectedChapter" x-for="s in filteredScenes" :key="s.id">
@@ -107,6 +122,20 @@
                         <div class="flex items-center justify-between text-[9px] text-muted italic">
                             <span x-text="s.pov || 'No POV'"></span>
                             <span x-text="s.status || 'draft'"></span>
+                                                    <button class="text-[9px] text-accent opacity-0 group-hover:opacity-100"
+                                @click.stop="
+                                    if (!confirm('用 AI 把此场景的摘要扩写为正文？')) return;
+                                    const fname = (data.chapters.find(c => c.path === selectedChapter) || {}).path?.split(/[/\\]/).pop();
+                                    $el.textContent = '...';
+                                    fetch(`/api/projects/{{ project }}/ai/outline/draft`, {
+                                        method: 'POST', headers: {'Content-Type':'application/json'},
+                                        body: JSON.stringify({chapter: fname, scene_id: s.id})
+                                    }).then(r => r.json()).then(d => {
+                                        if (d.status === 'ok') { alert('扩写完成'); location.reload(); }
+                                        else alert('失败');
+                                        $el.textContent = '扩写';
+                                    });
+                                ">扩写</button>
                         </div>
                     </div>
                 </template>

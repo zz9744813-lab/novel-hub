@@ -88,38 +88,74 @@
         </form>
       </div>
 
-      <div class="bg-panel border border-border_color rounded-xl p-4 shadow-sm mt-2" x-data="{open: false}">
-        <button @click="open = !open" class="flex items-center justify-between w-full text-sm font-medium text-muted uppercase tracking-wider">
-          章节重排
-          <svg class="w-4 h-4 transition-transform" :class="open && 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
-        </button>
-        <div x-show="open" x-transition class="mt-3 pt-3 border-t border-border_color" x-init="
-          setTimeout(() => {
-            new Sortable(document.getElementById('reorder-list'), { animation: 150 });
-          }, 100);
-        ">
-          <p class="text-[10px] text-muted mb-2">拖动下方列表调整顺序，然后点击确认重排物理序号。</p>
-          <ul id="reorder-list" class="flex flex-col gap-1 max-h-64 overflow-y-auto custom-scrollbar">
-            {% for c in chapters %}
-            <li data-fname="{{ c.filename }}" class="bg-bg border border-border_color rounded px-3 py-2 text-xs cursor-grab active:cursor-grabbing flex justify-between">
-              <span>{{ c.title }}</span>
-              <span class="text-muted">{{ c.chapter or '?' }}</span>
-            </li>
-            {% endfor %}
-          </ul>
-          <button type="button" 
-                  class="w-full mt-2 bg-panel border border-border_color hover:border-accent hover:text-accent rounded px-3 py-1.5 text-xs font-medium transition-colors"
-                  onclick="const order = [...document.querySelectorAll('#reorder-list li')].map(el => el.dataset.fname); if(confirm('确定要按此顺序物理重排文件吗？')) fetch('/projects/{{ project }}/chapters/reorder', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({order})}).then(res => res.json()).then(data => { if(data.status==='ok') window.location.reload(); else alert('失败: ' + (data.error||'未知错误')); })">
-            确认重排
-          </button>
-        </div>
-      </div>
+      
+<details class="bg-panel border border-border_color rounded-xl p-4 shadow-sm mt-2" 
+         x-data="{ 
+             volumes: [], 
+             loading: true,
+             async load() {
+                 const r = await fetch(`/api/projects/{{ project }}/volumes`);
+                 const d = await r.json();
+                 this.volumes = d.volumes;
+                 this.loading = false;
+                 this.$nextTick(() => {
+                     const el = document.getElementById('volumes-sortable');
+                     if (el && window.Sortable) new Sortable(el, {
+                         animation: 150,
+                         onEnd: async () => {
+                             const order = [...el.querySelectorAll('[data-slug]')].map(n => n.dataset.slug);
+                             await fetch(`/api/projects/{{ project }}/volumes/reorder`, {
+                                 method: 'POST', headers: {'Content-Type':'application/json'},
+                                 body: JSON.stringify({order})
+                             });
+                         }
+                     });
+                 });
+             },
+             async save(v) {
+                 await fetch(`/api/projects/{{ project }}/volumes/${v.slug}`, {
+                     method: 'PUT', headers: {'Content-Type':'application/json'},
+                     body: JSON.stringify({title: v.title, synopsis: v.synopsis, target_words: v.target_words, seq: v.seq})
+                 });
+             }
+         }" 
+         x-init="load()">
+    <summary class="cursor-pointer text-sm font-bold flex items-center gap-2 text-muted uppercase tracking-wider outline-none list-none">
+        <span>📚 卷管理 (Volumes)</span>
+        <span class="text-xs text-muted normal-case" x-text="`${volumes.length} 卷`"></span>
+    </summary>
+    <div class="mt-4 pt-4 border-t border-border_color">
+        <div x-show="loading" class="text-xs text-muted italic">加载中...</div>
+        <ul id="volumes-sortable" class="flex flex-col gap-2" x-show="!loading">
+            <template x-for="v in volumes" :key="v.slug">
+                <li :data-slug="v.slug" class="bg-bg border border-border_color rounded p-3 flex flex-col gap-2 cursor-grab active:cursor-grabbing">
+                    <div class="flex items-center gap-2">
+                        <span class="text-muted text-xs">⋮⋮</span>
+                        <input class="flex-1 bg-panel border border-border_color rounded px-2 py-1 text-sm font-bold text-text_color focus:outline-none focus:border-accent transition-colors" 
+                               x-model="v.title" @change="save(v)" placeholder="卷标题">
+                        <span class="text-[10px] text-muted font-mono" x-text="v.slug"></span>
+                    </div>
+                    <textarea class="bg-panel border border-border_color rounded px-2 py-1 text-xs text-text_color focus:outline-none focus:border-accent transition-colors custom-scrollbar" 
+                              rows="2" x-model="v.synopsis" @change="save(v)" placeholder="卷大纲（可选）"></textarea>
+                    <div class="flex items-center gap-3 text-xs">
+                        <label class="text-muted flex items-center gap-1">
+                            目标字数:
+                            <input type="number" class="bg-panel border border-border_color rounded px-2 py-0.5 w-24 text-text_color focus:outline-none focus:border-accent transition-colors" 
+                                   x-model.number="v.target_words" @change="save(v)">
+                        </label>
+                        <span class="text-muted ml-auto" x-text="`${v.chapter_count} 章 / ${v.word_count} 字`"></span>
+                    </div>
+                </li>
+            </template>
+        </ul>
     </div>
+</details>
+
 
     <div class="flex-1 w-full bg-panel border border-border_color rounded-xl p-6 shadow-sm min-h-[400px]">
       {% if chapters %}
       {% set ns = namespace(current_vol='') %}
-      <div class="grid gap-3">
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         {% for c in chapters %}
         {% if c.volume != ns.current_vol %}
           {% set ns.current_vol = c.volume %}

@@ -4,18 +4,25 @@ import os
 import re
 import shutil
 import sqlite3
+import base64
+from cryptography.fernet import Fernet
 from datetime import datetime, timezone
 from pathlib import Path
 import json
 import gzip
 import hashlib
 from typing import Any, List, Dict, Tuple
+from contextlib import asynccontextmanager
 
+from ebooklib import epub
 import markdown
 import yaml
 from dotenv import load_dotenv
 from fastapi import FastAPI, Form, HTTPException, Request, BackgroundTasks
 from starlette_csrf import CSRFMiddleware
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -136,6 +143,9 @@ def init_db() -> None:
             );
 
             CREATE INDEX IF NOT EXISTS idx_fi_project ON file_index(project, chapter_int);
+            CREATE INDEX IF NOT EXISTS idx_file_index_project_chapter ON file_index(project, chapter_int);
+            CREATE INDEX IF NOT EXISTS idx_file_index_project_volume ON file_index(project, volume, chapter_int);
+            CREATE INDEX IF NOT EXISTS idx_entity_refs_chapter ON entity_refs(chapter_path);
 
             CREATE TABLE IF NOT EXISTS operation_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -191,6 +201,18 @@ def init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_entities_project_kind ON entities(project, kind);
             CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(project, name);
+
+            CREATE TABLE IF NOT EXISTS entity_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entity_id TEXT NOT NULL,
+                project TEXT NOT NULL,
+                chapter_int INTEGER,
+                field TEXT NOT NULL,
+                old_value TEXT,
+                new_value TEXT,
+                changed_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_history_entity ON entity_history(entity_id, chapter_int);
 
             CREATE TABLE IF NOT EXISTS entity_relations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -409,9 +431,9 @@ def backup_file(path: Path, label: str = "auto") -> None:
 
 
 def count_words(text: str) -> int:
-    cjk = re.findall(r"[\u4e00-\u9fff]", text)
-    latin = re.findall(r"[A-Za-z0-9]+", text)
-    return len(cjk) + len(latin)
+    cjk = len(re.findall(r"[\u4e00-\u9fff]", text))
+    latin = len(re.findall(r"[A-Za-z0-9]+", text))
+    return cjk + latin
 
 
 def chapter_path(project: str, filename: str, volume: str = None) -> Path:
@@ -783,6 +805,10 @@ def logout(request: Request) -> Response:
     return RedirectResponse(url="/login", status_code=303)
 
 
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, lambda r, e: JSONResponse({"detail": "too many attempts"}, status_code=429))
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request) -> Response:
     if not request.session.get("authed"):
@@ -1072,6 +1098,19 @@ def chapters_page_redirect(request: Request, project: str) -> Response:
         return RedirectResponse("/login", status_code=303)
     return RedirectResponse(url=f"/projects/{safe_slug(project, fallback='project')}", status_code=303)
 
+
+@app.get("/projects/{project}/chapters/{filename}/read", response_class=HTMLResponse)
+def chapter_read_only(request: Request, project: str, filename: str) -> Response:
+    require_auth(request)
+    safe_project = safe_slug(project, fallback="project")
+    path = chapter_path(safe_project, filename)
+    if not path.exists(): raise HTTPException(404)
+    fm, body = read_markdown(path)
+    html = markdown.markdown(body)
+    return templates.TemplateResponse(
+        "_chapter_readonly.html",
+        {"request": request, "project": safe_project, "title": fm.get("title", filename), "html": html}
+    )
 
 @app.get("/projects/{project}/editor/{filename}", response_class=HTMLResponse)
 def editor_page(request: Request, project: str, filename: str) -> Response:
@@ -1667,7 +1706,7 @@ def view_snapshot_diff(request: Request, project: str, snap_id: int) -> Response
 async def run_consistency_check(project: str, chapter_path: str):
     """Background task to check consistency for a chapter."""
     try:
-        api_key = get_setting("ai_api_key")
+        api_key = get_setting_decrypted("ai_api_key")
         base_url = get_setting("ai_base_url")
         model = get_setting("ai_model")
         if not api_key: return
@@ -1720,7 +1759,7 @@ async def ai_outline_volume(request: Request, project: str) -> Response:
     """T4.3 AI generate volume outline."""
     require_auth(request)
     data = await request.json()
-    api_key = get_setting("ai_api_key")
+    api_key = get_setting_decrypted("ai_api_key")
     if not api_key: raise HTTPException(400, "AI not configured")
     
     from app.services.ai_context import build_context
@@ -1743,7 +1782,7 @@ async def ai_outline_chapter(request: Request, project: str) -> Response:
     volume_slug = data.get("slug")
     num_chapters = int(data.get("count", 10))
     
-    api_key = get_setting("ai_api_key")
+    api_key = get_setting_decrypted("ai_api_key")
     if not api_key: raise HTTPException(400, "AI not configured")
     
     safe_project = safe_slug(project, fallback="project")
@@ -1811,6 +1850,114 @@ Generate {num_chapters} chapter outlines for this volume. Return as JSON array, 
     
     return JSONResponse({"status": "ok", "created": created})
 
+@app.post("/api/projects/{project}/ai/outline/scene")
+async def ai_outline_scene(request: Request, project: str) -> Response:
+    """Split a chapter into scene H2 markers with summaries."""
+    require_auth(request)
+    data = await request.json()
+    chapter_filename = data.get("chapter")
+    num_scenes = int(data.get("count", 4))
+    
+    api_key = get_setting_decrypted("ai_api_key")
+    if not api_key: raise HTTPException(400, "AI not configured")
+    
+    safe_project = safe_slug(project, fallback="project")
+    ch_path = chapter_path(safe_project, chapter_filename)
+    if not ch_path.exists(): raise HTTPException(404, "chapter not found")
+    
+    fm, body = read_markdown(ch_path)
+    
+    from app.services.ai_context import build_context
+    from app.services.ai_client import generate_ai_content
+    context = build_context(safe_project, str(ch_path), "outline")
+    
+    prompt = f"""Chapter: {fm.get('title', '')}
+Synopsis: {fm.get('synopsis', '')}
+
+{context}
+
+Generate {num_scenes} scenes for this chapter. Each scene should be a beat in the chapter. Return ONLY valid JSON array, each item: {{"title": "scene title", "summary": "2 sentence beat description"}}. No markdown fences."""
+    
+    response = await generate_ai_content(
+        api_key, get_setting("ai_base_url"), get_setting("ai_model"),
+        "You are a scene outliner. Return ONLY valid JSON.", prompt
+    )
+    if not response: return JSONResponse({"status": "error"})
+    
+    clean = response.strip()
+    if clean.startswith("```json"): clean = clean[7:]
+    if clean.startswith("```"): clean = clean[3:]
+    if clean.endswith("```"): clean = clean[:-3]
+    
+    try:
+        import json
+        scenes_data = json.loads(clean.strip())
+    except json.JSONDecodeError:
+        return JSONResponse({"status": "error", "detail": "AI returned invalid JSON"})
+    
+    # Build new body: keep original prefix until first H2 (or original body if no H2),
+    # then append H2 + summary blocks for each scene
+    h2_pos = body.find("\n## ")
+    prefix = body[:h2_pos] if h2_pos > 0 else body
+    if prefix and not prefix.endswith("\n"): prefix += "\n"
+    
+    new_body = prefix
+    for sc in scenes_data:
+        new_body += f"\n## {sc.get('title', 'Scene')}\n\n*{sc.get('summary', '')}*\n\n"
+    
+    write_markdown(ch_path, fm, new_body, project=safe_project)
+    return JSONResponse({"status": "ok", "scenes": scenes_data})
+
+@app.post("/api/projects/{project}/ai/outline/draft")
+async def ai_outline_draft(request: Request, project: str) -> Response:
+    """Expand a scene's summary into prose draft."""
+    require_auth(request)
+    data = await request.json()
+    chapter_filename = data.get("chapter")
+    scene_id = data.get("scene_id")
+    
+    api_key = get_setting_decrypted("ai_api_key")
+    if not api_key: raise HTTPException(400, "AI not configured")
+    
+    safe_project = safe_slug(project, fallback="project")
+    ch_path = chapter_path(safe_project, chapter_filename)
+    if not ch_path.exists(): raise HTTPException(404, "chapter not found")
+    
+    with get_conn() as conn:
+        scene = conn.execute(
+            "SELECT * FROM scenes WHERE id=? AND project=?",
+            (scene_id, safe_project)
+        ).fetchone()
+        if not scene: raise HTTPException(404, "scene not found")
+    
+    fm, body = read_markdown(ch_path)
+    
+    # Extract scene segment by char offsets
+    start = scene["char_offset_start"] or 0
+    end = scene["char_offset_end"] or len(body)
+    scene_text = body[start:end]
+    
+    from app.services.ai_context import build_context
+    from app.services.ai_client import generate_ai_content
+    context = build_context(safe_project, str(ch_path), "draft")
+    
+    prompt = f"""{context}
+
+Current scene to expand:
+{scene_text}
+
+Expand this scene into prose. Keep the existing H2 title and beat summary at top, but write 500-1000 words of actual narrative below. Match the project's style. Return only the expanded scene text (markdown OK)."""
+    
+    response = await generate_ai_content(
+        api_key, get_setting("ai_base_url"), get_setting("ai_model"),
+        "You are a creative novelist.", prompt
+    )
+    if not response: return JSONResponse({"status": "error"})
+    
+    new_body = body[:start] + response.strip() + "\n\n" + body[end:]
+    write_markdown(ch_path, fm, new_body, project=safe_project)
+    return JSONResponse({"status": "ok", "draft": response.strip()})
+
 @app.get("/projects/{project}/entities/{ent_id}/arc", response_class=HTMLResponse)
 def entity_arc_page(request: Request, project: str, ent_id: str) -> Response:
     require_auth(request)
@@ -1859,7 +2006,7 @@ async def api_ai_generate(
     require_auth(request)
     
     # Get settings
-    api_key = get_setting("ai_api_key")
+    api_key = get_setting_decrypted("ai_api_key")
     base_url = get_setting("ai_base_url")
     model = get_setting("ai_model")
     
@@ -1911,16 +2058,69 @@ def project_outline_page(request: Request, project: str) -> Response:
 @app.put("/api/projects/{project}/volumes/{slug}")
 async def api_update_volume(request: Request, project: str, slug: str) -> Response:
     require_auth(request)
+    safe_project = safe_slug(project, fallback="project")
     data = await request.json()
     with get_conn() as conn:
-        conn.execute(
-            """INSERT INTO volumes (project, slug, title, seq, synopsis, target_words)
-               VALUES (?, ?, ?, ?, ?, ?)
-               ON CONFLICT(project, slug) DO UPDATE SET
-               title=excluded.title, seq=excluded.seq, synopsis=excluded.synopsis, target_words=excluded.target_words""",
-            (project, slug, data.get("title"), data.get("seq", 0), data.get("synopsis", ""), data.get("target_words", 0))
-        )
-    return JSONResponse(content={"status": "ok"})
+        existing = conn.execute(
+            "SELECT 1 FROM volumes WHERE project=? AND slug=?",
+            (safe_project, slug)
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """UPDATE volumes SET title=?, synopsis=?, target_words=?, seq=?
+                   WHERE project=? AND slug=?""",
+                (data.get("title", slug), data.get("synopsis", ""),
+                 int(data.get("target_words") or 0), int(data.get("seq") or 0),
+                 safe_project, slug)
+            )
+        else:
+            conn.execute(
+                """INSERT INTO volumes(project, slug, title, synopsis, target_words, seq)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (safe_project, slug, data.get("title", slug), data.get("synopsis", ""),
+                 int(data.get("target_words") or 0), int(data.get("seq") or 0))
+            )
+    return JSONResponse({"status": "ok"})
+
+@app.post("/api/projects/{project}/volumes/reorder")
+async def api_reorder_volumes(request: Request, project: str) -> Response:
+    require_auth(request)
+    safe_project = safe_slug(project, fallback="project")
+    data = await request.json()
+    slugs = data.get("order", [])
+    with get_conn() as conn:
+        for i, slug in enumerate(slugs, 1):
+            conn.execute(
+                "UPDATE volumes SET seq=? WHERE project=? AND slug=?",
+                (i, safe_project, slug)
+            )
+    return JSONResponse({"status": "ok"})
+
+@app.get("/api/projects/{project}/volumes")
+def api_list_volumes(request: Request, project: str) -> Response:
+    require_auth(request)
+    safe_project = safe_slug(project, fallback="project")
+    chapters_dir = NOVELS_ROOT / safe_project / "chapters"
+    if chapters_dir.exists():
+        with get_conn() as conn:
+            existing = {r["slug"] for r in conn.execute(
+                "SELECT slug FROM volumes WHERE project=?", (safe_project,)).fetchall()}
+            for d in sorted(chapters_dir.iterdir()):
+                if d.is_dir() and d.name not in existing:
+                    conn.execute(
+                        "INSERT INTO volumes(project, slug, title, seq) VALUES (?, ?, ?, ?)",
+                        (safe_project, d.name, d.name, len(existing) + 1)
+                    )
+                    existing.add(d.name)
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT v.*, 
+               (SELECT COUNT(*) FROM file_index WHERE project=v.project AND volume=v.slug) as chapter_count,
+               (SELECT COALESCE(SUM(word_count),0) FROM file_index WHERE project=v.project AND volume=v.slug) as word_count
+               FROM volumes v WHERE v.project=? ORDER BY v.seq""",
+            (safe_project,)
+        ).fetchall()
+    return JSONResponse({"status": "ok", "volumes": [dict(r) for r in rows]})
 
 @app.get("/api/projects/{project}/timeline")
 def api_get_timeline(request: Request, project: str, lane: str = None) -> Response:
@@ -2132,28 +2332,62 @@ async def api_create_scene(request: Request, project: str) -> Response:
 
 
 @app.post("/api/projects/{project}/bulk-bind-entities")
-def api_bulk_bind(request: Request, project: str) -> Response:
+async def api_bulk_bind_entities(request: Request, project: str) -> Response:
     require_auth(request)
+    safe_project = safe_slug(project, fallback="project")
+    data = await request.json()
+    only_for = data.get("entity_id")
+    
+    chapters_dir = NOVELS_ROOT / safe_project / "chapters"
+    if not chapters_dir.exists():
+        return JSONResponse({"status": "ok", "updated": 0})
+    
     with get_conn() as conn:
-        entities = conn.execute("SELECT id, name FROM entities WHERE project=?", (project,)).fetchall()
-        name_map = {e["name"]: e["id"] for e in entities}
-        
-        chapters = conn.execute("SELECT path FROM file_index WHERE project=?", (project,)).fetchall()
-        updated_count = 0
-        for ch in chapters:
-            path = Path(ch["path"])
-            if not path.exists(): continue
-            fm, body = read_markdown(path)
-            
-            # Regex to find [[name]] but NOT [[id|name]]
-            # Negative lookahead for | or ] (simple version)
-            new_body = re.sub(r"\[\[([^|\]#]+)\]\]", lambda m: f"[[{name_map[m.group(1)]}|{m.group(1)}]]" if m.group(1) in name_map else m.group(0), body)
-            
-            if new_body != body:
-                write_markdown(path, fm, new_body, project=project)
-                updated_count += 1
-                
-        return JSONResponse(content={"status": "ok", "updated_chapters": updated_count})
+        if only_for:
+            ent = conn.execute(
+                "SELECT id, name, aliases FROM entities WHERE id=? AND project=?",
+                (only_for, safe_project)
+            ).fetchone()
+            if not ent: raise HTTPException(404, "entity not found")
+            entities = [ent]
+        else:
+            entities = conn.execute(
+                "SELECT id, name, aliases FROM entities WHERE project=?",
+                (safe_project,)
+            ).fetchall()
+    
+    import json
+    name_map = {}
+    for e in entities:
+        name_map[e["name"]] = e["id"]
+        try:
+            aliases = json.loads(e["aliases"] or "[]")
+            for a in aliases:
+                name_map[a] = e["id"]
+        except Exception:
+            pass
+    
+    updated = 0
+    import re as _re
+    pattern = _re.compile(r"\[\[([^\[\]|#]+?)\]\]")
+    
+    for f in chapters_dir.rglob("*.md"):
+        try:
+            text = f.read_text(encoding="utf-8")
+            new_text = pattern.sub(lambda m: 
+                f"[[{name_map[m.group(1).strip()]}|{m.group(1).strip()}]]" 
+                if m.group(1).strip() in name_map else m.group(0),
+                text
+            )
+            if new_text != text:
+                f.write_text(new_text, encoding="utf-8")
+                fm, body = read_markdown(f)
+                write_markdown(f, fm, body, project=safe_project)
+                updated += 1
+        except Exception as e:
+            print(f"bulk-bind error on {f}: {e}")
+    
+    return JSONResponse({"status": "ok", "updated": updated})
 
 
 @app.get("/projects/{project}/entities", response_class=HTMLResponse)
@@ -2345,7 +2579,7 @@ def update_ai_settings(
     ai_model: str = Form(""),
 ) -> Response:
     require_auth(request)
-    set_setting("ai_api_key", ai_api_key)
+    set_setting_encrypted("ai_api_key", ai_api_key)
     set_setting("ai_base_url", ai_base_url)
     set_setting("ai_model", ai_model)
     log_operation("update_ai_settings")
@@ -2360,3 +2594,48 @@ def update_locale(request: Request, locale: str = Form(...)) -> Response:
     # Redirect back to the referrer or home
     referer = request.headers.get("referer", "/")
     return RedirectResponse(url=referer, status_code=303)
+
+@app.get("/api/snapshots/{snap_id}/diff")
+def api_snapshot_diff(request: Request, snap_id: int) -> Response:
+    require_auth(request)
+    import difflib
+    with get_conn() as conn:
+        snap = conn.execute("SELECT * FROM snapshots WHERE id=?", (snap_id,)).fetchone()
+        if not snap: raise HTTPException(404)
+        old_content = gzip.decompress(snap["content"]).decode("utf-8")
+    path = Path(snap["chapter_path"])
+    if not path.exists(): raise HTTPException(404, "current file gone")
+    new_content = path.read_text(encoding="utf-8")
+    
+    diff = list(difflib.unified_diff(
+        old_content.splitlines(keepends=True),
+        new_content.splitlines(keepends=True),
+        fromfile=f"snapshot {snap['created_at']}",
+        tofile="current",
+        n=3
+    ))
+    return JSONResponse({
+        "status": "ok",
+        "diff": "".join(diff),
+        "old_lines": len(old_content.splitlines()),
+        "new_lines": len(new_content.splitlines()),
+    })
+
+@app.put("/api/snapshots/{snap_id}")
+async def api_update_snapshot(request: Request, snap_id: int) -> Response:
+    """Set label or protected flag on a snapshot."""
+    require_auth(request)
+    data = await request.json()
+    fields = []
+    params = []
+    if "label" in data:
+        fields.append("label=?")
+        params.append(data["label"])
+    if "protected" in data:
+        fields.append("protected=?")
+        params.append(1 if data["protected"] else 0)
+    if not fields: return JSONResponse({"status": "ok"})
+    params.append(snap_id)
+    with get_conn() as conn:
+        conn.execute(f"UPDATE snapshots SET {','.join(fields)} WHERE id=?", params)
+    return JSONResponse({"status": "ok"})

@@ -128,6 +128,106 @@ if (textarea) {
     };
   });
 
+  // --- T2.6: Scene Mode Logic ---
+  const sceneListEl = document.getElementById('scene-editor-list');
+  let sceneViews = [];
+
+  function parseScenes(text) {
+    const lines = text.split('\n');
+    const scenes = [];
+    let current = { title: 'Intro (No Header)', body: [] };
+    
+    lines.forEach(line => {
+        if (line.startsWith('## ')) {
+            if (current.body.length > 0 || current.title !== 'Intro (No Header)') {
+                scenes.push({ ...current, body: current.body.join('\n') });
+            }
+            current = { title: line.replace('## ', '').trim(), body: [] };
+        } else {
+            current.body.push(line);
+        }
+    });
+    scenes.push({ ...current, body: current.body.join('\n') });
+    return scenes;
+  }
+
+  function renderScenes() {
+    const text = view.state.doc.toString();
+    const scenes = parseScenes(text);
+    const container = sceneListEl.querySelector('div');
+    container.innerHTML = '';
+    sceneViews = [];
+
+    scenes.forEach((s, idx) => {
+        const block = document.createElement('div');
+        block.className = "bg-panel border border-border_color rounded-xl shadow-sm overflow-hidden flex flex-col";
+        block.innerHTML = `
+            <div class="px-4 py-2 bg-bg/50 border-b border-border_color flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <span class="text-[10px] font-bold text-muted uppercase tracking-widest">Scene ${idx + 1}</span>
+                    <input type="text" class="scene-title bg-transparent border-0 font-bold text-sm focus:outline-none" value="${s.title}">
+                </div>
+                <div class="flex items-center gap-2">
+                    <button class="text-[10px] text-muted hover:text-accent p-1" data-action="split-here" title="在此处拆分场景">✂️</button>
+                    <button class="text-[10px] text-muted hover:text-danger p-1" data-action="delete-scene">🗑️</button>
+                </div>
+            </div>
+            <div class="scene-cm-container p-4 min-h-[100px]"></div>
+        `;
+        
+        container.appendChild(block);
+        
+        const scView = new EditorView({
+            state: EditorState.create({
+                doc: s.body,
+                extensions: [
+                    basicSetup,
+                    markdown(),
+                    EditorView.lineWrapping,
+                    EditorView.updateListener.of((update) => {
+                        if (update.docChanged) syncScenesToFull();
+                    }),
+                    EditorView.theme({ "&": { fontSize: "16px" } })
+                ]
+            }),
+            parent: block.querySelector('.scene-cm-container')
+        });
+        
+        sceneViews.push({
+            view: scView,
+            titleInput: block.querySelector('.scene-title')
+        });
+
+        block.querySelector('.scene-title').oninput = () => syncScenesToFull();
+    });
+  }
+
+  function syncScenesToFull() {
+    let fullText = "";
+    sceneViews.forEach((sv, i) => {
+        if (i > 0 || sv.titleInput.value !== 'Intro (No Header)') {
+            fullText += `## ${sv.titleInput.value}\n`;
+        }
+        fullText += sv.view.state.doc.toString() + "\n";
+    });
+    
+    // Update main view
+    view.dispatch({
+        changes: {from: 0, to: view.state.doc.length, insert: fullText.trim()}
+    });
+    textarea.value = fullText.trim();
+    setSaveState('未保存');
+    form.dataset.dirty = 'true';
+    scheduleSave();
+    liveWordCount(fullText);
+  }
+
+  window.addEventListener('set-editor-mode', (e) => {
+    if (e.detail === 'scene') {
+        renderScenes();
+    }
+  });
+
   // --- Editor Initialization ---
   const startState = EditorState.create({
     doc: textarea.value,

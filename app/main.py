@@ -1249,6 +1249,116 @@ def search_project(request: Request, project: str, q: str = "") -> Response:
                 
     return templates.TemplateResponse("search.html", {"request": request, "project": safe_project, "q": q, "results": results})
 
+@app.get("/projects/{project}/stats", response_class=HTMLResponse)
+def project_stats(request: Request, project: str) -> Response:
+    require_auth(request)
+    safe_project = safe_slug(project, fallback="project")
+    with get_conn() as conn:
+        # Aggregate words_added from operation_logs
+        # Detail format: "words_added=123"
+        rows = conn.execute(
+            """
+            SELECT date(created_at) as day, sum(CAST(substr(detail, 13) as INTEGER)) as words
+            FROM operation_logs
+            WHERE action='save' AND target LIKE ?
+            GROUP BY day
+            ORDER BY day DESC
+            LIMIT 90
+            """,
+            (f"%{safe_project}%",)
+        ).fetchall()
+    
+    stats = [{"day": r["day"], "words": r["words"]} for r in rows]
+    return templates.TemplateResponse("stats.html", {"request": request, "project": safe_project, "stats": stats})
+
+
+@app.get("/projects/{project}/export/all")
+def export_project_combined(request: Request, project: str):
+    require_auth(request)
+    safe_project = safe_slug(project, fallback="project")
+    chapters = list_chapters(safe_project)
+    
+    combined = [f"# {project}\n\n"]
+    for c in chapters:
+        path = chapter_path(safe_project, c["filename"])
+        if path.exists():
+            fm, body = read_markdown(path)
+            combined.append(f"## {fm.get('title', c['filename'])}\n\n")
+            combined.append(body)
+            combined.append("\n\n---\n\n")
+            
+    content = "".join(combined)
+    return Response(
+        content=content,
+        media_type="text/markdown",
+        headers={"Content-Disposition": f"attachment; filename={safe_project}_combined.md"}
+    )
+
+
+@app.get("/projects/{project}/backups/{filename}")
+def list_backups(request: Request, project: str, filename: str):
+    require_auth(request)
+    safe_project = safe_slug(project, fallback="project")
+    p = chapter_path(safe_project, filename)
+    rel = p.relative_to(VAULT_ROOT)
+    dest_dir = BACKUP_ROOT / rel.parent
+    
+    backups = []
+    if dest_dir.exists():
+        for b in sorted(dest_dir.glob(f"*__{filename}"), key=lambda x: x.name, reverse=True):
+            timestamp = b.name.split("__")[0]
+            backups.append({"name": b.name, "timestamp": timestamp, "size": b.stat().st_size})
+            
+    return JSONResponse(content={"backups": backups})
+
+
+@app.get("/projects/{project}/diff/{backup_name}")
+def view_diff(request: Request, project: str, backup_name: str):
+    require_auth(request)
+    # Extract original filename from backup_name (format: YYYYMMDDTHHMMSSZ__filename.md)
+    if "__" not in backup_name:
+        raise HTTPException(400)
+    
+    filename = backup_name.split("__", 1)[1]
+    safe_project = safe_slug(project, fallback="project")
+    current_p = chapter_path(safe_project, filename)
+    
+    # Locate backup file
+    rel = current_p.relative_to(VAULT_ROOT)
+    backup_p = BACKUP_ROOT / rel.parent / backup_name
+    
+    if not current_p.exists() or not backup_p.exists():
+        raise HTTPException(404)
+        
+    import difflib
+    current_text = current_p.read_text(encoding="utf-8").splitlines()
+    backup_text = backup_p.read_text(encoding="utf-8").splitlines()
+    
+    diff = list(difflib.unified_diff(backup_text, current_text, fromfile="备份", tofile="当前"))
+    return templates.TemplateResponse("_diff.html", {"request": request, "diff": diff})
+
+
+@app.get("/projects/{project}/hooks", response_class=HTMLResponse)
+def hooks_page(request: Request, project: str) -> Response:
+    require_auth(request)
+    safe_project = safe_slug(project, fallback="project")
+    items = list_notes(safe_project, "hooks")
+    return templates.TemplateResponse("hooks.html", {"request": request, "project": safe_project, "items": items})
+
+
+@app.post("/projects/{project}/hooks/new")
+def create_hook(request: Request, project: str, name: str = Form("")) -> Response:
+    require_auth(request)
+    safe_project = safe_slug(project, fallback="project")
+    folder = project_path(safe_project) / "hooks"
+    folder.mkdir(parents=True, exist_ok=True)
+    
+    filename = f"{safe_slug(name, fallback='hook')}.md"
+    path = folder / filename
+    write_markdown(path, {"title": name, "status": "open"}, f"# {name}\n\n在这里记录待填的坑或伏笔...")
+    return RedirectResponse(url=f"/projects/{safe_project}/hooks", status_code=303)
+
+
 @app.get("/export", response_class=HTMLResponse)
 def export_page(request: Request) -> Response:
     if not request.session.get("authed"):

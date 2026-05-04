@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}写作统计 · {{ project }}{% endblock %}
+{% block content %}
+<section class="flex flex-col gap-6 w-full max-w-4xl mx-auto">
+  <div class="bg-panel border border-border_color rounded-xl p-6 shadow-sm flex items-center justify-between">
+    <h2 class="text-2xl font-bold flex items-center gap-3">
+      <svg class="w-6 h-6 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+      {{ project }} · 写作数据统计
+    </h2>
+    <a class="bg-bg border border-border_color hover:border-accent/50 rounded-lg px-4 py-2 text-sm font-medium transition-colors" href="/projects/{{ project }}">返回项目</a>
+  </div>
+
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <div class="bg-panel border border-border_color rounded-xl p-6 shadow-sm">
+      <h3 class="text-sm font-medium text-muted uppercase tracking-wider mb-4">近 90 天更新趋势</h3>
+      <div class="flex flex-col gap-2">
+        {% for s in stats %}
+        <div class="flex items-center gap-4">
+          <span class="text-xs font-mono text-muted w-24">{{ s.day }}</span>
+          <div class="flex-1 h-2 bg-bg rounded-full overflow-hidden">
+            <div class="h-full bg-accent transition-all" style="width: {{ (s.words / 5000 * 100)|round|int if s.words < 5000 else 100 }}%"></div>
+          </div>
+          <span class="text-xs font-medium text-accent w-16 text-right">{{ s.words }} 字</span>
+        </div>
+        {% else %}
+        <div class="text-center text-muted py-12">暂无写作数据</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="bg-panel border border-border_color rounded-xl p-6 shadow-sm flex flex-col items-center justify-center text-center">
+       <div class="text-4xl font-bold text-accent mb-2">{{ stats|sum(attribute='words') }}</div>
+       <div class="text-sm text-muted uppercase tracking-widest">近 90 天总产出</div>
+       <div class="mt-8 p-4 bg-bg border border-dashed border-border_color rounded-lg w-full text-xs text-muted leading-relaxed">
+         统计基于 `operation_logs` 中的手动保存与自动保存记录。字数计算包含中文字符与英文单词。
+       </div>
+    </div>
+  </div>
+</section>
+{% endblock %}

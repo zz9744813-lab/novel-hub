@@ -8,6 +8,21 @@ import { autocompletion } from '@codemirror/autocomplete';
 const textarea = document.getElementById('body');
 const project = document.body.dataset.project || '';
 const filename = document.body.dataset.filename || '';
+  // --- B13: Entity Cache for Decorations ---
+  let entityCache = {};
+  async function refreshEntityCache() {
+    try {
+      const res = await fetch(`/api/entities?project=${project}`);
+      const data = await res.json();
+      if (data.status === 'ok') {
+        data.entities.forEach(e => {
+          entityCache[e.id] = e.name;
+        });
+      }
+    } catch (err) { console.error("Failed to fetch entities:", err); }
+  }
+  refreshEntityCache();
+
 
 if (textarea) {
   const stateEl = document.getElementById('save-state');
@@ -72,8 +87,10 @@ if (textarea) {
                 let from = line.from + match.index;
                 let to = from + match[0].length;
                 let isID = !!match[1];
+                let realName = isID ? entityCache[match[1]] : null;
                 builder.push(Decoration.mark({
-                    class: isID ? "wiki-link-id" : "wiki-link-name"
+                    class: isID ? "wiki-link-id" : "wiki-link-name",
+                    attributes: realName ? {title: `Real Name: ${realName}`} : {}
                 }).range(from, to));
             }
         }
@@ -151,32 +168,45 @@ if (textarea) {
     return scenes;
   }
 
+  
   function renderScenes() {
     const text = view.state.doc.toString();
     const scenes = parseScenes(text);
     const container = sceneListEl.querySelector('div');
+    container.id = 'scene-sortable-list';
     container.innerHTML = '';
     sceneViews = [];
 
     scenes.forEach((s, idx) => {
         const block = document.createElement('div');
-        block.className = "bg-panel border border-border_color rounded-xl shadow-sm overflow-hidden flex flex-col";
+        block.className = "bg-panel border border-border_color rounded-xl shadow-sm overflow-hidden flex flex-col mb-6";
+        block.dataset.idx = idx;
         block.innerHTML = `
             <div class="px-4 py-2 bg-bg/50 border-b border-border_color flex items-center justify-between">
                 <div class="flex items-center gap-3">
+                    <span class="cursor-move text-muted text-xs">::</span>
                     <span class="text-[10px] font-bold text-muted uppercase tracking-widest">Scene ${idx + 1}</span>
-                    <input type="text" class="scene-title bg-transparent border-0 font-bold text-sm focus:outline-none" value="${s.title}">
+                    <input type="text" class="scene-title bg-transparent font-bold text-sm focus:outline-none" value="${s.title}">
                 </div>
-                <div class="flex items-center gap-2">
-                    <button class="text-[10px] text-muted hover:text-accent p-1" data-action="split-here" title="在此处拆分场景">✂️</button>
-                    <button class="text-[10px] text-muted hover:text-danger p-1" data-action="delete-scene">🗑️</button>
+                <div class="flex items-center gap-4">
+                    <div class="flex items-center gap-2 text-[10px] text-muted uppercase tracking-tighter">
+                        POV: <input class="scene-pov bg-panel border-0 rounded px-1 w-16" value="">
+                        Loc: <input class="scene-loc bg-panel border-0 rounded px-1 w-16" value="">
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button class="text-[10px] text-muted hover:text-accent p-1" data-action="split-here" title="Split at cursor">✂️</button>
+                        <button class="text-[10px] text-muted hover:text-danger p-1" data-action="delete-scene" title="Merge up (Delete H2)">🗑️</button>
+                    </div>
                 </div>
             </div>
             <div class="scene-cm-container p-4 min-h-[100px]"></div>
+            <div class="px-4 py-1 bg-bg/30 border-t border-border_color/30 flex justify-between items-center">
+                <span class="text-[10px] text-muted font-mono" data-scene-wordcount>0 words</span>
+            </div>
         `;
-        
+
         container.appendChild(block);
-        
+
         const scView = new EditorView({
             state: EditorState.create({
                 doc: s.body,
@@ -185,21 +215,92 @@ if (textarea) {
                     markdown(),
                     EditorView.lineWrapping,
                     EditorView.updateListener.of((update) => {
-                        if (update.docChanged) syncScenesToFull();
+                        if (update.docChanged) {
+                            const cjk = (update.state.doc.toString().match(/[\u4e00-\u9fff]/g) || []).length;
+                            const latin = (update.state.doc.toString().match(/[A-Za-z0-9]+/g) || []).length;
+                            block.querySelector('[data-scene-wordcount]').textContent = (cjk + latin) + ' words';
+                            syncScenesToFull();
+                        }
                     }),
                     EditorView.theme({ "&": { fontSize: "16px" } })
                 ]
             }),
             parent: block.querySelector('.scene-cm-container')
         });
-        
+
         sceneViews.push({
             view: scView,
             titleInput: block.querySelector('.scene-title')
         });
 
         block.querySelector('.scene-title').oninput = () => syncScenesToFull();
+        
+        block.querySelector('[data-action="split-here"]').onclick = () => {
+            const pos = scView.state.selection.main.head;
+            const body = scView.state.doc.toString();
+            const before = body.slice(0, pos);
+            const after = body.slice(pos);
+            
+            let fullText = "";
+            sceneViews.forEach((sv, i) => {
+                if (i === idx) {
+                    if (i > 0 || sv.titleInput.value !== 'Intro (No Header)') {
+                        fullText += `## ${sv.titleInput.value}\n`;
+                    }
+                    fullText += before + "\n\n## New Scene\n" + after + "\n";
+                } else {
+                    if (i > 0 || sv.titleInput.value !== 'Intro (No Header)') {
+                        fullText += `## ${sv.titleInput.value}\n`;
+                    }
+                    fullText += sv.view.state.doc.toString() + "\n";
+                }
+            });
+            updateMainView(fullText);
+            renderScenes();
+        };
+
+        block.querySelector('[data-action="delete-scene"]').onclick = () => {
+            if (!confirm('Delete this scene header and merge into previous?')) return;
+            let fullText = "";
+            sceneViews.forEach((sv, i) => {
+                if (i !== idx) {
+                    if (i > 0 || sv.titleInput.value !== 'Intro (No Header)') {
+                        fullText += `## ${sv.titleInput.value}\n`;
+                    }
+                    fullText += sv.view.state.doc.toString() + "\n";
+                } else {
+                    fullText += sv.view.state.doc.toString() + "\n";
+                }
+            });
+            updateMainView(fullText);
+            renderScenes();
+        };
     });
+
+    if (window.Sortable) {
+        new Sortable(container, {
+            animation: 150,
+            handle: '.cursor-move',
+            onEnd: () => {
+                const newOrder = [...container.querySelectorAll('[data-idx]')].map(el => parseInt(el.dataset.idx));
+                const newSceneViews = newOrder.map(i => sceneViews[i]);
+                sceneViews = newSceneViews;
+                syncScenesToFull();
+                renderScenes(); 
+            }
+        });
+    }
+  }
+
+  function updateMainView(text) {
+    view.dispatch({
+        changes: {from: 0, to: view.state.doc.length, insert: text.trim()}
+    });
+    textarea.value = text.trim();
+    setSaveState('鏈繚瀛');
+    form.dataset.dirty = 'true';
+    scheduleSave();
+    liveWordCount(text);
   }
 
   function syncScenesToFull() {
@@ -210,17 +311,17 @@ if (textarea) {
         }
         fullText += sv.view.state.doc.toString() + "\n";
     });
-    
-    // Update main view
+
     view.dispatch({
         changes: {from: 0, to: view.state.doc.length, insert: fullText.trim()}
     });
     textarea.value = fullText.trim();
-    setSaveState('未保存');
+    setSaveState('鏈繚瀛');
     form.dataset.dirty = 'true';
     scheduleSave();
     liveWordCount(fullText);
   }
+
 
   window.addEventListener('set-editor-mode', (e) => {
     if (e.detail === 'scene') {
@@ -242,7 +343,68 @@ if (textarea) {
           textarea.value = update.state.doc.toString();
           scheduleSave();
           liveWordCount(textarea.value);
-        }
+        
+  // --- T4.2: AI Drawer Logic ---
+  const aiOutputEl = document.getElementById('ai-output');
+  const aiActionsEl = document.getElementById('ai-actions');
+  const aiApplyBtn = document.getElementById('ai-apply');
+  const aiDiscardBtn = document.getElementById('ai-discard');
+  let currentAiText = "";
+
+  document.querySelectorAll('[data-ai-action]').forEach(btn => {
+    btn.onclick = async () => {
+        const mode = btn.dataset.aiAction;
+        const selectedText = view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to);
+        const contextText = selectedText || view.state.doc.toString().slice(-2000); // Selection or last 2k chars
+        
+        aiOutputEl.textContent = "AI 正在思考中...";
+        aiOutputEl.classList.add('animate-pulse');
+        aiActionsEl.classList.add('hidden');
+        currentAiText = "";
+
+        const url = `/api/projects/${project}/ai/generate?mode=${mode}&chapter=${filename}&text=${encodeURIComponent(contextText)}`;
+        const eventSource = new EventSource(url);
+
+        eventSource.onmessage = (event) => {
+            if (event.data === '[DONE]') {
+                eventSource.close();
+                aiOutputEl.classList.remove('animate-pulse');
+                aiActionsEl.classList.remove('hidden');
+                return;
+            }
+            const data = JSON.parse(event.data);
+            currentAiText += data.content;
+            aiOutputEl.textContent = currentAiText;
+            aiOutputEl.scrollTop = aiOutputEl.scrollHeight;
+        };
+
+        eventSource.onerror = (err) => {
+            console.error("AI stream error:", err);
+            eventSource.close();
+            aiOutputEl.textContent = "发生错误，请检查 AI 设置或网络。";
+            aiOutputEl.classList.remove('animate-pulse');
+        };
+    };
+  });
+
+  aiApplyBtn.onclick = () => {
+    if (!currentAiText) return;
+    const { from, to } = view.state.selection.main;
+    view.dispatch({
+        changes: { from: to, insert: "\n\n" + currentAiText },
+        selection: { anchor: to + currentAiText.length + 2 }
+    });
+    aiOutputEl.textContent = "已采纳。";
+    aiActionsEl.classList.add('hidden');
+    currentAiText = "";
+  };
+
+  aiDiscardBtn.onclick = () => {
+    aiOutputEl.textContent = "已放弃。";
+    aiActionsEl.classList.add('hidden');
+    currentAiText = "";
+  };
+}
       }),
       autocompletion({ override: [wikiLinkAutocomplete] }),
       wikiLinkDecorator,

@@ -1,29 +1,29 @@
 {% extends "base.html" %}
-{% block title %}Dashboard 路 Novel Hub{% endblock %}
+{% block title %}Dashboard · Novel Hub{% endblock %}
 {% block content %}
 <section class="flex flex-col gap-6">
   <div class="bg-panel border border-border_color rounded-xl p-6 shadow-sm relative overflow-hidden">
     <div class="absolute inset-0 opacity-5 pointer-events-none" style="background-image: radial-gradient(var(--accent) 1px, transparent 1px); background-size: 20px 20px;"></div>
     <div class="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
       <div>
-        <h2 class="text-3xl font-bold mb-2">鍐欎綔浠〃鐩</h2>
-        <p class="text-muted">鑱氱劍浠婂ぉ锛岀ǔ瀹氭帹杩涗綘鐨勯暱绡囥€</p>
+        <h2 class="text-3xl font-bold mb-2">写作仪表盘</h2>
+        <p class="text-muted">聚焦今天，稳定推进你的长篇。</p>
       </div>
       <div class="grid grid-cols-2 md:grid-cols-4 gap-4 w-full md:w-auto">
         <div class="bg-bg border border-border_color rounded-lg p-4 min-w-[120px]">
-          <span class="block text-sm text-muted mb-1">浠婃棩鏂板</span>
+          <span class="block text-sm text-muted mb-1">今日新增</span>
           <strong class="text-2xl text-accent">{{ today_words }}</strong>
         </div>
         <div class="bg-bg border border-border_color rounded-lg p-4 min-w-[120px]">
-          <span class="block text-sm text-muted mb-1">鎬诲瓧鏁</span>
+          <span class="block text-sm text-muted mb-1">总字数</span>
           <strong class="text-2xl">{{ total_words }}</strong>
         </div>
         <div class="bg-bg border border-border_color rounded-lg p-4 min-w-[120px]">
-          <span class="block text-sm text-muted mb-1">椤圭洰鏁</span>
+          <span class="block text-sm text-muted mb-1">项目数</span>
           <strong class="text-2xl">{{ projects|length }}</strong>
         </div>
         <div class="bg-bg border border-border_color rounded-lg p-4 min-w-[120px]">
-          <span class="block text-sm text-muted mb-1">鏃ョ洰鏍</span>
+          <span class="block text-sm text-muted mb-1">日目标</span>
           <strong class="text-2xl">{{ daily_goal }}</strong>
         </div>
       </div>

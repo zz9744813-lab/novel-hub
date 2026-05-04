@@ -902,7 +902,7 @@ def delete_project(request: Request, project: str) -> Response:
         shutil.rmtree(p)
         with get_conn() as conn:
             conn.execute("DELETE FROM file_index WHERE project=?", (safe_project,))
-            conn.execute("DELETE FROM ai_pipelines WHERE project=?", (safe_project,))
+            conn.execute("DELETE FROM ai_pipelines_archived WHERE project=?", (safe_project,))
             conn.execute("DELETE FROM chapter_fts WHERE project=?", (safe_project,))
             conn.execute("DELETE FROM project_meta WHERE project=?", (safe_project,))
         log_operation("delete_project", safe_project, project=safe_project)
@@ -933,7 +933,7 @@ async def rename_project(request: Request, project: str) -> Response:
                 conn.execute("UPDATE file_index SET path=?, project=? WHERE path=?", (new_path_str, new_name, old_path))
                 conn.execute("UPDATE chapter_fts SET path=?, project=? WHERE path=?", (new_path_str, new_name, old_path))
                 
-            conn.execute("UPDATE ai_pipelines SET project=? WHERE project=?", (new_name, safe_project))
+            conn.execute("UPDATE ai_pipelines_archived SET project=? WHERE project=?", (new_name, safe_project))
             conn.execute("UPDATE project_meta SET project=? WHERE project=?", (new_name, safe_project))
         log_operation("rename_project", f"{project} -> {new_name}", project=new_name)
         
@@ -1677,7 +1677,7 @@ async def run_consistency_check(project: str, chapter_path: str):
 
         # Get context
         from app.services.ai_context import build_context
-        context = build_context(str(DB_PATH), project, chapter_path, "check")
+        context = build_context(project, chapter_path, "check")
 
         prompt = f"""Context:
 {context}
@@ -1722,7 +1722,7 @@ async def ai_outline_volume(request: Request, project: str) -> Response:
     
     from app.services.ai_context import build_context
     from app.services.ai_client import generate_ai_content
-    context = build_context(str(DB_PATH), project, None, "outline")
+    context = build_context(project, None, "outline")
     prompt = f"Based on the project context:\n{context}\nPlease generate a 3-5 paragraph synopsis for a new volume named '{data.get('slug')}'. Just return the synopsis text."
     
     resp = await generate_ai_content(api_key, get_setting("ai_base_url"), get_setting("ai_model"), "You are an outline planner.", prompt)
@@ -1799,7 +1799,7 @@ async def api_ai_generate(
     if chapter:
         ch_path = str(chapter_path(safe_project, chapter))
     
-    full_context = build_context(str(DB_PATH), safe_project, ch_path, mode)
+    full_context = build_context(safe_project, ch_path, mode)
     
     system_prompt = f"""You are a professional creative writing assistant.
 Context of the novel:
@@ -2004,7 +2004,7 @@ def api_threads_board(request: Request, project: str) -> Response:
         # Get all entities of kind 'thread'
         threads = conn.execute("SELECT * FROM entities WHERE project = ? AND kind = 'thread'", (project,)).fetchall()
         # Parse properties to group by status
-        board = {"open": [], "closed": [], "pending": []}
+        board = {"open": [], "resolving": [], "closed": []}
         for t in threads:
             props = json.loads(t["properties"] or "{}")
             status = props.get("status", "open")
@@ -2125,22 +2125,7 @@ def api_list_relations(request: Request, project: str) -> Response:
 def timeline_page(request: Request, project: str) -> Response:
     require_auth(request)
     safe_project = safe_slug(project, fallback="project")
-    chapters = list_chapters(safe_project)
-    
-    with get_conn() as conn:
-        all_scenes = conn.execute("SELECT * FROM scenes WHERE project = ? ORDER BY chapter_path, seq", (safe_project,)).fetchall()
-        
-    # Group scenes by chapter_path
-    scene_map = {}
-    for s in all_scenes:
-        path = s["chapter_path"]
-        if path not in scene_map: scene_map[path] = []
-        scene_map[path].append(dict(s))
-        
-    for ch in chapters:
-        ch["scenes"] = scene_map.get(ch["path"], [])
-        
-    return templates.TemplateResponse("timeline.html", {"request": request, "project": safe_project, "chapters": chapters})
+    return templates.TemplateResponse("timeline.html", {"request": request, "project": safe_project})
 
 
 @app.get("/projects/{project}/entities/{ent_id}", response_class=HTMLResponse)

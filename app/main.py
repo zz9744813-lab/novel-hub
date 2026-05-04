@@ -698,6 +698,47 @@ def create_project(request: Request, name: str = Form(...)) -> Response:
     log_operation("create_project", project)
     return RedirectResponse(url=f"/projects/{project}", status_code=303)
 
+@app.delete("/projects/{project}")
+def delete_project(request: Request, project: str) -> Response:
+    require_auth(request)
+    safe_project = safe_slug(project, fallback="project")
+    p = project_path(safe_project)
+    if p.exists():
+        shutil.rmtree(p)
+        with get_conn() as conn:
+            conn.execute("DELETE FROM file_index WHERE project=?", (safe_project,))
+            conn.execute("DELETE FROM ai_pipelines WHERE project=?", (safe_project,))
+        log_operation("delete_project", safe_project)
+    return JSONResponse(content={"status": "ok"})
+
+@app.put("/projects/{project}/rename")
+async def rename_project(request: Request, project: str) -> Response:
+    require_auth(request)
+    data = await request.json()
+    new_name = safe_slug(data.get("name", ""), fallback="project")
+    if not new_name:
+        raise HTTPException(status_code=400)
+    
+    safe_project = safe_slug(project, fallback="project")
+    old_p = project_path(safe_project)
+    new_p = NOVELS_ROOT / new_name
+    
+    if new_p.exists():
+        raise HTTPException(status_code=400, detail="Project already exists")
+        
+    if old_p.exists():
+        old_p.rename(new_p)
+        with get_conn() as conn:
+            rows = conn.execute("SELECT path FROM file_index WHERE project=?", (safe_project,)).fetchall()
+            for r in rows:
+                old_path = r["path"]
+                new_path = old_path.replace(str(old_p), str(new_p), 1)
+                conn.execute("UPDATE file_index SET path=?, project=? WHERE path=?", (new_path, new_name, old_path))
+            conn.execute("UPDATE ai_pipelines SET project=? WHERE project=?", (new_name, safe_project))
+        log_operation("rename_project", f"{safe_project} -> {new_name}")
+        
+    return JSONResponse(content={"status": "ok", "new_url": f"/projects/{new_name}"})
+
 
 @app.get("/projects/{project}", response_class=HTMLResponse)
 def project_detail(request: Request, project: str, status: str | None = None) -> Response:
@@ -737,7 +778,7 @@ def create_chapter(
     safe_project = safe_slug(project, fallback="project")
     existing = list_chapters(safe_project)
     idx = len(existing) + 1
-    filename = f"{idx:05d}-{safe_slug(title, fallback='chapter')}"
+    filename = f"{idx:05d}-{safe_slug(title, fallback='chapter')}.md"
     path = chapter_path(safe_project, filename)
     frontmatter = {
         "title": title,
@@ -756,6 +797,41 @@ def create_chapter(
     write_markdown(path, frontmatter, "")
     log_operation("create_chapter", str(path))
     return RedirectResponse(url=f"/projects/{safe_project}/editor/{path.name}", status_code=303)
+
+@app.delete("/projects/{project}/chapters/{filename}")
+def delete_chapter(request: Request, project: str, filename: str) -> Response:
+    require_auth(request)
+    safe_project = safe_slug(project, fallback="project")
+    path = chapter_path(safe_project, filename)
+    if path.exists():
+        path.unlink()
+        with get_conn() as conn:
+            conn.execute("DELETE FROM file_index WHERE path=?", (str(path),))
+        log_operation("delete_chapter", str(path))
+    return JSONResponse(content={"status": "ok", "new_url": f"/projects/{safe_project}"})
+
+@app.put("/projects/{project}/chapters/{filename}/rename")
+async def rename_chapter(request: Request, project: str, filename: str) -> Response:
+    require_auth(request)
+    data = await request.json()
+    new_filename = data.get("name", "")
+    if not new_filename.endswith(".md"):
+        new_filename += ".md"
+        
+    safe_project = safe_slug(project, fallback="project")
+    old_p = chapter_path(safe_project, filename)
+    new_p = chapter_path(safe_project, new_filename)
+    
+    if new_p.exists() and new_p != old_p:
+        raise HTTPException(status_code=400, detail="File already exists")
+        
+    if old_p.exists():
+        old_p.rename(new_p)
+        with get_conn() as conn:
+            conn.execute("UPDATE file_index SET path=? WHERE path=?", (str(new_p), str(old_p)))
+        log_operation("rename_chapter", f"{old_p.name} -> {new_p.name}")
+        
+    return JSONResponse(content={"status": "ok", "new_url": f"/projects/{safe_project}/editor/{new_p.name}"})
 
 
 @app.get("/projects/{project}/chapters", response_class=HTMLResponse)
@@ -777,6 +853,12 @@ def editor_page(request: Request, project: str, filename: str) -> Response:
     meta = normalize_meta(fm, path.stem)
     chapters = list_chapters(safe_project)
     active = next((c for c in chapters if c["filename"] == path.name), None)
+    
+    active_idx = next((i for i, c in enumerate(chapters) if c["filename"] == path.name), 0)
+    start_idx = max(0, active_idx - 20)
+    end_idx = min(len(chapters), active_idx + 21)
+    visible_chapters = chapters[start_idx:end_idx]
+
     return templates.TemplateResponse(
         "editor.html",
         {
@@ -785,12 +867,31 @@ def editor_page(request: Request, project: str, filename: str) -> Response:
             "filename": path.name,
             "frontmatter": meta,
             "body": body,
-            "chapters": chapters,
+            "chapters": visible_chapters,
             "active": active,
             "project_words": sum(c["word_count"] for c in chapters),
             "goal": PROJECT_GOAL_WORDS,
         },
     )
+
+@app.get("/projects/{project}/sidebar_chapters")
+def sidebar_chapters(request: Request, project: str, q: str = "", active: str = "") -> Response:
+    require_auth(request)
+    safe_project = safe_slug(project, fallback="project")
+    chapters = list_chapters(safe_project)
+    
+    if q:
+        q = q.lower()
+        chapters = [c for c in chapters if q in c["title"].lower() or q in c.get("chapter", "").lower() or q in c.get("volume", "").lower()]
+        visible = chapters[:50]
+    else:
+        active_idx = next((i for i, c in enumerate(chapters) if c["filename"] == active), 0)
+        start_idx = max(0, active_idx - 20)
+        end_idx = min(len(chapters), active_idx + 21)
+        visible = chapters[start_idx:end_idx]
+        
+    return templates.TemplateResponse("_sidebar_chapters.html", {"request": request, "project": safe_project, "chapters": visible, "filename": active})
+
 
 
 @app.post("/projects/{project}/editor/{filename}", response_class=HTMLResponse)
@@ -946,6 +1047,46 @@ def note_preview(request: Request, project: str, folder: str, filename: str) -> 
     _, body = read_markdown(p)
     html = markdown.markdown(body, extensions=["fenced_code", "tables"])
     return templates.TemplateResponse("_note_preview.html", {"request": request, "title": p.stem, "html": html})
+
+@app.delete("/projects/{project}/notes/{folder}/{filename}")
+def delete_note(request: Request, project: str, folder: str, filename: str) -> Response:
+    require_auth(request)
+    if folder not in {"characters", "world"}:
+        raise HTTPException(status_code=400, detail="invalid folder")
+    safe_project = safe_slug(project, fallback="project")
+    p = project_path(safe_project) / folder / filename
+    p = _ensure_under_root(p, VAULT_ROOT)
+    if p.exists():
+        p.unlink()
+        with get_conn() as conn:
+            conn.execute("DELETE FROM file_index WHERE path=?", (str(p),))
+        log_operation("delete_note", str(p))
+    return JSONResponse(content={"status": "ok", "new_url": f"/projects/{safe_project}/{folder}"})
+
+@app.put("/projects/{project}/notes/{folder}/{filename}/rename")
+async def rename_note(request: Request, project: str, folder: str, filename: str) -> Response:
+    require_auth(request)
+    if folder not in {"characters", "world"}:
+        raise HTTPException(status_code=400)
+    data = await request.json()
+    new_filename = safe_slug(data.get("name", "").replace(".md", "")) + ".md"
+    
+    safe_project = safe_slug(project, fallback="project")
+    old_p = project_path(safe_project) / folder / filename
+    old_p = _ensure_under_root(old_p, VAULT_ROOT)
+    new_p = project_path(safe_project) / folder / new_filename
+    new_p = _ensure_under_root(new_p, VAULT_ROOT)
+    
+    if new_p.exists() and new_p != old_p:
+        raise HTTPException(status_code=400, detail="File already exists")
+        
+    if old_p.exists():
+        old_p.rename(new_p)
+        with get_conn() as conn:
+            conn.execute("UPDATE file_index SET path=? WHERE path=?", (str(new_p), str(old_p)))
+        log_operation("rename_note", f"{old_p.name} -> {new_p.name}")
+        
+    return JSONResponse(content={"status": "ok", "new_url": f"/projects/{safe_project}/{folder}"})
 
 
 @app.get("/export", response_class=HTMLResponse)

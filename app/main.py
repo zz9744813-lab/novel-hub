@@ -121,7 +121,8 @@ def init_db() -> None:
                 chapter_int INTEGER,
                 status TEXT,
                 volume TEXT,
-                mtime REAL
+                mtime REAL,
+                synopsis TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_fi_project ON file_index(project, chapter_int);
@@ -250,6 +251,7 @@ def init_db() -> None:
             conn.execute("ALTER TABLE file_index ADD COLUMN status TEXT")
             conn.execute("ALTER TABLE file_index ADD COLUMN volume TEXT")
             conn.execute("ALTER TABLE file_index ADD COLUMN mtime REAL")
+            conn.execute("ALTER TABLE file_index ADD COLUMN synopsis TEXT")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_fi_project ON file_index(project, chapter_int)")
         except sqlite3.OperationalError:
             pass
@@ -368,13 +370,24 @@ def backup_file(path: Path, label: str = "auto") -> None:
             "INSERT INTO snapshots(chapter_path, created_at, label, content_hash, content) VALUES (?, ?, ?, ?, ?)",
             (str(p), utc_now().isoformat(), label, content_hash, compressed)
         )
-        # Cleanup policy: Keep last 50
+        # Cleanup policy: Keep (Recent 50) UNION (First of each day) UNION (First of each month)
         conn.execute(
-            """DELETE FROM snapshots WHERE id IN (
-                SELECT id FROM snapshots WHERE chapter_path = ? 
-                ORDER BY created_at DESC LIMIT -1 OFFSET 50
-            )""",
-            (str(p),)
+            """DELETE FROM snapshots 
+               WHERE chapter_path = ? 
+               AND id NOT IN (
+                   SELECT id FROM (
+                       SELECT id FROM snapshots WHERE chapter_path = ? ORDER BY created_at DESC LIMIT 50
+                   )
+                   UNION
+                   SELECT id FROM (
+                       SELECT id FROM snapshots WHERE chapter_path = ? GROUP BY strftime('%Y-%m-%d', created_at)
+                   )
+                   UNION
+                   SELECT id FROM (
+                       SELECT id FROM snapshots WHERE chapter_path = ? GROUP BY strftime('%Y-%m', created_at)
+                   )
+               )""",
+            (str(p), str(p), str(p), str(p))
         )
 
 
@@ -470,13 +483,13 @@ def list_chapters(project: str, sync: bool = False) -> list[dict[str, Any]]:
                     words = count_words(body)
                     try:
                         chapter_int = int(meta["chapter"])
-                    except ValueError:
+                    except (ValueError, TypeError):
                         chapter_int = 0
                         
                     conn.execute(
                         """
-                        INSERT INTO file_index(path, project, word_count, updated_at, title, chapter, chapter_int, status, volume, mtime)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO file_index(path, project, word_count, updated_at, title, chapter, chapter_int, status, volume, mtime, synopsis)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(path) DO UPDATE SET
                             project=excluded.project,
                             word_count=excluded.word_count,
@@ -486,9 +499,10 @@ def list_chapters(project: str, sync: bool = False) -> list[dict[str, Any]]:
                             chapter_int=excluded.chapter_int,
                             status=excluded.status,
                             volume=excluded.volume,
-                            mtime=excluded.mtime
+                            mtime=excluded.mtime,
+                            synopsis=excluded.synopsis
                         """,
-                        (f_str, project, words, utc_now().isoformat(), meta["title"], meta["chapter"], chapter_int, meta["status"], meta["volume"], mtime)
+                        (f_str, project, words, utc_now().isoformat(), meta["title"], meta["chapter"], chapter_int, meta["status"], meta["volume"], mtime, meta.get("synopsis", ""))
                     )
                     
                     conn.execute("DELETE FROM chapter_fts WHERE path=?", (f_str,))
@@ -496,18 +510,15 @@ def list_chapters(project: str, sync: bool = False) -> list[dict[str, Any]]:
                                  (f_str, project, _infer_kind(f), meta["title"], body))
 
         db_rows = conn.execute(
-            "SELECT path, word_count, updated_at, title, chapter, chapter_int, status, volume, mtime "
-            "FROM file_index WHERE project=? ORDER BY chapter_int, path",
+            "SELECT * FROM file_index WHERE project=? ORDER BY chapter_int, path",
             (project,)
         ).fetchall()
         
         for r in db_rows:
             f = Path(r["path"])
-            rows.append({
-                "filename": f.name,
-                "title": r["title"],
-                "chapter": r["chapter"],
-                "status": r["status"],
+            item = dict(r)
+            item["filename"] = f.name
+            rows.append(item)
                 "volume": r["volume"],
                 "word_count": r["word_count"],
                 "modified": datetime.fromtimestamp(r["mtime"], tz=timezone.utc),
@@ -574,13 +585,24 @@ def scan_projects() -> list[dict[str, Any]]:
         target = meta.get("target_words", PROJECT_GOAL_WORDS) or PROJECT_GOAL_WORDS
         total_words = sum(c["word_count"] for c in chapters)
         latest = max((c["modified"] for c in chapters), default=None)
+        with get_conn() as conn:
+            counts = conn.execute(
+                """SELECT 
+                   COUNT(CASE WHEN kind='character' THEN 1 END) as character_count,
+                   COUNT(CASE WHEN kind='location' THEN 1 END) as location_count,
+                   COUNT(CASE WHEN kind='thread' THEN 1 END) as thread_count
+                   FROM entities WHERE project=?""", (project,)).fetchone()
+            world_count = conn.execute("SELECT COUNT(*) FROM entities WHERE project=? AND kind NOT IN ('character', 'thread')", (project,)).fetchone()[0]
+
         results.append(
             {
                 "name": project,
                 "status": "active" if chapters else "planning",
                 "chapter_count": len(chapters),
-                "character_count": len(chars),
-                "world_count": len(world),
+                "character_count": counts["character_count"],
+                "location_count": counts["location_count"],
+                "thread_count": counts["thread_count"],
+                "world_count": world_count,
                 "total_words": total_words,
                 "target_words": target,
                 "progress": min(100, int(total_words / target * 100)) if target else 0,
@@ -1640,6 +1662,29 @@ def create_hook(request: Request, project: str, name: str = Form("")) -> Respons
     return RedirectResponse(url=f"/projects/{safe_project}/hooks", status_code=303)
 
 
+@app.post("/api/snapshots/{snap_id}/restore")
+def restore_snapshot(request: Request, snap_id: int) -> Response:
+    require_auth(request)
+    with get_conn() as conn:
+        snap = conn.execute("SELECT * FROM snapshots WHERE id = ?", (snap_id,)).fetchone()
+        if not snap: raise HTTPException(404, "Snapshot not found")
+        
+        content = gzip.decompress(snap["content"]).decode("utf-8")
+        path = Path(snap["chapter_path"])
+        
+        # Backup current state as snapshot before overwriting
+        backup_file(path, label="pre-restore")
+        
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+            
+        # Re-index
+        fm, body = read_markdown(path)
+        write_markdown(path, fm, body)
+        
+        return JSONResponse(content={"status": "ok"})
+
+
 @app.post("/projects/{project}/backups/{backup_name}/restore")
 def restore_backup(request: Request, project: str, backup_name: str):
     require_auth(request)
@@ -1777,6 +1822,75 @@ async def api_create_relation(request: Request) -> Response:
             (data["project"], data["source_id"], data["target_id"], data["relation_type"], data.get("notes", ""), utc_now().isoformat())
         )
     return JSONResponse(content={"status": "ok"})
+
+
+@app.delete("/api/entity-relations/{rel_id}")
+def api_delete_relation(request: Request, rel_id: int) -> Response:
+    require_auth(request)
+    with get_conn() as conn:
+        conn.execute("DELETE FROM entity_relations WHERE id = ?", (rel_id,))
+    return JSONResponse(content={"status": "ok"})
+
+
+@app.get("/api/projects/{project}/threads-board")
+def api_threads_board(request: Request, project: str) -> Response:
+    require_auth(request)
+    with get_conn() as conn:
+        # Get all entities of kind 'thread'
+        threads = conn.execute("SELECT * FROM entities WHERE project = ? AND kind = 'thread'", (project,)).fetchall()
+        # Parse properties to group by status
+        board = {"open": [], "closed": [], "pending": []}
+        for t in threads:
+            props = json.loads(t["properties"] or "{}")
+            status = props.get("status", "open")
+            if status not in board: board[status] = []
+            board[status].append(dict(t))
+        return JSONResponse(content={"status": "ok", "board": board})
+
+
+@app.post("/api/projects/{project}/snapshots")
+async def api_create_snapshot(request: Request, project: str) -> Response:
+    require_auth(request)
+    data = await request.json()
+    path_str = data.get("path")
+    label = data.get("label", "manual")
+    if not path_str: raise HTTPException(400, "path required")
+    
+    path = Path(path_str)
+    if not path.exists(): raise HTTPException(404, "file not found")
+    
+    backup_file(path, label=label)
+    return JSONResponse(content={"status": "ok"})
+
+
+@app.get("/api/projects/{project}/scenes")
+def api_list_scenes(request: Request, project: str, chapter: str = None) -> Response:
+    require_auth(request)
+    with get_conn() as conn:
+        query = "SELECT * FROM scenes WHERE project = ?"
+        params = [project]
+        if chapter:
+            query += " AND chapter_path LIKE ?"
+            params.append(f"%{chapter}")
+        query += " ORDER BY chapter_path, seq"
+        rows = conn.execute(query, params).fetchall()
+        return JSONResponse(content={"status": "ok", "scenes": [dict(r) for r in rows]})
+
+
+@app.post("/api/projects/{project}/scenes")
+async def api_create_scene(request: Request, project: str) -> Response:
+    require_auth(request)
+    data = await request.json()
+    # Logic to insert H2 into file or just record in DB? 
+    # Usually we want it in DB for the outline
+    sc_id = f"sc_{hashlib.sha1((project + data['chapter_path'] + str(utc_now())).encode()).hexdigest()[:8]}"
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO scenes (id, chapter_path, project, seq, title, status)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (sc_id, data["chapter_path"], project, data.get("seq", 0), data.get("title", "New Scene"), "draft")
+        )
+    return JSONResponse(content={"status": "ok", "id": sc_id})
 
 
 @app.post("/api/projects/{project}/bulk-bind-entities")

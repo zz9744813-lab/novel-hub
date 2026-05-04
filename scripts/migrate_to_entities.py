@@ -3,19 +3,15 @@ import sqlite3
 import hashlib
 import shutil
 import argparse
+import re
+import yaml
 from pathlib import Path
 from datetime import datetime
 
-# Configuration
-VAULT_ROOT = Path("/root/ObsidianVault") # Should be replaced by actual path if needed
-if not VAULT_ROOT.exists():
-    # Attempt to find it relative to script or use env
-    VAULT_ROOT = Path("f:/hajimi/ObsidianVault") # Default for this workspace if applicable
-
-# In this specific environment, I'll use the path from the user's workspace
-WORKSPACE_ROOT = Path("f:/hajimi/novel-hub")
-DB_PATH = WORKSPACE_ROOT / "novelhub.db"
-NOVELS_ROOT = Path("f:/hajimi/ObsidianVault/Novels") # Adjusting to user's likely path
+# Configuration via Environment Variables
+VAULT_ROOT = Path(os.getenv("NOVELHUB_VAULT_ROOT", "f:/hajimi/ObsidianVault")).expanduser()
+NOVELS_ROOT = VAULT_ROOT / "Novels"
+DB_PATH = Path(os.getenv("NOVELHUB_DB_PATH", str(Path(__file__).resolve().parent.parent / "novelhub.db"))).expanduser()
 
 def get_conn():
     conn = sqlite3.connect(DB_PATH)
@@ -25,18 +21,20 @@ def get_conn():
 def get_sha1_prefix(text: str, length=8) -> str:
     return hashlib.sha1(text.encode("utf-8")).hexdigest()[:length]
 
+def parse_frontmatter(content: str):
+    match = re.match(r"^---\s*\n(.*?)\n---\s*\n", content, re.DOTALL)
+    if not match:
+        return {}, content
+    try:
+        data = yaml.safe_load(match.group(1)) or {}
+        return data, content[match.end():]
+    except:
+        return {}, content
+
 def migrate(dry_run=True):
     if not NOVELS_ROOT.exists():
         print(f"Error: Novels root {NOVELS_ROOT} not found.")
         return
-
-    # Backup
-    if not dry_run:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_dir = WORKSPACE_ROOT / ".pre-c-migration" / timestamp
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        print(f"Backing up vault to {backup_dir}...")
-        shutil.copytree(NOVELS_ROOT.parent, backup_dir / "vault", dirs_exist_ok=True)
 
     conn = get_conn()
     cursor = conn.cursor()
@@ -53,27 +51,56 @@ def migrate(dry_run=True):
             if not kind_path.exists():
                 continue
                 
-            kind = "character" if kind_dir_name == "characters" else ("hook" if kind_dir_name == "hooks" else "world")
-            
             for md_file in kind_path.glob("*.md"):
                 rel_path = md_file.relative_to(NOVELS_ROOT.parent)
                 ent_id = f"ent_{get_sha1_prefix(str(rel_path))}"
                 name = md_file.stem
+                
+                content = md_file.read_text(encoding="utf-8")
+                fm, _ = parse_frontmatter(content)
+                
+                # B8/B9: Map kind and properties
+                if kind_dir_name == "characters":
+                    kind = "character"
+                elif kind_dir_name == "hooks":
+                    kind = "thread"
+                else:
+                    # World category mapping
+                    kind = fm.get("category", "location").lower()
+                    if kind not in ["location", "item", "organization", "concept", "event"]:
+                        kind = "location" # Default fallback
+                
+                # properties is everything except name and category
+                props = {k: v for k, v in fm.items() if k not in ["name", "category", "title"]}
+                aliases = fm.get("aliases", [])
+                if isinstance(aliases, str):
+                    aliases = [a.strip() for a in aliases.split(",") if a.strip()]
+                
                 now = datetime.now().isoformat()
+                import json
                 
                 print(f"  [{kind}] {name} -> {ent_id}")
                 
                 if not dry_run:
                     cursor.execute(
                         """
-                        INSERT INTO entities (id, project, kind, name, md_path, created_at, updated_at, properties)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO entities (id, project, kind, name, aliases, md_path, created_at, updated_at, properties)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(id) DO UPDATE SET
                             name=excluded.name,
+                            kind=excluded.kind,
+                            aliases=excluded.aliases,
                             md_path=excluded.md_path,
-                            updated_at=excluded.updated_at
+                            updated_at=excluded.updated_at,
+                            properties=excluded.properties
                         """,
-                        (ent_id, project, kind, name, str(md_file), now, now, "{}")
+                        (ent_id, project, kind, name, json.dumps(aliases), str(md_file), now, now, json.dumps(props))
+                    )
+                    # Sync to FTS
+                    cursor.execute("DELETE FROM entity_fts WHERE id=?", (ent_id,))
+                    cursor.execute(
+                        "INSERT INTO entity_fts (id, project, name, aliases, properties) VALUES (?, ?, ?, ?, ?)",
+                        (ent_id, project, name, json.dumps(aliases), json.dumps(props))
                     )
                 count += 1
 
@@ -89,7 +116,4 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Migrate legacy notes to C-Route entities.")
     parser.add_argument("--run", action="store_true", help="Actually perform the migration (default is dry-run)")
     args = parser.parse_args()
-    
-    # Auto-detect vault path from env or current state
-    # In this workspace, VAULT_ROOT is typically f:/hajimi/ObsidianVault
     migrate(dry_run=not args.run)

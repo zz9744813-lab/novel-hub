@@ -33,10 +33,10 @@
     <div class="flex bg-panel rounded-md p-0.5 border border-border_color scale-90" x-data="{ mode: 'full' }" @editor-mode-change.window="mode = $event.detail">
         <button class="px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider transition-all" 
                 :class="mode === 'full' ? 'bg-bg text-accent shadow-sm' : 'text-muted hover:text-text_color'"
-                @click="$dispatch('set-editor-mode', 'full')">Full</button>
+                @click="window.dispatchEvent(new CustomEvent('set-editor-mode', {detail: 'full'}))">Full</button>
         <button class="px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider transition-all" 
                 :class="mode === 'scene' ? 'bg-bg text-accent shadow-sm' : 'text-muted hover:text-text_color'"
-                @click="$dispatch('set-editor-mode', 'scene')">Scene</button>
+                @click="window.dispatchEvent(new CustomEvent('set-editor-mode', {detail: 'scene'}))">Scene</button>
     </div>
     <div class="w-px h-4 bg-border_color mx-1"></div>
     <button class="p-1.5 rounded-md text-muted hover:text-text_color hover:bg-panel border border-transparent transition-all" data-action="toggle-right" title="切换右栏">
@@ -322,6 +322,26 @@
   .cm-editor { background: transparent !important; }
   .cm-scroller { font-family: inherit; }
 </style>
+<script>
+window.restoreSnapshot = async (id) => {
+    if (!confirm('确定要还原到此快照吗？当前未保存的修改将会丢失。')) return;
+    try {
+        const res = await fetch(`/api/snapshots/${id}/restore`, { method: 'POST' });
+        if (res.ok) window.location.reload();
+        else alert('还原失败');
+    } catch (err) { console.error(err); }
+};
+
+window.deleteChapter = async () => {
+    if (!confirm('确定要永久删除本章节吗？')) return;
+    try {
+        const res = await fetch(`/projects/{{ project }}/chapters/{{ filename }}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (data.status === 'ok') window.location.href = data.new_url;
+        else alert('删除失败');
+    } catch (err) { console.error(err); }
+};
+</script>
 {% endblock %}
 {% block scripts %}
 <script type="module" src="/static/js/editor.js"></script>

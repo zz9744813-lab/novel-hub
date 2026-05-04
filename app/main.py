@@ -135,6 +135,14 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS project_meta (
+                project TEXT PRIMARY KEY,
+                target_words INTEGER DEFAULT 100000,
+                author TEXT DEFAULT '',
+                synopsis TEXT DEFAULT '',
+                daily_goal INTEGER DEFAULT 2000
+            );
+
             CREATE VIRTUAL TABLE IF NOT EXISTS chapter_fts USING fts5(
                 path UNINDEXED,
                 project UNINDEXED,
@@ -364,6 +372,28 @@ def list_notes(project: str, folder_name: str) -> list[dict[str, Any]]:
     return rows
 
 
+def get_project_meta(project: str) -> dict[str, Any]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM project_meta WHERE project=?", (project,)).fetchone()
+        if row:
+            return dict(row)
+        return {"project": project, "target_words": PROJECT_GOAL_WORDS, "author": "", "synopsis": "", "daily_goal": DAILY_GOAL_WORDS}
+
+
+def set_project_meta(project: str, target_words: int = 100000, author: str = "", synopsis: str = "", daily_goal: int = 2000) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO project_meta(project, target_words, author, synopsis, daily_goal)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(project) DO UPDATE SET
+                   target_words=excluded.target_words,
+                   author=excluded.author,
+                   synopsis=excluded.synopsis,
+                   daily_goal=excluded.daily_goal""",
+            (project, target_words, author, synopsis, daily_goal)
+        )
+
+
 def scan_projects() -> list[dict[str, Any]]:
     if not NOVELS_ROOT.exists():
         return []
@@ -373,6 +403,8 @@ def scan_projects() -> list[dict[str, Any]]:
         chapters = list_chapters(project)
         chars = list_notes(project, "characters")
         world = list_notes(project, "world")
+        meta = get_project_meta(project)
+        target = meta.get("target_words", PROJECT_GOAL_WORDS) or PROJECT_GOAL_WORDS
         total_words = sum(c["word_count"] for c in chapters)
         latest = max((c["modified"] for c in chapters), default=None)
         results.append(
@@ -383,9 +415,11 @@ def scan_projects() -> list[dict[str, Any]]:
                 "character_count": len(chars),
                 "world_count": len(world),
                 "total_words": total_words,
-                "target_words": PROJECT_GOAL_WORDS,
-                "progress": min(100, int(total_words / PROJECT_GOAL_WORDS * 100)) if PROJECT_GOAL_WORDS else 0,
+                "target_words": target,
+                "progress": min(100, int(total_words / target * 100)) if target else 0,
                 "latest": latest,
+                "author": meta.get("author", ""),
+                "synopsis": meta.get("synopsis", ""),
             }
         )
     return results
@@ -893,6 +927,7 @@ def editor_page(request: Request, project: str, filename: str) -> Response:
     end_idx = min(len(chapters), active_idx + 21)
     visible_chapters = chapters[start_idx:end_idx]
 
+    proj_meta = get_project_meta(safe_project)
     return templates.TemplateResponse(
         "editor.html",
         {
@@ -904,7 +939,8 @@ def editor_page(request: Request, project: str, filename: str) -> Response:
             "chapters": visible_chapters,
             "active": active,
             "project_words": sum(c["word_count"] for c in chapters),
-            "goal": PROJECT_GOAL_WORDS,
+            "goal": proj_meta.get("target_words", PROJECT_GOAL_WORDS),
+            "mtime": path.stat().st_mtime,
         },
     )
 
@@ -946,12 +982,26 @@ def save_chapter(
     warnings: str = Form(""),
     draft_version: str = Form(""),
     body: str = Form(""),
+    _loaded_mtime: str = Form(""),
 ) -> Response:
     require_auth(request)
     safe_project = safe_slug(project, fallback="project")
     path = chapter_path(safe_project, filename)
     if not path.exists():
         raise HTTPException(status_code=404, detail="chapter not found")
+
+    # M11: Conflict detection
+    if _loaded_mtime:
+        try:
+            loaded_mtime = float(_loaded_mtime)
+            current_mtime = path.stat().st_mtime
+            if abs(current_mtime - loaded_mtime) > 0.5:
+                return templates.TemplateResponse(
+                    "_save_result.html",
+                    {"request": request, "error": "\u6587\u4ef6\u5df2\u88ab\u5176\u4ed6\u6765\u6e90\u4fee\u6539\uff0c\u8bf7\u5237\u65b0\u9875\u9762\u540e\u91cd\u8bd5\u3002"},
+                )
+        except (ValueError, OSError):
+            pass
 
     expected_path = chapter_path(safe_project, filename, volume)
     if path != expected_path:
@@ -991,10 +1041,58 @@ def save_chapter(
 
     write_markdown(path, frontmatter, body)
     log_operation("save", str(path), f"words_added={words_added}")
+    new_mtime = path.stat().st_mtime
     return templates.TemplateResponse(
         "_save_result.html",
-        {"request": request, "saved_at": utc_now().strftime("%Y-%m-%d %H:%M:%S UTC"), "word_count": new_words},
+        {"request": request, "saved_at": utc_now().strftime("%Y-%m-%d %H:%M:%S UTC"), "word_count": new_words, "new_mtime": new_mtime},
     )
+
+
+@app.post("/projects/{project}/chapters/reorder")
+async def reorder_chapters(request: Request, project: str) -> Response:
+    require_auth(request)
+    safe_project = safe_slug(project, fallback="project")
+    data = await request.json()
+    filenames = data.get("order", [])
+    
+    if not filenames:
+        return JSONResponse(status_code=400, content={"error": "empty order"})
+    
+    for new_idx, fname in enumerate(filenames, start=1):
+        old_path = chapter_path(safe_project, fname)
+        if not old_path.exists():
+            continue
+            
+        fm, body = read_markdown(old_path)
+        stem_parts = fname.replace(".md", "").split("-", 1)
+        rest = stem_parts[1] if len(stem_parts) > 1 else stem_parts[0]
+        new_name = f"{new_idx:05d}-{rest}.md"
+        new_path = old_path.parent / new_name
+        
+        if old_path != new_path:
+            old_path.rename(new_path)
+            with get_conn() as conn:
+                conn.execute("UPDATE file_index SET path=? WHERE path=?", (str(new_path), str(old_path)))
+                conn.execute("UPDATE chapter_fts SET path=? WHERE path=?", (str(new_path), str(old_path)))
+    
+    log_operation("reorder_chapters", safe_project, f"reordered {len(filenames)} chapters")
+    return JSONResponse(content={"status": "ok"})
+
+
+@app.post("/projects/{project}/meta")
+def update_project_meta(
+    request: Request,
+    project: str,
+    target_words: int = Form(100000),
+    author: str = Form(""),
+    synopsis: str = Form(""),
+    daily_goal: int = Form(2000),
+) -> Response:
+    require_auth(request)
+    safe_project = safe_slug(project, fallback="project")
+    set_project_meta(safe_project, target_words, author, synopsis, daily_goal)
+    log_operation("update_project_meta", safe_project)
+    return RedirectResponse(url=f"/projects/{safe_project}", status_code=303)
 
 
 @app.post("/projects/{project}/preview", response_class=HTMLResponse)

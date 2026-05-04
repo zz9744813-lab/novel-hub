@@ -21,9 +21,31 @@
     if (stateEl) stateEl.textContent = s;
   }
 
+  let saveTimeout;
+  
+  function scheduleSave() {
+    clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(() => {
+      if (form.dataset.dirty === 'true') {
+        form.requestSubmit();
+      }
+    }, 5000);
+  }
+
   editor.on('change', () => {
     setSaveState('未保存');
     form.dataset.dirty = 'true';
+    scheduleSave();
+  });
+
+  window.addEventListener('blur', () => {
+    if (form.dataset.dirty === 'true') form.requestSubmit();
+  });
+  
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && form.dataset.dirty === 'true') {
+      form.requestSubmit();
+    }
   });
 
   document.body.addEventListener('click', (e) => {
@@ -62,12 +84,23 @@
 
   document.body.addEventListener('htmx:afterSwap', (evt) => {
     if (evt.target.id === 'save-result') {
+      const error = evt.target.querySelector('.save-error');
+      if (error) {
+        setSaveState('保存冲突');
+        window.NovelHubUI?.showToast(error.textContent || '保存失败');
+        return;
+      }
       const ok = evt.target.querySelector('.save-ok');
       if (ok) {
         setSaveState('已保存');
         form.dataset.dirty = 'false';
         const savedAt = ok.dataset.savedAt;
+        const newMtime = ok.dataset.newMtime;
         if (savedAtEl) savedAtEl.textContent = savedAt;
+        if (newMtime) {
+          const mtimeInput = document.querySelector('input[name="_loaded_mtime"]');
+          if (mtimeInput) mtimeInput.value = newMtime;
+        }
         window.NovelHubUI?.showToast('保存成功');
       }
     }

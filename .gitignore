@@ -8,3 +8,6 @@ novelhub.db
 ObsidianVault/
 .novelhub-backups/
 data/
+cookie.txt
+*.log
+server*.log

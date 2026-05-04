@@ -35,10 +35,27 @@
 </header>
 {% endblock %}
 {% block content %}
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/markdown/markdown.min.js"></script>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css"/>
-<section class="flex-1 flex overflow-hidden bg-bg" data-editor-workspace>
+<!-- CodeMirror 6 (ESM) -->
+<script type="importmap">
+{
+  "imports": {
+    "@codemirror/view": "https://esm.sh/@codemirror/view@6.26.3",
+    "@codemirror/state": "https://esm.sh/@codemirror/state@6.4.1",
+    "@codemirror/language": "https://esm.sh/@codemirror/language@6.10.1",
+    "@codemirror/commands": "https://esm.sh/@codemirror/commands@6.5.0",
+    "@codemirror/search": "https://esm.sh/@codemirror/search@6.5.6",
+    "@codemirror/autocomplete": "https://esm.sh/@codemirror/autocomplete@6.16.0",
+    "@codemirror/lint": "https://esm.sh/@codemirror/lint@6.7.0",
+    "@codemirror/lang-markdown": "https://esm.sh/@codemirror/lang-markdown@6.2.5",
+    "@codemirror/theme-one-dark": "https://esm.sh/@codemirror/theme-one-dark@6.1.2",
+    "@lezer/common": "https://esm.sh/@lezer/common@1.2.1",
+    "@lezer/highlight": "https://esm.sh/@lezer/highlight@1.2.0",
+    "@lezer/markdown": "https://esm.sh/@lezer/markdown@1.3.0",
+    "codemirror": "https://esm.sh/codemirror@6.0.1"
+  }
+}
+</script>
+<section class="flex-1 flex overflow-hidden bg-bg" data-editor-workspace data-project="{{ project }}" data-filename="{{ filename }}">
   <aside class="sidebar w-64 bg-sidebar border-r border-border_color flex flex-col shrink-0 transition-all duration-300 left" data-panel="left">
     <div class="p-4 border-b border-border_color flex flex-col gap-3">
       <div class="flex items-center justify-between">
@@ -97,9 +114,12 @@
     </section>
   </section>
 
-  <aside class="sidebar w-72 bg-sidebar border-l border-border_color flex flex-col shrink-0 transition-all duration-300 right" data-panel="right">
-    <div class="p-4 border-b border-border_color flex items-center justify-between">
-      <h3 class="font-semibold text-sm">元信息配置</h3>
+  <!-- Sidebar Right (T2.7 Tabs) -->
+  <aside class="sidebar w-80 bg-sidebar border-l border-border_color flex flex-col shrink-0 transition-all duration-300 right" data-panel="right" x-data="{ tab: 'meta' }">
+    <div class="flex border-b border-border_color">
+        <button @click="tab = 'meta'" :class="tab === 'meta' ? 'border-accent text-accent' : 'border-transparent text-muted'" class="flex-1 py-3 text-xs font-bold uppercase tracking-wider border-b-2 transition-all">Meta</button>
+        <button @click="tab = 'entities'" :class="tab === 'entities' ? 'border-accent text-accent' : 'border-transparent text-muted'" class="flex-1 py-3 text-xs font-bold uppercase tracking-wider border-b-2 transition-all">Entities</button>
+        <button @click="tab = 'threads'" :class="tab === 'threads' ? 'border-accent text-accent' : 'border-transparent text-muted'" class="flex-1 py-3 text-xs font-bold uppercase tracking-wider border-b-2 transition-all">Threads</button>
     </div>
     <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-5 custom-scrollbar">
 
@@ -190,37 +210,95 @@
         <div x-show="showBackups" x-transition class="flex flex-col gap-1 mt-2 max-h-60 overflow-y-auto custom-scrollbar border-l border-border_color pl-2">
           <template x-for="b in backups" :key="b.name">
             <button type="button" 
-                    class="text-[10px] text-muted hover:text-accent text-left py-1 truncate"
-                    :title="b.name"
-                    hx-get="/projects/{{ project }}/diff/"
-                    :hx-vals="'js:{backup_name: b.name}'"
-                    hx-target="#diff-viewer"
-                    @click="const url = `/projects/{{ project }}/diff/${b.name}`; htmx.ajax('GET', url, '#diff-viewer')">
-              <span x-text="b.timestamp"></span>
-              <span class="opacity-50 ml-1" x-text="'('+(b.size/1024).toFixed(1)+'KB)'"></span>
-            </button>
-          </template>
-          <div x-show="backups.length === 0" class="text-[10px] text-muted italic">暂无备份</div>
+    <div class="flex-1 overflow-y-auto p-4 custom-scrollbar">
+        <!-- Tab 1: Meta -->
+        <div x-show="tab === 'meta'" class="flex flex-col gap-6">
+            <div class="flex flex-col gap-1.5">
+                <label class="text-[10px] font-bold text-muted uppercase tracking-widest">章节标题</label>
+                <input type="text" name="title" value="{{ frontmatter.title }}" class="chapter-title bg-bg border border-border_color rounded px-3 py-2 text-sm focus:outline-none focus:border-accent" placeholder="请输入标题...">
+            </div>
+            
+            <div class="grid grid-cols-2 gap-3">
+                <div class="flex flex-col gap-1.5">
+                    <label class="text-[10px] font-bold text-muted uppercase tracking-widest">卷</label>
+                    <input type="text" name="volume" value="{{ frontmatter.volume }}" class="bg-bg border border-border_color rounded px-3 py-1.5 text-sm focus:outline-none focus:border-accent" placeholder="1">
+                </div>
+                <div class="flex flex-col gap-1.5">
+                    <label class="text-[10px] font-bold text-muted uppercase tracking-widest">编号</label>
+                    <input type="text" name="chapter" value="{{ frontmatter.chapter }}" class="bg-bg border border-border_color rounded px-3 py-1.5 text-sm focus:outline-none focus:border-accent" placeholder="1">
+                </div>
+            </div>
+
+            <div class="flex flex-col gap-1.5">
+                <label class="text-[10px] font-bold text-muted uppercase tracking-widest">状态</label>
+                <select name="status" class="bg-bg border border-border_color rounded px-3 py-1.5 text-sm focus:outline-none focus:border-accent">
+                    <option value="draft" {% if frontmatter.status == 'draft' %}selected{% endif %}>草稿 (Draft)</option>
+                    <option value="review" {% if frontmatter.status == 'review' %}selected{% endif %}>待审 (Review)</option>
+                    <option value="done" {% if frontmatter.status == 'done' %}selected{% endif %}>完稿 (Done)</option>
+                </select>
+            </div>
+
+            <div class="flex flex-col gap-2 pt-4 border-t border-border_color">
+                <h4 class="text-xs font-semibold text-muted uppercase">快照历史</h4>
+                <div class="flex flex-col gap-1.5 max-h-48 overflow-y-auto pr-1">
+                    {% for snap in snapshots %}
+                    <div class="flex items-center justify-between p-2 bg-panel border border-border_color rounded hover:border-accent transition-all group">
+                        <span class="text-[10px] font-mono text-muted">{{ snap.created_at[11:16] }} ({{ snap.label }})</span>
+                        <button type="button" onclick="restoreSnapshot({{ snap.id }})" class="text-[10px] text-accent opacity-0 group-hover:opacity-100 transition-opacity">还原</button>
+                    </div>
+                    {% endfor %}
+                    {% if not snapshots %}<div class="text-[10px] text-muted italic">暂无快照</div>{% endif %}
+                </div>
+            </div>
+
+            <div class="flex flex-col gap-3 pt-4 border-t border-border_color">
+                <h4 class="text-xs font-semibold text-red-500 uppercase">危险区</h4>
+                <button type="button" onclick="deleteChapter()" class="text-xs text-red-500 hover:bg-red-500/10 p-2 rounded border border-red-500/20 transition-all">删除该章节</button>
+            </div>
         </div>
 
-        <div id="diff-viewer" class="mt-4"></div>
+        <!-- Tab 2: Entities -->
+        <div x-show="tab === 'entities'" style="display: none;" class="flex flex-col gap-4">
+            <h4 class="text-xs font-semibold text-muted uppercase">本章提及实体</h4>
+            <div class="flex flex-col gap-2">
+                {% for ent in mentioned_entities %}
+                <div class="p-3 bg-panel border border-border_color rounded-lg group hover:border-accent transition-all">
+                    <div class="flex justify-between items-start mb-1">
+                        <span class="text-[10px] font-bold uppercase text-muted">{{ ent.kind }}</span>
+                        <a href="/projects/{{ project }}/entities/{{ ent.id }}" class="text-accent opacity-0 group-hover:opacity-100 transition-all">详情</a>
+                    </div>
+                    <div class="text-sm font-bold">{{ ent.name }}</div>
+                </div>
+                {% endfor %}
+                {% if not mentioned_entities %}<div class="text-xs text-muted italic text-center py-10">暂无引用的实体</div>{% endif %}
+            </div>
+        </div>
 
-        <h4 class="text-xs font-semibold text-red-500 uppercase mt-4">危险区</h4>
-        <button type="button" 
-                class="bg-panel border border-border_color hover:border-red-500 hover:text-red-500 rounded px-2.5 py-1.5 text-xs text-left transition-colors"
-                onclick="const newName = prompt('重命名该章节为 (带不带.md皆可):', '{{ filename }}'); if(newName && newName !== '{{ filename }}') fetch('/projects/{{ project }}/chapters/{{ filename }}/rename', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: newName})}).then(res => res.json()).then(data => { if(data.status==='ok') window.location.href = data.new_url; else alert('重命名失败: ' + (data.detail||'未知错误')); })">
-          重命名章节
-        </button>
-        <button type="button" 
-                class="bg-panel border border-red-500/30 text-red-500 hover:bg-red-500 hover:text-white rounded px-2.5 py-1.5 text-xs text-left transition-colors"
-                onclick="if(confirm('确定要永久删除章节「{{ frontmatter.title }}」吗？操作不可恢复！')) fetch('/projects/{{ project }}/chapters/{{ filename }}', {method: 'DELETE'}).then(res => res.json()).then(data => { if(data.status==='ok') window.location.href = data.new_url; else alert('删除失败: ' + (data.detail||'未知错误')); })">
-          删除章节
-        </button>
-      </div>
+        <!-- Tab 3: Threads -->
+        <div x-show="tab === 'threads'" style="display: none;" class="flex flex-col gap-4">
+            <h4 class="text-xs font-semibold text-muted uppercase">待呼应坑表</h4>
+            <div class="flex flex-col gap-2">
+                {% for thread in open_threads %}
+                <div class="p-3 bg-panel border border-border_color rounded-lg border-l-4 border-l-red-500/50">
+                    <div class="text-sm font-bold mb-1">{{ thread.name }}</div>
+                    <div class="text-[10px] text-muted">{{ thread.updated_at[:10] }}</div>
+                </div>
+                {% endfor %}
+                {% if not open_threads %}<div class="text-xs text-muted italic text-center py-10">暂无开放的伏笔</div>{% endif %}
+            </div>
+        </div>
     </div>
   </aside>
 </section>
+<style>
+  .wiki-link-id { color: var(--accent); text-decoration: underline; cursor: pointer; }
+  .wiki-link-name { color: #f87171; text-decoration: underline dotted; cursor: help; }
+  .cm-wiki-tooltip { z-index: 100; font-family: inherit; }
+  .cm-tooltip.cm-tooltip-above { margin-bottom: 10px; }
+  .cm-editor { background: transparent !important; }
+  .cm-scroller { font-family: inherit; }
+</style>
 {% endblock %}
 {% block scripts %}
-<script src="/static/js/editor.js"></script>
+<script type="module" src="/static/js/editor.js"></script>
 {% endblock %}

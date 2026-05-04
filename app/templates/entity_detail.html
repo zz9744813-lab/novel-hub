@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}{{ entity.name }} · {{ project }} · Novel Hub{% endblock %}
+
+{% block content %}
+<div class="flex flex-col gap-6 max-w-6xl mx-auto w-full py-6">
+    <!-- Breadcrumbs -->
+    <nav class="flex items-center gap-2 text-sm text-muted">
+        <a href="/projects/{{ project }}" class="hover:text-accent transition-colors">{{ project }}</a>
+        <span>/</span>
+        <a href="/projects/{{ project }}/entities" class="hover:text-accent transition-colors">Entities</a>
+        <span>/</span>
+        <span class="text-text_color font-medium">{{ entity.name }}</span>
+    </nav>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Main Content (Left/Middle) -->
+        <div class="lg:col-span-2 flex flex-col gap-6">
+            <!-- Header Card -->
+            <div class="bg-panel border border-border_color rounded-xl p-6 shadow-sm">
+                <form id="entity-form" class="flex flex-col gap-4">
+                    <div class="flex items-center justify-between gap-4">
+                        <div class="flex-1">
+                            <label class="block text-xs font-semibold text-muted uppercase mb-1">Name</label>
+                            <input type="text" name="name" value="{{ entity.name }}" 
+                                   class="w-full bg-bg border border-border_color rounded-lg px-4 py-2 text-xl font-bold focus:outline-none focus:border-accent transition-all">
+                        </div>
+                        <div class="w-32">
+                            <label class="block text-xs font-semibold text-muted uppercase mb-1">Kind</label>
+                            <select name="kind" class="w-full bg-bg border border-border_color rounded-lg px-3 py-2 text-sm focus:outline-none">
+                                <option value="character" {% if entity.kind == 'character' %}selected{% endif %}>Character</option>
+                                <option value="location" {% if entity.kind == 'location' %}selected{% endif %}>Location</option>
+                                <option value="item" {% if entity.kind == 'item' %}selected{% endif %}>Item</option>
+                                <option value="organization" {% if entity.kind == 'organization' %}selected{% endif %}>Organization</option>
+                                <option value="thread" {% if entity.kind == 'thread' %}selected{% endif %}>Thread</option>
+                                <option value="concept" {% if entity.kind == 'concept' %}selected{% endif %}>Concept</option>
+                                <option value="event" {% if entity.kind == 'event' %}selected{% endif %}>Event</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-semibold text-muted uppercase mb-1">Aliases (comma separated)</label>
+                        <input type="text" name="aliases" value="{{ entity.aliases|join(', ') }}" 
+                               class="w-full bg-bg border border-border_color rounded-lg px-3 py-2 text-sm focus:outline-none">
+                    </div>
+
+                    <div class="flex justify-end gap-3 mt-2">
+                        <button type="button" onclick="deleteEntity()" class="text-xs text-red-500 hover:bg-red-500/10 px-3 py-1.5 rounded transition-colors">Delete</button>
+                        <button type="button" onclick="saveEntity()" class="bg-accent text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:brightness-110 transition-all">Save Changes</button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Description Editor (T2.5) -->
+            <div class="bg-panel border border-border_color rounded-xl overflow-hidden flex flex-col h-[500px]">
+                <div class="px-4 py-2 border-b border-border_color bg-bg/50 flex items-center justify-between">
+                    <span class="text-xs font-semibold text-muted uppercase">Entity Description (Markdown)</span>
+                    <span class="text-[10px] text-muted italic">Stored in: {{ entity.md_path }}</span>
+                </div>
+                <textarea id="entity-md" class="hidden">{{ md_content }}</textarea>
+                <div id="cm-wrapper" class="flex-1 overflow-hidden"></div>
+            </div>
+        </div>
+
+        <!-- Sidebar (Right) -->
+        <div class="flex flex-col gap-6">
+            <!-- Relations -->
+            <div class="bg-panel border border-border_color rounded-xl p-4 shadow-sm">
+                <h4 class="text-xs font-semibold text-muted uppercase mb-3 flex items-center justify-between">
+                    Relations
+                    <button class="text-accent hover:underline">+ Add</button>
+                </h4>
+                <div class="flex flex-col gap-2">
+                    {% for rel in relations %}
+                    <div class="p-2 bg-bg border border-border_color rounded text-sm group relative">
+                        <div class="flex items-center gap-2">
+                            <span class="text-muted italic">{{ rel.relation_type }}</span>
+                            <a href="/projects/{{ project }}/entities/{{ rel.target_id }}" class="text-accent hover:underline font-medium">{{ rel.target_name }}</a>
+                        </div>
+                        {% if rel.notes %}
+                        <div class="text-[11px] text-muted mt-1">{{ rel.notes }}</div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                    {% if not relations %}
+                    <div class="text-xs text-muted italic py-4 text-center">No relations defined</div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Appearances -->
+            <div class="bg-panel border border-border_color rounded-xl p-4 shadow-sm">
+                <h4 class="text-xs font-semibold text-muted uppercase mb-3">Appearances (Entity Refs)</h4>
+                <div class="flex flex-col gap-2 max-h-[400px] overflow-y-auto pr-1">
+                    {% for ref in appearances %}
+                    <a href="/projects/{{ project }}/chapters/{{ ref.chapter_path|basename }}?pos={{ ref.char_offset }}" 
+                       class="p-2 bg-bg border border-border_color rounded text-xs hover:border-accent transition-colors flex flex-col gap-1">
+                        <div class="font-medium text-text_color">{{ ref.chapter_path|basename }}</div>
+                        <div class="text-muted italic">Offset: {{ ref.char_offset }}</div>
+                    </a>
+                    {% endfor %}
+                    {% if not appearances %}
+                    <div class="text-xs text-muted italic py-4 text-center">Not referenced yet</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- CodeMirror 6 for Entity Description -->
+<script type="importmap">
+{
+  "imports": {
+    "@codemirror/view": "https://esm.sh/@codemirror/view@6.26.3",
+    "@codemirror/state": "https://esm.sh/@codemirror/state@6.4.1",
+    "@codemirror/language": "https://esm.sh/@codemirror/language@6.10.1",
+    "@codemirror/commands": "https://esm.sh/@codemirror/commands@6.5.0",
+    "@codemirror/lang-markdown": "https://esm.sh/@codemirror/lang-markdown@6.2.5",
+    "codemirror": "https://esm.sh/codemirror@6.0.1"
+  }
+}
+</script>
+<script type="module">
+import { EditorView, basicSetup } from 'codemirror';
+import { EditorState } from '@codemirror/state';
+import { markdown } from '@codemirror/lang-markdown';
+
+const textarea = document.getElementById('entity-md');
+const wrapper = document.getElementById('cm-wrapper');
+
+const startState = EditorState.create({
+    doc: textarea.value,
+    extensions: [
+        basicSetup,
+        markdown(),
+        EditorView.lineWrapping,
+        EditorView.theme({
+            "&": { height: "100%", fontSize: "14px" },
+            ".cm-scroller": { overflow: "auto" }
+        })
+    ]
+});
+
+const view = new EditorView({
+    state: startState,
+    parent: wrapper
+});
+
+window.saveEntity = async () => {
+    const form = document.getElementById('entity-form');
+    const formData = new FormData(form);
+    const data = {
+        name: formData.get('name'),
+        kind: formData.get('kind'),
+        aliases: formData.get('aliases').split(',').map(s => s.trim()).filter(s => s),
+        md_content: view.state.doc.toString()
+    };
+    
+    try {
+        const res = await fetch(`/api/entities/{{ entity.id }}`, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)
+        });
+        if (res.ok) window.NovelHubUI?.showToast('Entity saved');
+        else alert('Failed to save');
+    } catch (err) {
+        console.error(err);
+    }
+};
+
+window.deleteEntity = async () => {
+    if (!confirm('Are you sure you want to delete this entity?')) return;
+    const res = await fetch(`/api/entities/{{ entity.id }}`, { method: 'DELETE' });
+    if (res.ok) window.location.href = `/projects/{{ project }}/entities`;
+};
+</script>
+{% endblock %}

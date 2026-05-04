@@ -15,7 +15,20 @@
     lineNumbers: false,
     lineWrapping: true,
     viewportMargin: Infinity,
+    extraKeys: {
+      "Ctrl-S": () => { editor.save(); form.requestSubmit(); },
+      "Cmd-S": () => { editor.save(); form.requestSubmit(); },
+    }
   });
+
+  const wordCountEl = document.querySelector('[data-live-wordcount]');
+  function liveWordCount() {
+    if (!wordCountEl) return;
+    const text = editor.getValue();
+    const cjk = (text.match(/[\u4e00-\u9fff]/g) || []).length;
+    const latin = (text.match(/[A-Za-z0-9]+/g) || []).length;
+    wordCountEl.textContent = (cjk + latin) + ' 字';
+  }
 
   function setSaveState(s) {
     if (stateEl) stateEl.textContent = s;
@@ -36,7 +49,9 @@
     setSaveState('未保存');
     form.dataset.dirty = 'true';
     scheduleSave();
+    liveWordCount();
   });
+  liveWordCount();
 
   window.addEventListener('blur', () => {
     if (form.dataset.dirty === 'true') form.requestSubmit();

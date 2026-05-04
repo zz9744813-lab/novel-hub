@@ -1734,9 +1734,79 @@ async def ai_outline_volume(request: Request, project: str) -> Response:
 
 @app.post("/api/projects/{project}/ai/outline/chapter")
 async def ai_outline_chapter(request: Request, project: str) -> Response:
-    """T4.3 AI split volume into chapters."""
+    """T4.3: AI splits a volume into N chapter outlines."""
     require_auth(request)
-    return JSONResponse({"status": "ok", "message": "Not fully implemented due to complex file creation in batch."})
+    data = await request.json()
+    volume_slug = data.get("slug")
+    num_chapters = int(data.get("count", 10))
+    
+    api_key = get_setting("ai_api_key")
+    if not api_key: raise HTTPException(400, "AI not configured")
+    
+    safe_project = safe_slug(project, fallback="project")
+    from app.services.ai_context import build_context
+    from app.services.ai_client import generate_ai_content
+    
+    context = build_context(safe_project, None, "outline")
+    
+    with get_conn() as conn:
+        vol = conn.execute("SELECT * FROM volumes WHERE project=? AND slug=?", (safe_project, volume_slug)).fetchone()
+        if not vol: raise HTTPException(404, "volume not found")
+    
+    prompt = f"""Volume synopsis:
+{vol['synopsis']}
+
+Project context:
+{context}
+
+Generate {num_chapters} chapter outlines for this volume. Return as JSON array, each item has: title (string), synopsis (string, 2-3 sentences). Return ONLY valid JSON, no markdown fences."""
+    
+    response = await generate_ai_content(api_key, get_setting("ai_base_url"), get_setting("ai_model"), "You are a chapter outline generator. Return ONLY valid JSON.", prompt)
+    
+    if not response: return JSONResponse({"status": "error"})
+    
+    clean = response.strip()
+    if clean.startswith("```json"): clean = clean[7:]
+    if clean.startswith("```"): clean = clean[3:]
+    if clean.endswith("```"): clean = clean[:-3]
+    
+    try:
+        import json
+        chapters_data = json.loads(clean.strip())
+    except json.JSONDecodeError:
+        return JSONResponse({"status": "error", "detail": "AI returned invalid JSON"})
+    
+    # Find current max chapter_int in this volume
+    with get_conn() as conn:
+        max_ch = conn.execute(
+            "SELECT MAX(chapter_int) as m FROM file_index WHERE project=? AND volume=?",
+            (safe_project, volume_slug)
+        ).fetchone()
+        start_idx = (max_ch["m"] or 0) + 1
+    
+    created = []
+    for i, ch in enumerate(chapters_data):
+        idx = start_idx + i
+        title = ch.get("title", f"第 {idx} 章")
+        synopsis = ch.get("synopsis", "")
+        filename = f"{idx:05d}-{safe_slug(title, fallback=f'ch{idx}')}.md"
+        
+        new_path = NOVELS_ROOT / safe_project / "chapters" / volume_slug / filename
+        new_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        if new_path.exists(): continue  # don't overwrite
+        
+        fm = {
+            "title": title,
+            "chapter": str(idx),
+            "status": "outline",
+            "volume": volume_slug,
+            "synopsis": synopsis,
+        }
+        write_markdown(new_path, fm, "")
+        created.append({"filename": filename, "title": title})
+    
+    return JSONResponse({"status": "ok", "created": created})
 
 @app.get("/projects/{project}/entities/{ent_id}/arc", response_class=HTMLResponse)
 def entity_arc_page(request: Request, project: str, ent_id: str) -> Response:

@@ -1229,6 +1229,9 @@ def save_chapter(
     write_markdown(path, frontmatter, body)
     log_operation("save", str(path), f"words_added={words_added}", value=words_added, project=safe_project)
     new_mtime = path.stat().st_mtime
+    # T4.6: trigger background consistency check
+    background_tasks.add_task(run_consistency_check, safe_project, str(path))
+
     return templates.TemplateResponse(
         "_save_result.html",
         {"request": request, "saved_at": utc_now().strftime("%Y-%m-%d %H:%M:%S UTC"), "word_count": new_words, "new_mtime": new_mtime},

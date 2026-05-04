@@ -23,7 +23,6 @@ const filename = document.body.dataset.filename || '';
   }
   refreshEntityCache();
 
-
 if (textarea) {
   const stateEl = document.getElementById('save-state');
   const savedAtEl = document.getElementById('saved-at');
@@ -322,7 +321,6 @@ if (textarea) {
     liveWordCount(fullText);
   }
 
-
   window.addEventListener('set-editor-mode', (e) => {
     if (e.detail === 'scene') {
         renderScenes();
@@ -466,11 +464,10 @@ document.querySelectorAll('[data-tag-field]').forEach(field => {
     renderChips();
 });
 
-
 // --- T4.2: AI Drawer Logic ---
 (function initAIDrawer() {
   const aiOutputEl = document.getElementById('ai-output');
-  if (!aiOutputEl) return;  // ไม่在编辑器页面就跳过
+  if (!aiOutputEl) return;  // 不在编辑器页面就跳过
   
   const aiActionsEl = document.getElementById('ai-actions');
   const aiApplyBtn = document.getElementById('ai-apply');

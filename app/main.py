@@ -92,6 +92,10 @@ def get_conn() -> sqlite3.Connection:
 def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with get_conn() as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA temp_store=MEMORY")
+        conn.execute("PRAGMA mmap_size=268435456")
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS settings (
@@ -103,8 +107,16 @@ def init_db() -> None:
                 path TEXT PRIMARY KEY,
                 project TEXT,
                 word_count INTEGER,
-                updated_at TEXT
+                updated_at TEXT,
+                title TEXT,
+                chapter TEXT,
+                chapter_int INTEGER,
+                status TEXT,
+                volume TEXT,
+                mtime REAL
             );
+
+            CREATE INDEX IF NOT EXISTS idx_fi_project ON file_index(project, chapter_int);
 
             CREATE TABLE IF NOT EXISTS operation_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -124,6 +136,17 @@ def init_db() -> None:
             );
             """
         )
+        try:
+            conn.execute("ALTER TABLE file_index ADD COLUMN title TEXT")
+            conn.execute("ALTER TABLE file_index ADD COLUMN chapter TEXT")
+            conn.execute("ALTER TABLE file_index ADD COLUMN chapter_int INTEGER")
+            conn.execute("ALTER TABLE file_index ADD COLUMN status TEXT")
+            conn.execute("ALTER TABLE file_index ADD COLUMN volume TEXT")
+            conn.execute("ALTER TABLE file_index ADD COLUMN mtime REAL")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_fi_project ON file_index(project, chapter_int)")
+        except sqlite3.OperationalError:
+            pass
+
 
 
 def log_operation(action: str, target: str = "", detail: str = "") -> None:
@@ -212,21 +235,83 @@ def normalize_meta(fm: dict[str, Any], stem: str) -> dict[str, Any]:
 def list_chapters(project: str) -> list[dict[str, Any]]:
     folder = project_path(project) / "chapters"
     rows: list[dict[str, Any]] = []
-    for f in list_markdown_files(folder):
-        fm, body = read_markdown(f)
-        meta = normalize_meta(fm, f.stem)
-        rows.append(
-            {
-                "filename": f.name,
-                "title": meta["title"],
-                "chapter": meta["chapter"],
-                "status": meta["status"],
-                "volume": meta["volume"],
-                "word_count": count_words(body),
-                "modified": datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc),
-                "meta": meta,
-            }
-        )
+    with get_conn() as conn:
+        db_rows = conn.execute(
+            "SELECT path, word_count, updated_at, title, chapter, chapter_int, status, volume, mtime "
+            "FROM file_index WHERE project=? ORDER BY chapter_int, path",
+            (project,)
+        ).fetchall()
+        
+        cached_map = {r["path"]: dict(r) for r in db_rows}
+        
+        for f in list_markdown_files(folder):
+            mtime = f.stat().st_mtime
+            f_str = str(f)
+            cached = cached_map.get(f_str)
+            
+            if not cached or cached.get("mtime") != mtime:
+                fm, body = read_markdown(f)
+                meta = normalize_meta(fm, f.stem)
+                words = count_words(body)
+                
+                try:
+                    chapter_int = int(meta["chapter"])
+                except ValueError:
+                    chapter_int = 0
+                    
+                conn.execute(
+                    """
+                    INSERT INTO file_index(path, project, word_count, updated_at, title, chapter, chapter_int, status, volume, mtime)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(path) DO UPDATE SET
+                        project=excluded.project,
+                        word_count=excluded.word_count,
+                        updated_at=excluded.updated_at,
+                        title=excluded.title,
+                        chapter=excluded.chapter,
+                        chapter_int=excluded.chapter_int,
+                        status=excluded.status,
+                        volume=excluded.volume,
+                        mtime=excluded.mtime
+                    """,
+                    (f_str, project, words, utc_now().isoformat(), meta["title"], meta["chapter"], chapter_int, meta["status"], meta["volume"], mtime)
+                )
+                
+                rows.append({
+                    "filename": f.name,
+                    "title": meta["title"],
+                    "chapter": meta["chapter"],
+                    "status": meta["status"],
+                    "volume": meta["volume"],
+                    "word_count": words,
+                    "modified": datetime.fromtimestamp(mtime, tz=timezone.utc),
+                    "meta": meta,
+                })
+            else:
+                rows.append({
+                    "filename": f.name,
+                    "title": cached["title"],
+                    "chapter": cached["chapter"],
+                    "status": cached["status"],
+                    "volume": cached["volume"],
+                    "word_count": cached["word_count"],
+                    "modified": datetime.fromtimestamp(cached["mtime"], tz=timezone.utc),
+                    "meta": {
+                        "title": cached["title"],
+                        "chapter": cached["chapter"],
+                        "status": cached["status"],
+                        "volume": cached["volume"]
+                    }
+                })
+
+    def _sort_key(x):
+        try:
+            c_int = int(x["chapter"])
+        except ValueError:
+            c_int = 0
+        return (c_int, x["filename"])
+        
+    rows.sort(key=_sort_key)
     return rows
 
 
@@ -282,17 +367,32 @@ def write_markdown(path: Path, frontmatter: dict[str, Any], body: str) -> None:
         backup_file(p)
     content = dump_frontmatter(frontmatter, body)
     p.write_text(content, encoding="utf-8")
+    
+    meta = normalize_meta(frontmatter, p.stem)
+    words = count_words(body)
+    mtime = p.stat().st_mtime
+    try:
+        chapter_int = int(meta["chapter"])
+    except ValueError:
+        chapter_int = 0
+        
     with get_conn() as conn:
         conn.execute(
             """
-            INSERT INTO file_index(path, project, word_count, updated_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO file_index(path, project, word_count, updated_at, title, chapter, chapter_int, status, volume, mtime)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(path) DO UPDATE SET
                 project=excluded.project,
                 word_count=excluded.word_count,
-                updated_at=excluded.updated_at
+                updated_at=excluded.updated_at,
+                title=excluded.title,
+                chapter=excluded.chapter,
+                chapter_int=excluded.chapter_int,
+                status=excluded.status,
+                volume=excluded.volume,
+                mtime=excluded.mtime
             """,
-            (str(p), p.parts[-3] if len(p.parts) >= 3 else "", count_words(body), utc_now().isoformat()),
+            (str(p), p.parts[-3] if len(p.parts) >= 3 else "", words, utc_now().isoformat(), meta["title"], meta["chapter"], chapter_int, meta["status"], meta["volume"], mtime),
         )
 
 
@@ -497,7 +597,7 @@ async def ai_pipeline_apply(request: Request, project: str) -> Response:
     if stage in ["chapters", "draft"]:
         existing = list_chapters(safe_project)
         idx = len(existing) + 1
-        filename = f"{idx:03d}-{safe_slug(title, fallback='chapter')}"
+        filename = f"{idx:05d}-{safe_slug(title, fallback='chapter')}"
         path = chapter_path(safe_project, filename)
         frontmatter = {
             "title": title,
@@ -637,7 +737,7 @@ def create_chapter(
     safe_project = safe_slug(project, fallback="project")
     existing = list_chapters(safe_project)
     idx = len(existing) + 1
-    filename = f"{idx:03d}-{safe_slug(title, fallback='chapter')}"
+    filename = f"{idx:05d}-{safe_slug(title, fallback='chapter')}"
     path = chapter_path(safe_project, filename)
     frontmatter = {
         "title": title,

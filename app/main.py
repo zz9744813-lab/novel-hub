@@ -623,6 +623,24 @@ def preview_markdown(request: Request, body: str = Form("")) -> Response:
     return templates.TemplateResponse("_preview.html", {"request": request, "html": html})
 
 
+@app.post("/projects/{project}/characters/new")
+def create_character(
+    request: Request,
+    project: str,
+    name: str = Form("新角色"),
+) -> Response:
+    require_auth(request)
+    safe_project = safe_slug(project, fallback="project")
+    filename = f"{safe_slug(name, fallback='character')}.md"
+    p = project_path(safe_project) / "characters" / filename
+    p.parent.mkdir(parents=True, exist_ok=True)
+    if not p.exists():
+        frontmatter = {"name": name, "tags": [], "role": ""}
+        write_markdown(p, frontmatter, f"这是 {name} 的介绍。")
+        log_operation("create_character", str(p))
+    return RedirectResponse(url=f"/projects/{safe_project}/characters", status_code=303)
+
+
 @app.get("/projects/{project}/characters", response_class=HTMLResponse)
 def characters_page(request: Request, project: str) -> Response:
     if not request.session.get("authed"):
@@ -630,6 +648,34 @@ def characters_page(request: Request, project: str) -> Response:
     safe_project = safe_slug(project, fallback="project")
     items = list_notes(safe_project, "characters")
     return templates.TemplateResponse("characters.html", {"request": request, "project": safe_project, "items": items})
+
+
+@app.post("/projects/{project}/world/new")
+def create_world_item(
+    request: Request,
+    project: str,
+    name: str = Form("新条目"),
+    category: str = Form("locations"),
+) -> Response:
+    require_auth(request)
+    safe_project = safe_slug(project, fallback="project")
+
+    prefix_map = {
+        "locations": "loc",
+        "organizations": "org",
+        "items": "ite",
+        "timeline": "tim"
+    }
+    prefix = prefix_map.get(category, "loc")
+
+    filename = f"{prefix}-{safe_slug(name, fallback='world')}.md"
+    p = project_path(safe_project) / "world" / filename
+    p.parent.mkdir(parents=True, exist_ok=True)
+    if not p.exists():
+        frontmatter = {"name": name, "category": category, "tags": []}
+        write_markdown(p, frontmatter, f"这是 {name} 的介绍。")
+        log_operation("create_world_item", str(p))
+    return RedirectResponse(url=f"/projects/{safe_project}/world", status_code=303)
 
 
 @app.get("/projects/{project}/world", response_class=HTMLResponse)

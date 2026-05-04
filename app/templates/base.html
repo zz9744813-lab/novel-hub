@@ -128,10 +128,7 @@
 <a href="/projects/{{ project }}/outline" class="flex items-center gap-1.5 px-3 py-1.5 rounded-md hover:bg-panel transition-colors text-sm">大纲</a>
 <a href="/projects/{{ project }}/threads-board" class="flex items-center gap-1.5 px-3 py-1.5 rounded-md hover:bg-panel transition-colors text-sm">伏笔</a>
 {% endif %}
-        <a href="/ai-pipeline{% if project %}/{{ project }}{% endif %}" class="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-accent/10 text-accent border border-accent/20 hover:bg-accent/20 transition-colors text-sm font-medium">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-          <span x-text="$store.i18n.t('nav_pipeline')">AI Pipeline</span>
-        </a>
+        
 
         <!-- Language Switcher -->
         <div class="relative" x-data="{ open: false }">

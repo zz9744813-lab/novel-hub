@@ -370,6 +370,9 @@ if (textarea) {
     state: startState,
     parent: textarea.parentElement
   });
+  window.__editorView = view;
+  window.__novelhubProject = project;
+  window.__novelhubFilename = filename;
   textarea.style.display = 'none';
 
   // --- Autosave & HTMX logic (reused from old editor.js) ---
@@ -462,3 +465,72 @@ document.querySelectorAll('[data-tag-field]').forEach(field => {
     });
     renderChips();
 });
+
+
+// --- T4.2: AI Drawer Logic ---
+(function initAIDrawer() {
+  const aiOutputEl = document.getElementById('ai-output');
+  if (!aiOutputEl) return;  // ไม่在编辑器页面就跳过
+  
+  const aiActionsEl = document.getElementById('ai-actions');
+  const aiApplyBtn = document.getElementById('ai-apply');
+  const aiDiscardBtn = document.getElementById('ai-discard');
+  let currentAiText = "";
+
+  document.querySelectorAll('[data-ai-action]').forEach(btn => {
+    btn.onclick = async () => {
+        const mode = btn.dataset.aiAction;
+        const view = window.__editorView;  // 从全局拿 EditorView 实例
+        if (!view) { aiOutputEl.textContent = "编辑器未就绪"; return; }
+        const selectedText = view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to);
+        const contextText = selectedText || view.state.doc.toString().slice(-2000);
+        
+        aiOutputEl.textContent = "AI 正在思考中...";
+        aiOutputEl.classList.add('animate-pulse');
+        aiActionsEl.classList.add('hidden');
+        currentAiText = "";
+
+        const url = `/api/projects/${window.__novelhubProject}/ai/generate?mode=${mode}&chapter=${window.__novelhubFilename}&text=${encodeURIComponent(contextText)}`;
+        const eventSource = new EventSource(url);
+
+        eventSource.onmessage = (event) => {
+            if (event.data === '[DONE]') {
+                eventSource.close();
+                aiOutputEl.classList.remove('animate-pulse');
+                aiActionsEl.classList.remove('hidden');
+                return;
+            }
+            const data = JSON.parse(event.data);
+            currentAiText += data.content;
+            aiOutputEl.textContent = currentAiText;
+            aiOutputEl.scrollTop = aiOutputEl.scrollHeight;
+        };
+
+        eventSource.onerror = (err) => {
+            console.error("AI stream error:", err);
+            eventSource.close();
+            aiOutputEl.textContent = "发生错误，请检查 AI 设置或网络。";
+            aiOutputEl.classList.remove('animate-pulse');
+        };
+    };
+  });
+
+  aiApplyBtn.onclick = () => {
+    if (!currentAiText) return;
+    const view = window.__editorView;
+    const { from, to } = view.state.selection.main;
+    view.dispatch({
+        changes: { from: to, insert: "\n\n" + currentAiText },
+        selection: { anchor: to + currentAiText.length + 2 }
+    });
+    aiOutputEl.textContent = "已采纳。";
+    aiActionsEl.classList.add('hidden');
+    currentAiText = "";
+  };
+
+  aiDiscardBtn.onclick = () => {
+    aiOutputEl.textContent = "已放弃。";
+    aiActionsEl.classList.add('hidden');
+    currentAiText = "";
+  };
+})();

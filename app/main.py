@@ -134,6 +134,14 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE VIRTUAL TABLE IF NOT EXISTS chapter_fts USING fts5(
+                path UNINDEXED,
+                project UNINDEXED,
+                title,
+                body,
+                tokenize='unicode61 remove_diacritics 2'
+            );
             """
         )
         try:
@@ -186,9 +194,18 @@ def backup_file(path: Path) -> None:
         return
     rel = p.relative_to(VAULT_ROOT)
     backup_name = f"{utc_now().strftime('%Y%m%dT%H%M%SZ')}__{p.name}"
-    dest = BACKUP_ROOT / rel.parent / backup_name
-    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest_dir = BACKUP_ROOT / rel.parent
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / backup_name
     shutil.copy2(p, dest)
+    
+    all_backups = sorted(list(dest_dir.glob(f"*__{p.name}")), key=lambda x: x.name)
+    if len(all_backups) > 20:
+        for old in all_backups[:-20]:
+            try:
+                old.unlink()
+            except Exception:
+                pass
 
 
 def count_words(text: str) -> int:
@@ -197,11 +214,19 @@ def count_words(text: str) -> int:
     return len(cjk) + len(latin)
 
 
-def chapter_path(project: str, filename: str) -> Path:
+def chapter_path(project: str, filename: str, volume: str = None) -> Path:
     safe_project = safe_slug(project, fallback="project")
     safe_file = safe_slug(filename.replace(".md", ""), fallback="chapter") + ".md"
-    path = NOVELS_ROOT / safe_project / "chapters" / safe_file
-    return _ensure_under_root(path, VAULT_ROOT)
+    base_folder = NOVELS_ROOT / safe_project / "chapters"
+    
+    if volume is not None:
+        vol_folder = safe_slug(volume, fallback="volume-01") if volume else "volume-01"
+        return _ensure_under_root(base_folder / vol_folder / safe_file, VAULT_ROOT)
+        
+    for f in base_folder.rglob(safe_file):
+        return _ensure_under_root(f, VAULT_ROOT)
+        
+    return _ensure_under_root(base_folder / "volume-01" / safe_file, VAULT_ROOT)
 
 
 def project_path(project: str) -> Path:
@@ -212,6 +237,8 @@ def project_path(project: str) -> Path:
 def list_markdown_files(folder: Path) -> list[Path]:
     if not folder.exists():
         return []
+    if folder.name == "chapters":
+        return sorted(folder.rglob("*.md"))
     return sorted(folder.glob("*.md"))
 
 
@@ -276,6 +303,10 @@ def list_chapters(project: str) -> list[dict[str, Any]]:
                     """,
                     (f_str, project, words, utc_now().isoformat(), meta["title"], meta["chapter"], chapter_int, meta["status"], meta["volume"], mtime)
                 )
+                
+                conn.execute("DELETE FROM chapter_fts WHERE path=?", (f_str,))
+                conn.execute("INSERT INTO chapter_fts(path, project, title, body) VALUES (?, ?, ?, ?)", 
+                             (f_str, project, meta["title"], body))
                 
                 rows.append({
                     "filename": f.name,
@@ -392,8 +423,11 @@ def write_markdown(path: Path, frontmatter: dict[str, Any], body: str) -> None:
                 volume=excluded.volume,
                 mtime=excluded.mtime
             """,
-            (str(p), p.parts[-3] if len(p.parts) >= 3 else "", words, utc_now().isoformat(), meta["title"], meta["chapter"], chapter_int, meta["status"], meta["volume"], mtime),
+            (str(p), p.parts[-4] if len(p.parts) >= 4 else "", words, utc_now().isoformat(), meta["title"], meta["chapter"], chapter_int, meta["status"], meta["volume"], mtime),
         )
+        conn.execute("DELETE FROM chapter_fts WHERE path=?", (str(p),))
+        conn.execute("INSERT INTO chapter_fts(path, project, title, body) VALUES (?, ?, ?, ?)", 
+                     (str(p), p.parts[-4] if len(p.parts) >= 4 else "", meta["title"], body))
 
 
 def parse_csv(value: str) -> list[str]:
@@ -919,6 +953,15 @@ def save_chapter(
     if not path.exists():
         raise HTTPException(status_code=404, detail="chapter not found")
 
+    expected_path = chapter_path(safe_project, filename, volume)
+    if path != expected_path:
+        expected_path.parent.mkdir(parents=True, exist_ok=True)
+        path.rename(expected_path)
+        with get_conn() as conn:
+            conn.execute("UPDATE file_index SET path=? WHERE path=?", (str(expected_path), str(path)))
+            conn.execute("UPDATE chapter_fts SET path=? WHERE path=?", (str(expected_path), str(path)))
+        path = expected_path
+
     old_words = 0
     try:
         _, old_body = read_markdown(path)
@@ -1088,6 +1131,36 @@ async def rename_note(request: Request, project: str, folder: str, filename: str
         
     return JSONResponse(content={"status": "ok", "new_url": f"/projects/{safe_project}/{folder}"})
 
+
+@app.get("/projects/{project}/search", response_class=HTMLResponse)
+def search_project(request: Request, project: str, q: str = "") -> Response:
+    if not request.session.get("authed"):
+        return RedirectResponse("/login", status_code=303)
+    safe_project = safe_slug(project, fallback="project")
+    results = []
+    if q:
+        with get_conn() as conn:
+            # Query body or title
+            rows = conn.execute(
+                """
+                SELECT path, title, snippet(chapter_fts, 3, '<mark class="bg-accent/30 text-accent px-1 rounded">', '</mark>', '...', 64) as excerpt
+                FROM chapter_fts
+                WHERE chapter_fts MATCH ? AND project = ?
+                ORDER BY rank
+                LIMIT 50
+                """,
+                (f'"{q}"', safe_project)
+            ).fetchall()
+            
+            for r in rows:
+                p = Path(r["path"])
+                results.append({
+                    "filename": p.name,
+                    "title": r["title"],
+                    "excerpt": r["excerpt"]
+                })
+                
+    return templates.TemplateResponse("search.html", {"request": request, "project": safe_project, "q": q, "results": results})
 
 @app.get("/export", response_class=HTMLResponse)
 def export_page(request: Request) -> Response:

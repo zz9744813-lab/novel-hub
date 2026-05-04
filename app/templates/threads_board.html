@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Threads Kanban - {{ project }} 路 Novel Hub{% endblock %}
+{% block title %}Threads Kanban - {{ project }} · Novel Hub{% endblock %}
 {% block content %}
 <section class="flex flex-col gap-6" x-data="{ 
     board: {open: [], resolving: [], closed: []},
@@ -31,6 +31,7 @@
                         body: JSON.stringify({
                             name: entity.name,
                             kind: entity.kind,
+                            aliases: JSON.parse(entity.aliases || '[]'),
                             properties: props
                         })
                     });

@@ -9,7 +9,7 @@ from pathlib import Path
 from datetime import datetime
 
 # Configuration via Environment Variables
-VAULT_ROOT = Path(os.getenv("NOVELHUB_VAULT_ROOT", "f:/hajimi/ObsidianVault")).expanduser()
+VAULT_ROOT = Path(os.getenv("NOVELHUB_VAULT_ROOT", "/root/ObsidianVault")).expanduser()
 NOVELS_ROOT = VAULT_ROOT / "Novels"
 DB_PATH = Path(os.getenv("NOVELHUB_DB_PATH", str(Path(__file__).resolve().parent.parent / "novelhub.db"))).expanduser()
 

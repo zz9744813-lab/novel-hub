@@ -1,55 +1,125 @@
 {% extends "base.html" %}
-{% block title %}Plot Timeline · {{ project }} · Novel Hub{% endblock %}
-
+{% block title %}Timeline - {{ project }} 路 Novel Hub{% endblock %}
+{% block scripts %}
+<script src="https://d3js.org/d3.v7.min.js"></script>
+{% endblock %}
 {% block content %}
-<div class="flex flex-col gap-8 max-w-5xl mx-auto w-full py-8">
+<section class="flex flex-col gap-6" x-data="{ 
+    loading: true,
+    async init() {
+        const res = await fetch(`/api/projects/{{ project }}/timeline`);
+        const data = await res.json();
+        this.loading = false;
+        this.$nextTick(() => this.renderTimeline(data));
+    },
+    renderTimeline(data) {
+        const margin = {top: 40, right: 40, bottom: 40, left: 60};
+        const width = Math.max(1200, data.chapters.length * 50) - margin.left - margin.right;
+        const height = 400 - margin.top - margin.bottom;
+
+        const svg = d3.select('#timeline-svg')
+            .attr('width', width + margin.left + margin.right)
+            .attr('height', height + margin.top + margin.bottom)
+            .append('g')
+            .attr('transform', `translate(${margin.left},${margin.top})`);
+
+        const x = d3.scaleLinear()
+            .domain([0, data.chapters.length])
+            .range([0, width]);
+
+        // Lanes: 0: Volumes, 1: POV, 2: Status
+        const laneHeight = height / 3;
+
+        // Draw Chapters
+        svg.selectAll('.chapter-line')
+            .data(data.chapters)
+            .enter()
+            .append('line')
+            .attr('x1', (d, i) => x(i + 0.5))
+            .attr('x2', (d, i) => x(i + 0.5))
+            .attr('y1', 0)
+            .attr('y2', height)
+            .attr('stroke', 'var(--border_color)')
+            .attr('stroke-dasharray', '4,4');
+
+        // Draw Volumes (Lane 0)
+        let currentVol = null;
+        let volStart = 0;
+        data.chapters.forEach((ch, i) => {
+            if (ch.volume !== currentVol) {
+                if (currentVol !== null) {
+                    svg.append('rect')
+                        .attr('x', x(volStart))
+                        .attr('y', 0)
+                        .attr('width', x(i) - x(volStart))
+                        .attr('height', laneHeight)
+                        .attr('fill', 'var(--accent)')
+                        .attr('opacity', 0.1)
+                        .attr('rx', 4);
+                    svg.append('text')
+                        .attr('x', x(volStart + (i - volStart)/2))
+                        .attr('y', 20)
+                        .attr('text-anchor', 'middle')
+                        .attr('class', 'text-[10px] font-bold uppercase fill-accent')
+                        .text(currentVol || 'Root');
+                }
+                currentVol = ch.volume;
+                volStart = i;
+            }
+            if (i === data.chapters.length - 1) {
+                svg.append('rect')
+                        .attr('x', x(volStart))
+                        .attr('y', 0)
+                        .attr('width', x(i + 1) - x(volStart))
+                        .attr('height', laneHeight)
+                        .attr('fill', 'var(--accent)')
+                        .attr('opacity', 0.1)
+                        .attr('rx', 4);
+                svg.append('text')
+                        .attr('x', x(volStart + (i + 1 - volStart)/2))
+                        .attr('y', 20)
+                        .attr('text-anchor', 'middle')
+                        .attr('class', 'text-[10px] font-bold uppercase fill-accent')
+                        .text(currentVol || 'Root');
+            }
+        });
+
+        // Draw Scenes / POV (Lane 1)
+        const sceneDots = svg.selectAll('.scene-dot')
+            .data(data.scenes)
+            .enter()
+            .append('circle')
+            .attr('cx', (d) => {
+                const chIdx = data.chapters.findIndex(c => c.path === d.chapter_path);
+                return x(chIdx + 0.5);
+            })
+            .attr('cy', laneHeight + laneHeight/2)
+            .attr('r', 4)
+            .attr('fill', 'var(--accent)')
+            .attr('class', 'cursor-pointer hover:r-6 transition-all');
+
+        // Tooltip
+        const tooltip = d3.select('body').append('div')
+            .attr('class', 'absolute hidden bg-panel border border-border_color p-2 rounded shadow-lg text-xs pointer-events-none z-50');
+
+        sceneDots.on('mouseover', (event, d) => {
+            tooltip.classed('hidden', false)
+                .style('left', (event.pageX + 10) + 'px')
+                .style('top', (event.pageY + 10) + 'px')
+                .html(`<strong>${d.title}</strong><br>POV: ${d.pov || 'None'}`);
+        }).on('mouseout', () => tooltip.classed('hidden', true));
+
+    }
+}">
     <div class="flex items-center justify-between">
-        <h2 class="text-2xl font-bold">Plot Timeline</h2>
-        <div class="text-sm text-muted">A sequential view of chapters and scenes</div>
+        <h2 class="text-2xl font-bold">Horizontal Timeline</h2>
+        <a href="/projects/{{ project }}" class="bg-panel border border-border_color rounded px-4 py-2 text-sm font-medium hover:text-accent transition-colors">Back</a>
     </div>
 
-    <div class="relative border-l-2 border-border_color ml-4 pl-8 flex flex-col gap-12">
-        {% for ch in chapters %}
-        <div class="relative">
-            <!-- Chapter Marker -->
-            <div class="absolute -left-[41px] top-0 w-4 h-4 rounded-full bg-accent border-4 border-bg shadow-[0_0_0_2px_var(--border_color)]"></div>
-            
-            <div class="flex flex-col gap-4">
-                <div class="flex items-baseline gap-4">
-                    <h3 class="text-xl font-bold text-text_color">
-                        <a href="/projects/{{ project }}/editor/{{ ch.filename }}" class="hover:text-accent transition-colors">
-                            Chapter {{ ch.chapter_int }}: {{ ch.title }}
-                        </a>
-                    </h3>
-                    <span class="text-xs text-muted uppercase tracking-widest font-bold">{{ ch.status }}</span>
-                </div>
-                
-                <div class="text-sm text-muted bg-panel/50 p-4 rounded-xl border border-border_color italic">
-                    {{ ch.synopsis or "No synopsis available for this chapter." }}
-                </div>
+    <div x-show="loading" class="flex items-center justify-center py-20 text-muted italic">Loading timeline...</div>
 
-                <!-- Scenes under Chapter (T1.4) -->
-                {% if ch.scenes %}
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
-                    {% for sc in ch.scenes %}
-                    <div class="bg-panel border border-border_color rounded-lg p-3 hover:border-accent/30 transition-all">
-                        <div class="flex justify-between items-center mb-1">
-                            <span class="text-[10px] font-bold text-accent uppercase">Scene {{ loop.index }}</span>
-                            <span class="text-[10px] text-muted">{{ sc.word_count }} words</span>
-                        </div>
-                        <div class="text-sm font-semibold mb-2">{{ sc.title or "Untitled Scene" }}</div>
-                        <div class="flex flex-wrap gap-2">
-                             {% if sc.pov %}
-                             <span class="text-[9px] bg-bg px-1.5 py-0.5 rounded text-muted">POV: {{ sc.pov }}</span>
-                             {% endif %}
-                        </div>
-                    </div>
-                    {% endfor %}
-                </div>
-                {% endif %}
-            </div>
-        </div>
-        {% endfor %}
+    <div x-show="!loading" class="bg-panel border border-border_color rounded-xl p-4 overflow-x-auto custom-scrollbar">
+        <svg id="timeline-svg" class="min-w-full"></svg>
     </div>
-</div>
+</section>
 {% endblock %}

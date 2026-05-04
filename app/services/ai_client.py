@@ -1,25 +1,22 @@
 import json
 import asyncio
-import urllib.request
-import urllib.error
-from concurrent.futures import ThreadPoolExecutor
-from typing import Optional, Dict, Any
+import httpx
+from typing import Optional, AsyncGenerator
 
-def _do_generate_ai_content(
+async def generate_ai_content_stream(
     api_key: str,
     base_url: str,
     model: str,
     system_prompt: str,
     user_prompt: str
-) -> Optional[str]:
+) -> AsyncGenerator[str, None]:
     """
-    Sends a request to an OpenAI-compatible API to generate content.
+    Sends a request to an OpenAI-compatible API to generate content with streaming.
     """
     if not api_key:
-        print("API key is missing")
-        return None
+        yield "[Error: API key is missing]"
+        return
 
-    # Standardize the base URL (strip trailing slashes, ensure /chat/completions is appended)
     base_url = base_url.rstrip("/")
     if not base_url.endswith("/chat/completions"):
         url = f"{base_url}/chat/completions"
@@ -38,26 +35,33 @@ def _do_generate_ai_content(
             {"role": "user", "content": user_prompt}
         ],
         "temperature": 0.7,
+        "stream": True
     }
 
     try:
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(data).encode("utf-8"),
-            headers=headers,
-            method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=30) as response:
-            result = json.loads(response.read().decode("utf-8"))
-            return result.get("choices", [{}])[0].get("message", {}).get("content", "")
-    except urllib.error.URLError as e:
-        print(f"Failed to call AI API: {e}")
-        if hasattr(e, 'read'):
-            print(e.read().decode('utf-8'))
-        return None
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            async with client.stream("POST", url, headers=headers, json=data) as response:
+                if response.status_code != 200:
+                    yield f"[Error: API returned {response.status_code}]"
+                    return
+
+                async for line in response.aiter_lines():
+                    if not line.strip():
+                        continue
+                    if line.startswith("data: "):
+                        line = line[6:]
+                    if line == "[DONE]":
+                        break
+                    
+                    try:
+                        chunk = json.loads(line)
+                        content = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                        if content:
+                            yield content
+                    except json.JSONDecodeError:
+                        continue
     except Exception as e:
-        print(f"Unexpected error: {e}")
-        return None
+        yield f"[Error: {str(e)}]"
 
 async def generate_ai_content(
     api_key: str,
@@ -66,14 +70,12 @@ async def generate_ai_content(
     system_prompt: str,
     user_prompt: str
 ) -> Optional[str]:
-    loop = asyncio.get_running_loop()
-    with ThreadPoolExecutor() as pool:
-        return await loop.run_in_executor(
-            pool,
-            _do_generate_ai_content,
-            api_key,
-            base_url,
-            model,
-            system_prompt,
-            user_prompt
-        )
+    """
+    Non-streaming version for backward compatibility or simple tasks.
+    """
+    full_content = ""
+    async for chunk in generate_ai_content_stream(api_key, base_url, model, system_prompt, user_prompt):
+        if chunk.startswith("[Error:"):
+            return None
+        full_content += chunk
+    return full_content

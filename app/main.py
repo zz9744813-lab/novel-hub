@@ -14,12 +14,15 @@ from typing import Any, List, Dict, Tuple
 import markdown
 import yaml
 from dotenv import load_dotenv
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import FastAPI, Form, HTTPException, Request, BackgroundTasks
+from starlette_csrf import CSRFMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.services.ai_client import generate_ai_content
+from app.services.ai_client import generate_ai_content, generate_ai_content_stream
+from app.services.ai_context import build_context
 from app.services.wiki_link import update_entity_refs
+from app.services.markdown_ext import WikiLinkExtension
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -37,8 +40,15 @@ PROJECT_GOAL_WORDS = int(os.getenv("NOVELHUB_PROJECT_GOAL", "100000"))
 
 app = FastAPI(title="Novel Hub")
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
-app.mount("/static", StaticFiles(directory=BASE_DIR / "app" / "static"), name="static")
+app.add_middleware(CSRFMiddleware, secret=SECRET_KEY)
+class CacheStaticFiles(StaticFiles):
+    def is_not_modified(self, response_headers, request_headers) -> bool:
+        response_headers["Cache-Control"] = "public, max-age=31536000"
+        return super().is_not_modified(response_headers, request_headers)
+
+app.mount("/static", CacheStaticFiles(directory=BASE_DIR / "app" / "static"), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "app" / "templates"))
+templates.env.filters["from_json"] = lambda s: json.loads(s or "{}")
 
 def inject_locale(request: Request):
     return get_setting("locale", "zh-CN")
@@ -62,7 +72,7 @@ def safe_slug(value: str, fallback: str = "untitled") -> str:
 def _ensure_under_root(path: Path, root: Path) -> Path:
     resolved = path.resolve()
     root_resolved = root.resolve()
-    if not str(resolved).startswith(str(root_resolved)):
+    if not resolved.is_relative_to(root_resolved):
         raise HTTPException(status_code=400, detail="invalid path")
     return resolved
 
@@ -135,7 +145,7 @@ def init_db() -> None:
                 detail TEXT
             );
 
-            CREATE TABLE IF NOT EXISTS ai_pipelines (
+            CREATE TABLE IF NOT EXISTS ai_pipelines_archived (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 project TEXT NOT NULL,
                 stage TEXT NOT NULL,
@@ -162,6 +172,12 @@ def init_db() -> None:
             );
 
             -- C-Route (v6) Schema
+            CREATE TABLE IF NOT EXISTS consistency_reports (
+                chapter_path TEXT PRIMARY KEY,
+                created_at TEXT,
+                issues TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS entities (
                 id TEXT PRIMARY KEY,
                 project TEXT NOT NULL,
@@ -231,7 +247,8 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 label TEXT,
                 content_hash TEXT,
-                content BLOB
+                content BLOB,
+                protected INTEGER DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_snapshots_chapter ON snapshots(chapter_path, created_at);
             CREATE VIRTUAL TABLE IF NOT EXISTS entity_fts USING fts5(
@@ -393,7 +410,7 @@ def backup_file(path: Path, label: str = "auto") -> None:
 
 def count_words(text: str) -> int:
     cjk = re.findall(r"[\u4e00-\u9fff]", text)
-    latin = re.findall(r"[A-Za-z0-9_]+", text)
+    latin = re.findall(r"[A-Za-z0-9]+", text)
     return len(cjk) + len(latin)
 
 
@@ -518,17 +535,8 @@ def list_chapters(project: str, sync: bool = False) -> list[dict[str, Any]]:
             f = Path(r["path"])
             item = dict(r)
             item["filename"] = f.name
+            item["modified"] = datetime.fromtimestamp(r["mtime"], tz=timezone.utc)
             rows.append(item)
-                "volume": r["volume"],
-                "word_count": r["word_count"],
-                "modified": datetime.fromtimestamp(r["mtime"], tz=timezone.utc),
-                "meta": {
-                    "title": r["title"],
-                    "chapter": r["chapter"],
-                    "status": r["status"],
-                    "volume": r["volume"],
-                }
-            })
     return rows
 
 
@@ -793,6 +801,31 @@ def dashboard(request: Request) -> Response:
     # Better logic for quick project: the project with the most recently modified chapter
     quick_project = chapters[0]["project"] if chapters else (projects[0]["name"] if projects else None)
 
+
+    # T3.5 Upgrade dashboard data
+    with get_conn() as conn:
+        # Top 10 characters by appearance
+        top_characters = [dict(r) for r in conn.execute("""
+            SELECT e.name, COUNT(er.id) as count
+            FROM entities e
+            JOIN entity_refs er ON e.id = er.entity_id
+            WHERE e.kind = 'character'
+            GROUP BY e.id ORDER BY count DESC LIMIT 10
+        """).fetchall()]
+        
+        # Thread stats
+        thread_info = conn.execute("""
+            SELECT 
+                COUNT(*) as total,
+                COUNT(CASE WHEN properties LIKE '%"status": "open"%' OR properties NOT LIKE '%"status":%' THEN 1 END) as open_count
+            FROM entities WHERE kind = 'thread'
+        """).fetchone()
+        
+        # POV distribution
+        pov_stats = [dict(r) for r in conn.execute("""
+            SELECT pov, COUNT(*) as count FROM scenes GROUP BY pov ORDER BY count DESC
+        """).fetchall()]
+
     return templates.TemplateResponse(
         "dashboard.html",
         {
@@ -804,6 +837,9 @@ def dashboard(request: Request) -> Response:
             "trend": trend_data,
             "daily_goal": DAILY_GOAL_WORDS,
             "quick_project": quick_project,
+            "top_characters": top_characters,
+            "thread_stats": dict(thread_info) if thread_info else {"total": 0, "open_count": 0},
+            "pov_stats": pov_stats
         },
     )
 
@@ -845,159 +881,6 @@ def projects_page(request: Request) -> Response:
     if not request.session.get("authed"):
         return RedirectResponse("/login", status_code=303)
     return templates.TemplateResponse("projects.html", {"request": request, "projects": scan_projects()})
-
-@app.get("/ai-pipeline", response_class=HTMLResponse)
-def ai_pipeline_global(request: Request) -> Response:
-    if not request.session.get("authed"):
-        return RedirectResponse("/login", status_code=303)
-    return templates.TemplateResponse("ai/pipeline.html", {"request": request, "projects": scan_projects(), "project": None})
-
-@app.get("/ai-pipeline/{project}", response_class=HTMLResponse)
-def ai_pipeline_project(request: Request, project: str) -> Response:
-    if not request.session.get("authed"):
-        return RedirectResponse("/login", status_code=303)
-    safe_project = safe_slug(project, fallback="project")
-
-    # Load pipeline data from DB
-    stages_data = {}
-    with get_conn() as conn:
-        rows = conn.execute("SELECT stage, data FROM ai_pipelines WHERE project = ?", (safe_project,)).fetchall()
-        for row in rows:
-            try:
-                stages_data[row["stage"]] = json.loads(row["data"])
-            except:
-                pass
-
-    return templates.TemplateResponse("ai/pipeline.html", {
-        "request": request,
-        "projects": scan_projects(),
-        "project": safe_project,
-        "stages_data": stages_data
-    })
-
-@app.post("/ai-pipeline/{project}/save")
-async def ai_pipeline_save(request: Request, project: str) -> Response:
-    require_auth(request)
-    safe_project = safe_slug(project, fallback="project")
-    data = await request.json()
-
-    with get_conn() as conn:
-        for stage_data in data:
-            stage_id = stage_data.get("id")
-            if not stage_id: continue
-
-            # Delete old data for this stage
-            conn.execute("DELETE FROM ai_pipelines WHERE project = ? AND stage = ?", (safe_project, stage_id))
-
-            # Insert new data
-            conn.execute(
-                "INSERT INTO ai_pipelines(project, stage, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                (safe_project, stage_id, json.dumps(stage_data), utc_now().isoformat(), utc_now().isoformat())
-            )
-
-    return JSONResponse(content={"status": "ok"})
-
-@app.post("/ai-pipeline/{project}/apply")
-async def ai_pipeline_apply(request: Request, project: str) -> Response:
-    require_auth(request)
-    safe_project = safe_slug(project, fallback="project")
-    data = await request.json()
-    stage = data.get("stage", "")
-    title = data.get("title", "AI 节点")
-    content = data.get("content", "")
-
-    if stage in ["chapters", "draft"]:
-        existing = list_chapters(safe_project)
-        idx = len(existing) + 1
-        filename = f"{idx:05d}-{safe_slug(title, fallback='chapter')}"
-        path = chapter_path(safe_project, filename)
-        frontmatter = {
-            "title": title,
-            "chapter": str(idx),
-            "status": "draft",
-            "volume": "",
-            "tags": [],
-            "synopsis": "",
-            "notes": "Generated by AI Pipeline",
-            "pov": "",
-            "characters": [],
-            "locations": [],
-            "warnings": [],
-            "draft_version": "v1",
-        }
-        write_markdown(path, frontmatter, content)
-        log_operation("create_chapter_from_ai", str(path))
-        return JSONResponse(content={"status": "ok", "redirect_url": f"/projects/{safe_project}/editor/{path.name}"})
-
-    elif stage in ["world", "outline"]:
-        folder = "characters" if "角色" in title or "主角" in title or stage == "outline" else "world"
-        p = project_path(safe_project) / folder / (safe_slug(title, fallback="note") + ".md")
-        p = _ensure_under_root(p, VAULT_ROOT)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        # We write simply without heavy frontmatter for notes for now
-        write_markdown(p, {"title": title, "tags": ["ai-generated"]}, content)
-        log_operation("create_note_from_ai", str(p))
-        return JSONResponse(content={"status": "ok", "redirect_url": f"/projects/{safe_project}/{folder}"})
-
-    return JSONResponse(status_code=400, content={"error": "Unknown stage"})
-
-@app.post("/ai-pipeline/select-project")
-def ai_pipeline_select(request: Request, project: str = Form(...)) -> Response:
-    require_auth(request)
-    safe_project = safe_slug(project, fallback="project")
-    return RedirectResponse(url=f"/ai-pipeline/{safe_project}", status_code=303)
-
-@app.post("/ai-pipeline/{project}/generate")
-async def ai_pipeline_generate(request: Request, project: str) -> Response:
-    require_auth(request)
-    data = await request.json()
-    stage = data.get("stage", "")
-    context = data.get("context", "")
-
-    api_key = get_setting("ai_api_key", "")
-    base_url = get_setting("ai_base_url", "https://api.openai.com/v1")
-    model = get_setting("ai_model", "gpt-3.5-turbo")
-
-    if not api_key:
-        return JSONResponse(status_code=400, content={"error": "AI API Key 未配置，请前往设置页面配置。"})
-
-    system_prompt = "你是一个专业的网文小说创作助手。你必须严格返回一段合法的 JSON 数组，其中每个元素是一个对象，包含 'title' 和 'content' 两个字符串字段。不要返回任何其他内容（不要用 Markdown 代码块包裹，也不要有任何前后缀文字）。"
-
-    if stage == "world":
-        system_prompt += "请根据用户的初步想法，生成几个核心角色和世界观设定的卡片节点。"
-    elif stage == "outline":
-        system_prompt += "请根据世界观和角色设定，生成故事的分卷大纲节点。"
-    elif stage == "chapters":
-        system_prompt += "请根据分卷大纲，将其拆解为具体的章节细纲节点。"
-    elif stage == "draft":
-        system_prompt += "请根据章节细纲，扩写出正文草稿节点（按段落或场景拆分）。"
-
-    user_prompt = f"当前上下文信息：\n{context}\n\n请为我生成下一步的创作内容，返回格式必须是类似 [{{\"title\": \"标题\", \"content\": \"详细内容\"}}] 的 JSON 数组。"
-
-    content = await generate_ai_content(api_key, base_url, model, system_prompt, user_prompt)
-
-    if not content:
-        return JSONResponse(status_code=500, content={"error": "AI 生成失败，请检查配置或网络。"})
-
-    try:
-        # Strip potential markdown formatting that some models stubbornly add
-        content = content.strip()
-        if content.startswith("```json"):
-            content = content[7:]
-        if content.startswith("```"):
-            content = content[3:]
-        if content.endswith("```"):
-            content = content[:-3]
-
-        parsed_cards = json.loads(content.strip())
-        if not isinstance(parsed_cards, list):
-            raise ValueError("Result is not a list")
-    except Exception as e:
-        # Fallback to single card if parsing fails
-        parsed_cards = [{"title": "AI 生成内容", "content": content}]
-
-    return JSONResponse(content={"result": parsed_cards})
-
 
 @app.post("/projects/new", response_class=HTMLResponse)
 def create_project(request: Request, name: str = Form(...)) -> Response:
@@ -1083,6 +966,21 @@ def project_detail(request: Request, project: str, status: str | None = None) ->
     if status and status in STATUS_ORDER:
         chapters = [c for c in chapters if c["status"] == status]
     recent = sorted(chapters, key=lambda x: x["modified"], reverse=True)[:5]
+
+    # T1.6: Volume sync
+    p_path = project_path(safe_project) / "chapters"
+    volumes = []
+    if p_path.exists():
+        physical_volumes = [d.name for d in p_path.iterdir() if d.is_dir() and not d.name.startswith(".")]
+        with get_conn() as conn:
+            for slug in physical_volumes:
+                conn.execute(
+                    "INSERT OR IGNORE INTO volumes (project, slug, title, seq) VALUES (?, ?, ?, ?)",
+                    (safe_project, slug, slug, 0)
+                )
+            rows = conn.execute("SELECT * FROM volumes WHERE project=? ORDER BY seq", (safe_project,)).fetchall()
+            volumes = [dict(r) for r in rows]
+
     return templates.TemplateResponse(
         "project_detail.html",
         {
@@ -1091,6 +989,7 @@ def project_detail(request: Request, project: str, status: str | None = None) ->
             "project_info": project_info,
             "chapters": chapters,
             "recent": recent,
+            "volumes": volumes,
             "status_filter": status or "all",
             "status_options": STATUS_ORDER,
         },
@@ -1256,6 +1155,7 @@ def save_chapter(
     request: Request,
     project: str,
     filename: str,
+    background_tasks: BackgroundTasks,
     title: str = Form(""),
     chapter: str = Form(""),
     status: str = Form("draft"),
@@ -1269,7 +1169,7 @@ def save_chapter(
     warnings: str = Form(""),
     draft_version: str = Form(""),
     body: str = Form(""),
-    _loaded_mtime: str = Form(""),
+    loaded_mtime: str = Form(""),
 ) -> Response:
     require_auth(request)
     safe_project = safe_slug(project, fallback="project")
@@ -1278,9 +1178,9 @@ def save_chapter(
         raise HTTPException(status_code=404, detail="chapter not found")
 
     # M11: Conflict detection
-    if _loaded_mtime:
+    if loaded_mtime:
         try:
-            loaded_mtime = float(_loaded_mtime)
+            loaded_mtime = float(loaded_mtime)
             current_mtime = path.stat().st_mtime
             if abs(current_mtime - loaded_mtime) > 0.5:
                 return templates.TemplateResponse(
@@ -1397,7 +1297,8 @@ def update_project_meta(
 @app.post("/projects/{project}/preview", response_class=HTMLResponse)
 def preview_markdown(request: Request, body: str = Form("")) -> Response:
     require_auth(request)
-    html = markdown.markdown(body, extensions=["fenced_code", "tables"])
+    ext = WikiLinkExtension(project=safe_project, db_path=str(DB_PATH))
+    html = markdown.markdown(body, extensions=["fenced_code", "tables", ext])
     return templates.TemplateResponse("_preview.html", {"request": request, "html": html})
 
 
@@ -1468,6 +1369,7 @@ def world_page(request: Request, project: str) -> Response:
 
 @app.get("/projects/{project}/notes/{folder}/{filename}", response_class=HTMLResponse)
 def note_preview(request: Request, project: str, folder: str, filename: str) -> Response:
+    safe_project = safe_slug(project, fallback="project")
     if not request.session.get("authed"):
         return RedirectResponse("/login", status_code=303)
     if folder not in {"characters", "world"}:
@@ -1478,7 +1380,8 @@ def note_preview(request: Request, project: str, folder: str, filename: str) -> 
     if not p.exists():
         raise HTTPException(status_code=404, detail="not found")
     _, body = read_markdown(p)
-    html = markdown.markdown(body, extensions=["fenced_code", "tables"])
+    ext = WikiLinkExtension(project=safe_project, db_path=str(DB_PATH))
+    html = markdown.markdown(body, extensions=["fenced_code", "tables", ext])
     return templates.TemplateResponse("_note_preview.html", {"request": request, "title": p.stem, "html": html})
 
 @app.delete("/projects/{project}/notes/{folder}/{filename}")
@@ -1720,6 +1623,268 @@ def reindex_all(request: Request) -> Response:
 
 
 # --- C-Route (v6) API Routes ---
+@app.post("/api/chapters/snapshot")
+async def manual_snapshot(request: Request) -> Response:
+    require_auth(request)
+    data = await request.json()
+    project = data.get("project")
+    filename = data.get("filename")
+    label = data.get("label", "manual")
+    
+    safe_project = safe_slug(project)
+    path = chapter_path(safe_project, filename)
+    if not path.exists(): raise HTTPException(404)
+    
+    content = path.read_text(encoding="utf-8")
+    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    compressed = gzip.compress(content.encode("utf-8"))
+    
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO snapshots(chapter_path, created_at, label, content_hash, content, protected) VALUES (?, ?, ?, ?, ?, ?)",
+            (str(path), utc_now().isoformat(), label, content_hash, compressed, 1)
+        )
+    return JSONResponse({"status": "ok"})
+
+@app.get("/projects/{project}/snapshots/{snap_id}/diff")
+def view_snapshot_diff(request: Request, project: str, snap_id: int) -> Response:
+    require_auth(request)
+    with get_conn() as conn:
+        snap = conn.execute("SELECT * FROM snapshots WHERE id = ?", (snap_id,)).fetchone()
+        if not snap: raise HTTPException(404)
+        
+    path = Path(snap["chapter_path"])
+    current_text = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    backup_text = gzip.decompress(snap["content"]).decode("utf-8").splitlines()
+    
+    import difflib
+    diff = list(difflib.unified_diff(backup_text, current_text, fromfile=f"Snapshot ({snap['label']})", tofile="Current"))
+    return templates.TemplateResponse("_diff.html", {"request": request, "diff": diff, "snap_id": snap_id})
+
+async def run_consistency_check(project: str, chapter_path: str):
+    """Background task to check consistency for a chapter."""
+    try:
+        api_key = get_setting("ai_api_key")
+        base_url = get_setting("ai_base_url")
+        model = get_setting("ai_model")
+        if not api_key: return
+
+        # Load chapter
+        from app.main import read_markdown
+        path = Path(chapter_path)
+        if not path.exists(): return
+        fm, body = read_markdown(path)
+
+        # Get context
+        from app.services.ai_context import build_context
+        context = build_context(str(DB_PATH), project, chapter_path, "check")
+
+        prompt = f"""Context:
+{context}
+
+Chapter text to check:
+{body}
+
+Please list any plot inconsistencies, out-of-character behaviors, or timeline errors you find. Return as a JSON list of strings. If none, return [].
+"""
+        from app.services.ai_client import generate_ai_content
+        response = await generate_ai_content(api_key, base_url, model, "You are a consistency checker. Return ONLY valid JSON array.", prompt)
+        
+        if response:
+            # Try to parse JSON
+            import json
+            try:
+                # Basic cleanup
+                clean = response.strip()
+                if clean.startswith("```json"): clean = clean[7:]
+                if clean.endswith("```"): clean = clean[:-3]
+                issues = json.loads(clean.strip())
+                if isinstance(issues, list):
+                    with get_conn() as conn:
+                        conn.execute(
+                            """INSERT INTO consistency_reports (chapter_path, created_at, issues)
+                               VALUES (?, ?, ?)
+                               ON CONFLICT(chapter_path) DO UPDATE SET created_at=excluded.created_at, issues=excluded.issues""",
+                            (chapter_path, utc_now().isoformat(), json.dumps(issues))
+                        )
+            except Exception as e:
+                print(f"Failed to parse consistency JSON: {e}")
+    except Exception as e:
+        print(f"Consistency check error: {e}")
+
+@app.post("/api/projects/{project}/ai/outline/volume")
+async def ai_outline_volume(request: Request, project: str) -> Response:
+    """T4.3 AI generate volume outline."""
+    require_auth(request)
+    data = await request.json()
+    api_key = get_setting("ai_api_key")
+    if not api_key: raise HTTPException(400, "AI not configured")
+    
+    from app.services.ai_context import build_context
+    from app.services.ai_client import generate_ai_content
+    context = build_context(str(DB_PATH), project, None, "outline")
+    prompt = f"Based on the project context:\n{context}\nPlease generate a 3-5 paragraph synopsis for a new volume named '{data.get('slug')}'. Just return the synopsis text."
+    
+    resp = await generate_ai_content(api_key, get_setting("ai_base_url"), get_setting("ai_model"), "You are an outline planner.", prompt)
+    if resp:
+        with get_conn() as conn:
+            conn.execute("UPDATE volumes SET synopsis = ? WHERE project = ? AND slug = ?", (resp.strip(), project, data.get("slug")))
+        return JSONResponse({"status": "ok", "synopsis": resp.strip()})
+    return JSONResponse({"status": "error"})
+
+@app.post("/api/projects/{project}/ai/outline/chapter")
+async def ai_outline_chapter(request: Request, project: str) -> Response:
+    """T4.3 AI split volume into chapters."""
+    require_auth(request)
+    return JSONResponse({"status": "ok", "message": "Not fully implemented due to complex file creation in batch."})
+
+@app.get("/projects/{project}/entities/{ent_id}/arc", response_class=HTMLResponse)
+def entity_arc_page(request: Request, project: str, ent_id: str) -> Response:
+    require_auth(request)
+    with get_conn() as conn:
+        entity = conn.execute("SELECT * FROM entities WHERE id=?", (ent_id,)).fetchone()
+        if not entity: raise HTTPException(404)
+        
+        # Aggregate data for arc
+        # 1. Appearance density by chapter
+        appearances = conn.execute("""
+            SELECT fi.chapter_int, COUNT(er.id) as count
+            FROM file_index fi
+            LEFT JOIN entity_refs er ON fi.path = er.chapter_path AND er.entity_id = ?
+            WHERE fi.project = ?
+            GROUP BY fi.chapter_int
+            ORDER BY fi.chapter_int
+        """, (ent_id, project)).fetchall()
+        
+        # 2. Relation changes (simplified: just list relations involving this entity)
+        relations = conn.execute("""
+            SELECT er.*, e.name as target_name 
+            FROM entity_relations er
+            JOIN entities e ON er.target_id = e.id
+            WHERE source_id = ?
+        """, (ent_id,)).fetchall()
+
+    return templates.TemplateResponse(
+        "entity_arc.html", 
+        {
+            "request": request, 
+            "project": project, 
+            "entity": dict(entity),
+            "appearances": [dict(a) for a in appearances],
+            "relations": [dict(r) for r in relations]
+        }
+    )
+
+@app.get("/api/projects/{project}/ai/generate")
+async def api_ai_generate(
+    request: Request, 
+    project: str, 
+    mode: str = "continue",
+    chapter: str = None,
+    text: str = ""
+) -> Response:
+    require_auth(request)
+    
+    # Get settings
+    api_key = get_setting("ai_api_key")
+    base_url = get_setting("ai_base_url")
+    model = get_setting("ai_model")
+    
+    if not api_key:
+        return JSONResponse({"status": "error", "detail": "AI API Key not set"}, status_code=400)
+
+    # Build Context
+    safe_project = safe_slug(project)
+    ch_path = None
+    if chapter:
+        ch_path = str(chapter_path(safe_project, chapter))
+    
+    full_context = build_context(str(DB_PATH), safe_project, ch_path, mode)
+    
+    system_prompt = f"""You are a professional creative writing assistant.
+Context of the novel:
+{full_context}
+
+Mode: {mode}
+Instructions:
+- If 'continue', write the next few paragraphs naturally.
+- If 'rewrite', polish the provided text.
+- If 'check', find inconsistencies or plot holes.
+- If 'echo', suggest how this chapter can reference previous setup/threads.
+- Stay consistent with character personalities and world settings.
+- Write in the same language as the context (likely Chinese).
+"""
+
+    user_prompt = text or "Please continue the story."
+
+    async def event_generator():
+        async for chunk in generate_ai_content_stream(api_key, base_url, model, system_prompt, user_prompt):
+            yield f"data: {json.dumps({'content': chunk})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    from fastapi.responses import StreamingResponse
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+@app.get("/projects/{project}/threads-board", response_class=HTMLResponse)
+def threads_board_page(request: Request, project: str) -> Response:
+    require_auth(request)
+    return templates.TemplateResponse("threads_board.html", {"request": request, "project": project})
+
+@app.get("/projects/{project}/outline", response_class=HTMLResponse)
+def project_outline_page(request: Request, project: str) -> Response:
+    require_auth(request)
+    return templates.TemplateResponse("outline.html", {"request": request, "project": project})
+
+@app.put("/api/projects/{project}/volumes/{slug}")
+async def api_update_volume(request: Request, project: str, slug: str) -> Response:
+    require_auth(request)
+    data = await request.json()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO volumes (project, slug, title, seq, synopsis, target_words)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(project, slug) DO UPDATE SET
+               title=excluded.title, seq=excluded.seq, synopsis=excluded.synopsis, target_words=excluded.target_words""",
+            (project, slug, data.get("title"), data.get("seq", 0), data.get("synopsis", ""), data.get("target_words", 0))
+        )
+    return JSONResponse(content={"status": "ok"})
+
+@app.get("/api/projects/{project}/timeline")
+def api_get_timeline(request: Request, project: str, lane: str = None) -> Response:
+    require_auth(request)
+    with get_conn() as conn:
+        chapters = conn.execute("SELECT path, title, chapter_int, volume FROM file_index WHERE project=? ORDER BY chapter_int", (project,)).fetchall()
+        scenes = conn.execute("SELECT id, chapter_path, seq, title, pov, location_id FROM scenes WHERE project=? ORDER BY chapter_path, seq", (project,)).fetchall()
+        # Only refs for entities in this project
+        refs = conn.execute("""
+            SELECT er.*, e.name as entity_name, e.kind as entity_kind 
+            FROM entity_refs er
+            JOIN entities e ON er.entity_id = e.id
+            WHERE e.project = ?
+        """, (project,)).fetchall()
+        
+        volumes = conn.execute("SELECT * FROM volumes WHERE project = ? ORDER BY seq", (project,)).fetchall()
+
+        return JSONResponse(content={
+            "status": "ok",
+            "volumes": [dict(v) for v in volumes],
+            "chapters": [dict(c) for c in chapters],
+            "scenes": [dict(s) for s in scenes],
+            "entity_refs": [dict(r) for r in refs]
+        })
+
+@app.get("/api/entities/{ent_id}/appearances")
+def api_get_entity_appearances(request: Request, ent_id: str) -> Response:
+    require_auth(request)
+    with get_conn() as conn:
+        appearances = conn.execute("""
+            SELECT er.*, fi.title as chapter_title 
+            FROM entity_refs er
+            LEFT JOIN file_index fi ON er.chapter_path = fi.path
+            WHERE er.entity_id = ?
+        """, (ent_id,)).fetchall()
+        return JSONResponse(content={"status": "ok", "appearances": [dict(a) for a in appearances]})
+
 
 @app.get("/api/entities")
 def api_list_entities(request: Request, project: str, kind: str = None, q: str = None) -> Response:

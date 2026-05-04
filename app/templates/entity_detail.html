@@ -46,9 +46,51 @@
 
                     <div class="flex justify-end gap-3 mt-2">
                         <button type="button" onclick="deleteEntity()" class="text-xs text-red-500 hover:bg-red-500/10 px-3 py-1.5 rounded transition-colors">Delete</button>
+                        <a href="/projects/{{ project }}/entities/{{ entity.id }}/arc" class="text-xs bg-panel border border-border_color px-3 py-1.5 rounded hover:text-accent transition-colors flex items-center gap-1">Role Arc</a>
+                        
+                        <label class="flex items-center gap-2 text-xs text-muted cursor-pointer">
+                            <input type="checkbox" id="cascade-rename" class="rounded border-border_color text-accent focus:ring-accent">
+                            Cascade rename in chapters
+                        </label>
                         <button type="button" onclick="saveEntity()" class="bg-accent text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:brightness-110 transition-all">Save Changes</button>
+
                     </div>
                 </form>
+            </div>
+
+            
+            <!-- T2.5 Structured Properties -->
+            <div class="bg-panel border border-border_color rounded-xl p-6 shadow-sm" x-data="{ kind: '{{ entity.kind }}' }" @change="kind = $event.target.name === 'kind' ? $event.target.value : kind">
+                <h3 class="text-sm font-semibold text-muted uppercase tracking-wider mb-4">Properties (Structured)</h3>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <!-- Character Fields -->
+                    <template x-if="kind === 'character'">
+                        <div class="contents">
+                            {% set p = entity.properties|from_json %}
+                            <label class="flex flex-col gap-1 text-xs text-muted">Gender <input name="gender" data-prop value="{{ p.gender }}" class="bg-bg border border-border_color rounded px-2 py-1.5 text-sm"></label>
+                            <label class="flex flex-col gap-1 text-xs text-muted">Age <input name="age" data-prop value="{{ p.age }}" class="bg-bg border border-border_color rounded px-2 py-1.5 text-sm"></label>
+                            <label class="flex flex-col gap-1 text-xs text-muted">MBTI <input name="mbti" data-prop value="{{ p.mbti }}" class="bg-bg border border-border_color rounded px-2 py-1.5 text-sm"></label>
+                            <label class="flex flex-col gap-1 text-xs text-muted">Appearance <textarea name="appearance" data-prop class="bg-bg border border-border_color rounded px-2 py-1.5 text-sm">{{ p.appearance }}</textarea></label>
+                            <label class="flex flex-col gap-1 text-xs text-muted">Personality <textarea name="personality" data-prop class="bg-bg border border-border_color rounded px-2 py-1.5 text-sm">{{ p.personality }}</textarea></label>
+                        </div>
+                    </template>
+                    
+                    <!-- Thread Fields -->
+                    <template x-if="kind === 'thread'">
+                        <div class="contents">
+                            {% set p = entity.properties|from_json %}
+                            <label class="flex flex-col gap-1 text-xs text-muted">Status
+                                <select name="status" data-prop class="bg-bg border border-border_color rounded px-2 py-1.5 text-sm">
+                                    <option value="open" {% if p.status == 'open' %}selected{% endif %}>Open</option>
+                                    <option value="resolving" {% if p.status == 'resolving' %}selected{% endif %}>Resolving</option>
+                                    <option value="closed" {% if p.status == 'closed' %}selected{% endif %}>Closed</option>
+                                </select>
+                            </label>
+                            <label class="flex flex-col gap-1 text-xs text-muted">Impact Level <input name="impact_level" data-prop value="{{ p.impact_level }}" class="bg-bg border border-border_color rounded px-2 py-1.5 text-sm"></label>
+                        </div>
+                    </template>
+                </div>
             </div>
 
             <!-- Description Editor (T2.5) -->
@@ -90,7 +132,7 @@
 
             <!-- Appearances -->
             <div class="bg-panel border border-border_color rounded-xl p-4 shadow-sm">
-                <h4 class="text-xs font-semibold text-muted uppercase mb-3">Appearances (Entity Refs)</h4>
+                <h4 class="text-xs font-semibold text-muted uppercase mb-3 flex items-center justify-between">Appearances (Entity Refs) <button onclick="bulkBind()" class="text-accent hover:underline text-[10px] normal-case">Bulk Bind All</button></h4>
                 <div class="flex flex-col gap-2 max-h-[400px] overflow-y-auto pr-1">
                     {% for ref in appearances %}
                     <a href="/projects/{{ project }}/chapters/{{ ref.chapter_path|basename }}?pos={{ ref.char_offset }}" 
@@ -120,6 +162,54 @@
     "codemirror": "https://esm.sh/codemirror@6.0.1"
   }
 }
+
+window.bulkBind = async () => {
+    if (!confirm('This will scan all chapters and bind unbound mentions of this entity. Continue?')) return;
+    try {
+        const res = await fetch(`/api/projects/{{ project }}/bulk-bind-entities`, { method: 'POST' });
+        const data = await res.json();
+        if (data.status === 'ok') {
+            alert(`Updated ${data.updated_chapters} chapters`);
+            window.location.reload();
+        }
+    } catch (err) { console.error(err); }
+};
+
+// Updated saveEntity to handle cascade
+const originalSaveEntity = window.saveEntity;
+window.saveEntity = async () => {
+    const form = document.getElementById('entity-form');
+    const formData = new FormData(form);
+    const cascade = document.getElementById('cascade-rename').checked;
+    
+    // T2.5: Collect properties from structured form
+    const properties = {};
+    document.querySelectorAll('[data-prop]').forEach(el => {
+        properties[el.name] = el.value;
+    });
+
+    const data = {
+        name: formData.get('name'),
+        kind: formData.get('kind'),
+        aliases: formData.get('aliases').split(',').map(s => s.trim()).filter(s => s),
+        properties: properties,
+        md_content: view.state.doc.toString(),
+        cascade: cascade
+    };
+
+    try {
+        const res = await fetch(`/api/entities/{{ entity.id }}`, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)
+        });
+        if (res.ok) window.NovelHubUI?.showToast(cascade ? 'Entity saved and cascaded' : 'Entity saved');
+        else alert('Failed to save');
+    } catch (err) {
+        console.error(err);
+    }
+};
+
 </script>
 <script type="module">
 import { EditorView, basicSetup } from 'codemirror';
@@ -147,7 +237,8 @@ const view = new EditorView({
     parent: wrapper
 });
 
-window.saveEntity = async () => {
+/* Old saveEntity replaced by injection */
+// window.saveEntity = async () => {
     const form = document.getElementById('entity-form');
     const formData = new FormData(form);
     const data = {
@@ -175,5 +266,53 @@ window.deleteEntity = async () => {
     const res = await fetch(`/api/entities/{{ entity.id }}`, { method: 'DELETE' });
     if (res.ok) window.location.href = `/projects/{{ project }}/entities`;
 };
+
+window.bulkBind = async () => {
+    if (!confirm('This will scan all chapters and bind unbound mentions of this entity. Continue?')) return;
+    try {
+        const res = await fetch(`/api/projects/{{ project }}/bulk-bind-entities`, { method: 'POST' });
+        const data = await res.json();
+        if (data.status === 'ok') {
+            alert(`Updated ${data.updated_chapters} chapters`);
+            window.location.reload();
+        }
+    } catch (err) { console.error(err); }
+};
+
+// Updated saveEntity to handle cascade
+const originalSaveEntity = window.saveEntity;
+window.saveEntity = async () => {
+    const form = document.getElementById('entity-form');
+    const formData = new FormData(form);
+    const cascade = document.getElementById('cascade-rename').checked;
+    
+    // T2.5: Collect properties from structured form
+    const properties = {};
+    document.querySelectorAll('[data-prop]').forEach(el => {
+        properties[el.name] = el.value;
+    });
+
+    const data = {
+        name: formData.get('name'),
+        kind: formData.get('kind'),
+        aliases: formData.get('aliases').split(',').map(s => s.trim()).filter(s => s),
+        properties: properties,
+        md_content: view.state.doc.toString(),
+        cascade: cascade
+    };
+
+    try {
+        const res = await fetch(`/api/entities/{{ entity.id }}`, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)
+        });
+        if (res.ok) window.NovelHubUI?.showToast(cascade ? 'Entity saved and cascaded' : 'Entity saved');
+        else alert('Failed to save');
+    } catch (err) {
+        console.error(err);
+    }
+};
+
 </script>
 {% endblock %}

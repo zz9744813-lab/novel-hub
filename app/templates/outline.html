@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Outline - {{ project }} 路 Novel Hub{% endblock %}
+{% block content %}
+<section class="flex flex-col gap-6" x-data="{ 
+    data: {volumes: [], chapters: [], scenes: []},
+    loading: true,
+    async init() {
+        const res = await fetch(`/api/projects/{{ project }}/outline`);
+        this.data = await res.json();
+        this.loading = false;
+    }
+}">
+    <div class="flex items-center justify-between">
+        <h2 class="text-2xl font-bold flex items-center gap-2">
+            <svg class="w-6 h-6 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h7"></path></svg>
+            {{ project }} Outline
+        </h2>
+        <a href="/projects/{{ project }}" class="bg-panel border border-border_color rounded px-4 py-2 text-sm font-medium hover:text-accent transition-colors">Back to Project Detail</a>
+    </div>
+
+    <div x-show="loading" class="flex items-center justify-center py-20 text-muted italic">Loading outline...</div>
+
+    <div x-show="!loading" class="grid grid-cols-4 gap-4 bg-panel border border-border_color rounded-xl p-4 min-h-[600px] overflow-x-auto">
+        <!-- Project/Volumes -->
+        <div class="flex flex-col gap-2">
+            <h3 class="text-xs font-bold text-muted uppercase tracking-widest px-2 mb-2">Volumes</h3>
+            <div class="flex flex-col gap-1">
+                <template x-for="v in data.volumes" :key="v.slug">
+                    <div class="p-3 bg-bg border border-border_color rounded hover:border-accent transition-all group relative">
+                        <div class="font-bold text-sm" x-text="v.title"></div>
+                        <div class="text-[10px] text-muted uppercase" x-text="v.slug"></div>
+                        <div class="mt-2 text-xs italic text-muted max-h-16 overflow-y-auto custom-scrollbar" x-text="v.synopsis || 'No synopsis'"></div>
+                        <button class="absolute top-2 right-2 text-[10px] bg-accent/10 text-accent px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity" 
+                                @click.stop="
+                                    $el.textContent='...'; 
+                                    fetch(`/api/projects/{{ project }}/ai/outline/volume`, {
+                                        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({slug: v.slug})
+                                    }).then(r=>r.json()).then(d=>{if(d.status==='ok'){v.synopsis=d.synopsis; $el.textContent='AI';}else{alert('Error');$el.textContent='AI';}})
+                                ">AI</button>
+                    </div>
+                </template>
+                <div class="p-3 bg-bg/50 border border-dashed border-border_color rounded text-xs text-muted text-center italic">Root (No Volume)</div>
+            </div>
+        </div>
+
+        <!-- Chapters -->
+        <div class="flex flex-col gap-2 col-span-2">
+            <h3 class="text-xs font-bold text-muted uppercase tracking-widest px-2 mb-2">Chapters</h3>
+            <div class="grid grid-cols-1 gap-2">
+                                <template x-for="c in data.chapters" :key="c.path">
+                    <div class="p-3 bg-bg border border-border_color rounded hover:border-accent transition-all group flex flex-col gap-2 relative">
+                        <button class="absolute top-2 right-2 text-[10px] bg-accent/10 text-accent px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity" 
+                                @click.stop="alert('To be implemented: AI Chapter to Scenes')">AI Split</button>
+                        <div class="flex items-center justify-between pr-12">
+                            <a :href="`/projects/{{ project }}/editor/${c.path.split(/[\/]/).pop()}`" class="font-bold text-sm hover:text-accent transition-colors" x-text="c.title"></a>
+                        </div>
+                        <div class="flex items-center gap-3 text-[10px] text-muted">
+                            <span class="px-1.5 py-0.5 rounded border border-border_color" x-text="c.status"></span>
+                            <span x-text="`Ch ${c.chapter || '?'}`"></span>
+                            <span x-text="`${c.word_count || 0} words`"></span>
+                        </div>
+                        <div class="h-1 rounded-full bg-border_color overflow-hidden">
+                            <div class="h-full bg-accent" :style="`width: ${Math.random()*100}%`"></div>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+
+        <!-- Scenes -->
+        <div class="flex flex-col gap-2">
+            <h3 class="text-xs font-bold text-muted uppercase tracking-widest px-2 mb-2">Scenes</h3>
+            <div class="flex flex-col gap-1">
+                <template x-for="s in data.scenes" :key="s.id">
+                    <div class="p-2 bg-bg border border-border_color rounded text-[11px] hover:border-accent transition-all cursor-pointer">
+                        <div class="font-medium mb-1" x-text="s.title"></div>
+                        <div class="flex items-center justify-between text-[9px] text-muted italic">
+                            <span x-text="s.pov || 'No POV'"></span>
+                            <span x-text="s.status || 'draft'"></span>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}

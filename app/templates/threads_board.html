@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Threads Kanban - {{ project }} 路 Novel Hub{% endblock %}
+{% block content %}
+<section class="flex flex-col gap-6" x-data="{ 
+    board: {open: [], resolving: [], closed: []},
+    loading: true,
+    async init() {
+        const res = await fetch(`/api/projects/{{ project }}/threads-board`);
+        const data = await res.json();
+        this.board = data.board;
+        this.loading = false;
+        this.$nextTick(() => this.initSortable());
+    },
+    initSortable() {
+        ['open', 'resolving', 'closed'].forEach(status => {
+            new Sortable(document.getElementById(`lane-${status}`), {
+                group: 'threads',
+                animation: 150,
+                onEnd: async (evt) => {
+                    const id = evt.item.dataset.id;
+                    const newStatus = evt.to.id.replace('lane-', '');
+                    // Update entity status
+                    const res = await fetch(`/api/entities/${id}`);
+                    const entData = await res.json();
+                    const entity = entData.entity;
+                    const props = JSON.parse(entity.properties || '{}');
+                    props.status = newStatus;
+                    await fetch(`/api/entities/${id}`, {
+                        method: 'PUT',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            name: entity.name,
+                            kind: entity.kind,
+                            properties: props
+                        })
+                    });
+                }
+            });
+        });
+    }
+}">
+    <div class="flex items-center justify-between">
+        <h2 class="text-2xl font-bold flex items-center gap-2">
+            <svg class="w-6 h-6 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"></path></svg>
+            {{ project }} Threads Kanban
+        </h2>
+        <a href="/projects/{{ project }}" class="bg-panel border border-border_color rounded px-4 py-2 text-sm font-medium hover:text-accent transition-colors">Back to Project Detail</a>
+    </div>
+
+    <div x-show="loading" class="flex items-center justify-center py-20 text-muted italic">Loading board...</div>
+
+    <div x-show="!loading" class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <template x-for="status in ['open', 'resolving', 'closed']">
+            <div class="flex flex-col gap-4 bg-panel/30 border border-border_color rounded-xl p-4 min-h-[500px]">
+                <h3 class="text-xs font-bold text-muted uppercase tracking-widest px-2 flex justify-between items-center">
+                    <span x-text="status"></span>
+                    <span class="bg-panel px-1.5 py-0.5 rounded border border-border_color" x-text="board[status].length"></span>
+                </h3>
+                <div :id="`lane-${status}`" class="flex flex-col gap-3 h-full">
+                    <template x-for="t in board[status]" :key="t.id">
+                        <div :data-id="t.id" class="p-4 bg-bg border border-border_color rounded-lg shadow-sm hover:border-accent transition-all cursor-grab active:cursor-grabbing group">
+                            <div class="font-bold text-sm mb-2 group-hover:text-accent" x-text="t.name"></div>
+                            <div class="flex flex-col gap-1 text-[10px] text-muted">
+                                <div class="flex justify-between">
+                                    <span>Updated:</span>
+                                    <span x-text="t.updated_at.slice(0, 10)"></span>
+                                </div>
+                                <a :href="`/projects/{{ project }}/entities/${t.id}`" class="mt-2 text-accent hover:underline opacity-0 group-hover:opacity-100 transition-opacity">View Detail</a>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </template>
+    </div>
+</section>
+{% endblock %}

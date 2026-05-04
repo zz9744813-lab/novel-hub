@@ -8,7 +8,10 @@ DB_PATH = Path(__file__).resolve().parent.parent.parent / "novelhub.db"
 
 WIKI_LINK_PATTERN = re.compile(r"\[\[(.*?)\]\]")
 
-from app.main import get_conn # Import from main to share WAL and PRAGMAs
+def get_conn():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 def parse_wiki_links(content: str, project: str, conn=None) -> List[Dict[str, Any]]:
     """
@@ -62,6 +65,11 @@ def parse_wiki_links(content: str, project: str, conn=None) -> List[Dict[str, An
                     entity_id = rows[0]["id"]
                     is_ambiguous = True
             
+            # B13: Resolve current entity name
+            if entity_id:
+                ent_row = conn.execute("SELECT name FROM entities WHERE id = ?", (entity_id,)).fetchone()
+                if ent_row:
+                    display_text = ent_row["name"]
             results.append({
                 "entity_id": entity_id,
                 "offset": offset,

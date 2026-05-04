@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Entities · {{ project }} · Novel Hub{% endblock %}
+
+{% block content %}
+<div class="flex flex-col gap-6 max-w-6xl mx-auto w-full py-6">
+    <div class="flex items-center justify-between">
+        <h2 class="text-2xl font-bold">
+            {% if kind == 'character' %}Characters{% elif kind == 'thread' %}Hooks/Threads{% elif kind == 'world' %}World Building{% else %}All Entities{% endif %}
+        </h2>
+        <div class="flex gap-2">
+            <button onclick="createEntity()" class="bg-accent text-white px-4 py-2 rounded-lg text-sm font-medium hover:brightness-110 transition-all">+ New Entity</button>
+        </div>
+    </div>
+
+    <!-- Filter Tabs -->
+    <div class="flex gap-4 border-b border-border_color">
+        <a href="/projects/{{ project }}/entities" class="px-4 py-2 text-sm {% if not kind %}border-b-2 border-accent text-accent font-medium{% else %}text-muted hover:text-text_color{% endif %}">All</a>
+        <a href="/projects/{{ project }}/entities?kind=character" class="px-4 py-2 text-sm {% if kind == 'character' %}border-b-2 border-accent text-accent font-medium{% else %}text-muted hover:text-text_color{% endif %}">Characters</a>
+        <a href="/projects/{{ project }}/entities?kind=world" class="px-4 py-2 text-sm {% if kind == 'world' %}border-b-2 border-accent text-accent font-medium{% else %}text-muted hover:text-text_color{% endif %}">World</a>
+        <a href="/projects/{{ project }}/entities?kind=thread" class="px-4 py-2 text-sm {% if kind == 'thread' %}border-b-2 border-accent text-accent font-medium{% else %}text-muted hover:text-text_color{% endif %}">Threads</a>
+    </div>
+
+    <!-- Entity Grid -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {% for e in entities %}
+        <a href="/projects/{{ project }}/entities/{{ e.id }}" class="bg-panel border border-border_color rounded-xl p-4 hover:border-accent transition-all shadow-sm group">
+            <div class="flex justify-between items-start mb-2">
+                <span class="text-xs font-bold uppercase tracking-wider text-muted opacity-70 group-hover:text-accent group-hover:opacity-100 transition-colors">{{ e.kind }}</span>
+                <span class="text-[10px] text-muted">{{ e.id }}</span>
+            </div>
+            <h3 class="text-lg font-bold mb-1">{{ e.name }}</h3>
+            {% if e.aliases %}
+            <div class="text-xs text-muted mb-2 truncate">AKA: {{ e.aliases }}</div>
+            {% endif %}
+            <div class="mt-4 flex justify-between items-center text-[10px] text-muted">
+                <span>Updated {{ e.updated_at[:10] }}</span>
+            </div>
+        </a>
+        {% endfor %}
+        {% if not entities %}
+        <div class="col-span-full py-20 text-center text-muted italic">
+            No entities found in this category.
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+async function createEntity() {
+    const name = prompt('Entity Name:');
+    if (!name) return;
+    const kind = '{{ kind or "character" }}';
+    const res = await fetch('/api/entities', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ project: '{{ project }}', name, kind })
+    });
+    if (res.ok) {
+        const data = await res.json();
+        window.location.href = `/projects/{{ project }}/entities/${data.id}`;
+    } else {
+        alert('Failed to create entity');
+    }
+}
+</script>
+{% endblock %}

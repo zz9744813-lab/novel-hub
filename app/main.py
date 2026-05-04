@@ -1150,6 +1150,23 @@ def editor_page(request: Request, project: str, filename: str) -> Response:
     visible_chapters = chapters[start_idx:end_idx]
 
     proj_meta = get_project_meta(safe_project)
+    
+    # T2.7 Sidebar Data
+    with get_conn() as conn:
+        mentioned = conn.execute(
+            """SELECT DISTINCT e.* FROM entities e 
+               JOIN entity_refs er ON e.id = er.entity_id 
+               WHERE er.chapter_path = ?""", (str(path),)).fetchall()
+        
+        # Open threads (kind='thread', status='open' in properties JSON)
+        threads = conn.execute(
+            "SELECT * FROM entities WHERE project = ? AND kind = 'thread' AND properties LIKE '%\"status\": \"open\"%'", 
+            (safe_project,)).fetchall()
+            
+        snapshots = conn.execute(
+            "SELECT id, created_at, label FROM snapshots WHERE chapter_path = ? ORDER BY created_at DESC LIMIT 50",
+            (str(path),)).fetchall()
+
     return templates.TemplateResponse(
         "editor.html",
         {
@@ -1163,6 +1180,9 @@ def editor_page(request: Request, project: str, filename: str) -> Response:
             "project_words": sum(c["word_count"] for c in chapters),
             "goal": proj_meta.get("target_words", PROJECT_GOAL_WORDS),
             "mtime": path.stat().st_mtime,
+            "mentioned_entities": [dict(e) for e in mentioned],
+            "open_threads": [dict(t) for t in threads],
+            "snapshots": [dict(s) for s in snapshots]
         },
     )
 
@@ -1357,11 +1377,7 @@ def create_character(
 
 @app.get("/projects/{project}/characters", response_class=HTMLResponse)
 def characters_page(request: Request, project: str) -> Response:
-    if not request.session.get("authed"):
-        return RedirectResponse("/login", status_code=303)
-    safe_project = safe_slug(project, fallback="project")
-    items = list_notes(safe_project, "characters")
-    return templates.TemplateResponse("characters.html", {"request": request, "project": safe_project, "items": items})
+    return RedirectResponse(url=f"/projects/{project}/entities?kind=character", status_code=301)
 
 
 @app.post("/projects/{project}/world/new")
@@ -1394,10 +1410,7 @@ def create_world_item(
 
 @app.get("/projects/{project}/world", response_class=HTMLResponse)
 def world_page(request: Request, project: str) -> Response:
-    if not request.session.get("authed"):
-        return RedirectResponse("/login", status_code=303)
-    safe_project = safe_slug(project, fallback="project")
-    items = list_notes(safe_project, "world")
+    return RedirectResponse(url=f"/projects/{project}/entities?kind=world", status_code=301)
     categories = {"locations": [], "organizations": [], "items": [], "timeline": []}
     for item in items:
         key = "locations"
@@ -1678,6 +1691,28 @@ async def api_create_entity(request: Request) -> Response:
         )
     return JSONResponse(content={"status": "ok", "id": ent_id})
 
+@app.put("/api/entities/{ent_id}")
+async def api_update_entity(request: Request, ent_id: str) -> Response:
+    require_auth(request)
+    data = await request.json()
+    with get_conn() as conn:
+        conn.execute(
+            """UPDATE entities SET 
+               name=?, aliases=?, properties=?, updated_at=?
+               WHERE id=?""",
+            (data["name"], json.dumps(data.get("aliases", [])), json.dumps(data.get("properties", {})), utc_now().isoformat(), ent_id)
+        )
+    return JSONResponse(content={"status": "ok"})
+
+@app.delete("/api/entities/{ent_id}")
+def api_delete_entity(request: Request, ent_id: str) -> Response:
+    require_auth(request)
+    with get_conn() as conn:
+        conn.execute("DELETE FROM entities WHERE id=?", (ent_id,))
+        conn.execute("DELETE FROM entity_relations WHERE source_id=? OR target_id=?", (ent_id, ent_id))
+        conn.execute("DELETE FROM entity_refs WHERE entity_id=?", (ent_id,))
+    return JSONResponse(content={"status": "ok"})
+
 @app.get("/api/entities/{ent_id}")
 def api_get_entity(request: Request, ent_id: str) -> Response:
     require_auth(request)
@@ -1707,6 +1742,88 @@ async def api_create_relation(request: Request) -> Response:
             (data["project"], data["source_id"], data["target_id"], data["relation_type"], data.get("notes", ""), utc_now().isoformat())
         )
     return JSONResponse(content={"status": "ok"})
+
+
+@app.post("/api/projects/{project}/bulk-bind-entities")
+def api_bulk_bind(request: Request, project: str) -> Response:
+    require_auth(request)
+    with get_conn() as conn:
+        entities = conn.execute("SELECT id, name FROM entities WHERE project=?", (project,)).fetchall()
+        name_map = {e["name"]: e["id"] for e in entities}
+        
+        chapters = conn.execute("SELECT path FROM file_index WHERE project=?", (project,)).fetchall()
+        updated_count = 0
+        for ch in chapters:
+            path = Path(ch["path"])
+            if not path.exists(): continue
+            fm, body = read_markdown(path)
+            
+            # Regex to find [[name]] but NOT [[id|name]]
+            # Negative lookahead for | or ] (simple version)
+            new_body = re.sub(r"\[\[([^|\]#]+)\]\]", lambda m: f"[[{name_map[m.group(1)]}|{m.group(1)}]]" if m.group(1) in name_map else m.group(0), body)
+            
+            if new_body != body:
+                write_markdown(path, fm, new_body, project=project)
+                updated_count += 1
+                
+        return JSONResponse(content={"status": "ok", "updated_chapters": updated_count})
+
+
+@app.get("/projects/{project}/entities", response_class=HTMLResponse)
+def entities_page(request: Request, project: str, kind: str = None) -> Response:
+    require_auth(request)
+    with get_conn() as conn:
+        query = "SELECT * FROM entities WHERE project = ?"
+        params = [project]
+        if kind:
+            if kind == 'world': # legacy mapping
+                query += " AND kind NOT IN ('character', 'thread')"
+            else:
+                query += " AND kind = ?"
+                params.append(kind)
+        entities = conn.execute(query, params).fetchall()
+        return templates.TemplateResponse(
+            "entities_list.html",
+            {
+                "request": request,
+                "project": project,
+                "entities": [dict(e) for e in entities],
+                "kind": kind
+            }
+        )
+
+
+@app.get("/projects/{project}/entities/{ent_id}", response_class=HTMLResponse)
+def entity_detail_page(request: Request, project: str, ent_id: str) -> Response:
+    require_auth(request)
+    with get_conn() as conn:
+        entity = conn.execute("SELECT * FROM entities WHERE id = ?", (ent_id,)).fetchone()
+        if not entity: raise HTTPException(404)
+        
+        # Load markdown content from md_path if exists
+        md_content = ""
+        if entity["md_path"] and Path(entity["md_path"]).exists():
+            fm, md_content = read_markdown(Path(entity["md_path"]))
+            
+        relations = conn.execute(
+            """SELECT er.*, e.name as target_name FROM entity_relations er 
+               JOIN entities e ON er.target_id = e.id 
+               WHERE source_id = ?""", (ent_id,)).fetchall()
+        appearances = conn.execute("SELECT * FROM entity_refs WHERE entity_id = ?", (ent_id,)).fetchall()
+        
+        return templates.TemplateResponse(
+            "entity_detail.html",
+            {
+                "request": request,
+                "project": project,
+                "entity": dict(entity),
+                "entity_aliases": json.loads(entity["aliases"] or "[]"),
+                "md_content": md_content,
+                "relations": [dict(r) for r in relations],
+                "appearances": [dict(a) for a in appearances]
+            }
+        )
+
 
 @app.get("/api/projects/{project}/outline")
 def api_get_outline(request: Request, project: str) -> Response:

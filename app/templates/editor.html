@@ -52,17 +52,14 @@
         <input name="title" placeholder="新章节..." required class="flex-1 bg-bg border border-border_color rounded px-2.5 py-1.5 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all">
         <button class="bg-panel border border-border_color hover:border-accent hover:text-accent rounded px-2.5 py-1.5 text-sm transition-colors">+</button>
       </form>
+      <input type="search" name="q" placeholder="搜索章节(标题/卷/状态)..." 
+             class="bg-bg border border-border_color rounded px-2.5 py-1.5 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all"
+             hx-get="/projects/{{ project }}/sidebar_chapters?active={{ filename }}" 
+             hx-trigger="input changed delay:300ms, search" 
+             hx-target="#sidebar-chapter-list">
     </div>
-    <div class="flex-1 overflow-y-auto p-2 flex flex-col gap-1 custom-scrollbar">
-      {% for c in chapters %}
-      <a class="flex flex-col p-2 rounded-lg border border-transparent hover:bg-panel transition-colors {% if c.filename == filename %}bg-accent/10 border-accent/30 text-accent{% else %}text-muted hover:text-text_color{% endif %}" href="/projects/{{ project }}/editor/{{ c.filename }}">
-        <div class="flex items-center justify-between gap-2 mb-1">
-          <strong class="text-sm font-medium truncate {% if c.filename == filename %}text-accent{% endif %}">{{ c.title }}</strong>
-          <span class="text-[10px] uppercase border border-current px-1 py-0.5 rounded-sm opacity-60 shrink-0">{{ c.status }}</span>
-        </div>
-        <small class="text-xs opacity-70">{{ c.word_count }} 字</small>
-      </a>
-      {% endfor %}
+    <div id="sidebar-chapter-list" class="flex-1 overflow-y-auto p-2 flex flex-col gap-1 custom-scrollbar">
+      {% include '_sidebar_chapters.html' %}
     </div>
   </aside>
 
@@ -177,6 +174,22 @@
         <input data-input placeholder="输入并回车添加" class="bg-bg border border-border_color rounded px-2.5 py-1.5 text-sm text-text_color focus:outline-none focus:border-accent">
       </div>
       <input type="hidden" name="warnings" form="editor-form" value="{{ frontmatter.warnings|join(',') }}" data-hidden="warnings">
+      
+      <div class="h-px bg-border_color/50 my-1"></div>
+      
+      <div class="flex flex-col gap-2 mt-4">
+        <h4 class="text-xs font-semibold text-red-500 uppercase">危险区</h4>
+        <button type="button" 
+                class="bg-panel border border-border_color hover:border-red-500 hover:text-red-500 rounded px-2.5 py-1.5 text-xs text-left transition-colors"
+                onclick="const newName = prompt('重命名该章节为 (带不带.md皆可):', '{{ filename }}'); if(newName && newName !== '{{ filename }}') fetch('/projects/{{ project }}/chapters/{{ filename }}/rename', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: newName})}).then(res => res.json()).then(data => { if(data.status==='ok') window.location.href = data.new_url; else alert('重命名失败: ' + (data.detail||'未知错误')); })">
+          重命名章节
+        </button>
+        <button type="button" 
+                class="bg-panel border border-red-500/30 text-red-500 hover:bg-red-500 hover:text-white rounded px-2.5 py-1.5 text-xs text-left transition-colors"
+                onclick="if(confirm('确定要永久删除章节「{{ frontmatter.title }}」吗？操作不可恢复！')) fetch('/projects/{{ project }}/chapters/{{ filename }}', {method: 'DELETE'}).then(res => res.json()).then(data => { if(data.status==='ok') window.location.href = data.new_url; else alert('删除失败: ' + (data.detail||'未知错误')); })">
+          删除章节
+        </button>
+      </div>
     </div>
   </aside>
 </section>

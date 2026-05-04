@@ -178,6 +178,48 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_target ON operation_logs(target)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_project ON operation_logs(project)")
 
+        # Migrate chapter_fts to add 'kind' column (FTS5 doesn't support ALTER)
+        try:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(chapter_fts)").fetchall()]
+            if cols and "kind" not in cols:
+                conn.execute("DROP TABLE chapter_fts")
+                conn.execute("""
+                    CREATE VIRTUAL TABLE chapter_fts USING fts5(
+                        path UNINDEXED, project UNINDEXED, kind UNINDEXED,
+                        title, body, tokenize='unicode61 remove_diacritics 2'
+                    )
+                """)
+                conn.execute(
+                    "INSERT INTO settings(key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    ("fts_needs_rebuild", "1"),
+                )
+        except sqlite3.OperationalError:
+            pass
+
+
+def _reindex_notes_for_project(project: str) -> None:
+    """Re-populate chapter_fts for character/world/hooks notes. Used after FTS schema migration."""
+    proj_dir = NOVELS_ROOT / project
+    if not proj_dir.exists():
+        return
+    with get_conn() as conn:
+        for sub in ("characters", "world", "hooks"):
+            sub_dir = proj_dir / sub
+            if not sub_dir.exists():
+                continue
+            for f in sub_dir.glob("*.md"):
+                try:
+                    fm, body = read_markdown(f)
+                    title = fm.get("title", f.stem) if fm else f.stem
+                    conn.execute("DELETE FROM chapter_fts WHERE path=?", (str(f),))
+                    conn.execute(
+                        "INSERT INTO chapter_fts(path, project, kind, title, body) VALUES (?, ?, ?, ?, ?)",
+                        (str(f), project, _infer_kind(f), title, body),
+                    )
+                except Exception:
+                    pass
+
 
 def log_operation(action: str, target: str = "", detail: str = "", value: int = 0, project: str = "") -> None:
     with get_conn() as conn:
@@ -436,14 +478,26 @@ def scan_projects() -> list[dict[str, Any]]:
     return results
 
 
-def write_markdown(path: Path, frontmatter: dict[str, Any], body: str) -> None:
+def _project_from_path(p: Path) -> str:
+    """Walk path parts looking for the 'Novels' segment; project is whatever follows it."""
+    try:
+        idx = p.parts.index("Novels")
+        return p.parts[idx + 1] if idx + 1 < len(p.parts) else ""
+    except ValueError:
+        return ""
+
+
+def write_markdown(path: Path, frontmatter: dict[str, Any], body: str, project: str = None) -> None:
     p = _ensure_under_root(path, VAULT_ROOT)
     p.parent.mkdir(parents=True, exist_ok=True)
     if p.exists():
         backup_file(p)
     content = dump_frontmatter(frontmatter, body)
     p.write_text(content, encoding="utf-8")
-    
+
+    if project is None:
+        project = _project_from_path(p)
+
     meta = normalize_meta(frontmatter, p.stem)
     words = count_words(body)
     mtime = p.stat().st_mtime
@@ -451,7 +505,7 @@ def write_markdown(path: Path, frontmatter: dict[str, Any], body: str) -> None:
         chapter_int = int(meta["chapter"])
     except ValueError:
         chapter_int = 0
-        
+
     with get_conn() as conn:
         conn.execute(
             """
@@ -468,11 +522,13 @@ def write_markdown(path: Path, frontmatter: dict[str, Any], body: str) -> None:
                 volume=excluded.volume,
                 mtime=excluded.mtime
             """,
-            (str(p), p.parts[-4] if len(p.parts) >= 4 else "", words, utc_now().isoformat(), meta["title"], meta["chapter"], chapter_int, meta["status"], meta["volume"], mtime),
+            (str(p), project, words, utc_now().isoformat(), meta["title"], meta["chapter"], chapter_int, meta["status"], meta["volume"], mtime),
         )
         conn.execute("DELETE FROM chapter_fts WHERE path=?", (str(p),))
-        conn.execute("INSERT INTO chapter_fts(path, project, kind, title, body) VALUES (?, ?, ?, ?, ?)", 
-                     (str(p), p.parts[-4] if len(p.parts) >= 4 else "", _infer_kind(p), meta["title"], body))
+        conn.execute(
+            "INSERT INTO chapter_fts(path, project, kind, title, body) VALUES (?, ?, ?, ?, ?)",
+            (str(p), project, _infer_kind(p), meta["title"], body),
+        )
 
 
 def parse_csv(value: str) -> list[str]:
@@ -513,8 +569,13 @@ def startup() -> None:
     NOVELS_ROOT.mkdir(parents=True, exist_ok=True)
     BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
     init_db()
+    needs_note_rebuild = get_setting("fts_needs_rebuild", "0") == "1"
     for p in [item.name for item in NOVELS_ROOT.iterdir() if item.is_dir()]:
         list_chapters(p, sync=True)
+        if needs_note_rebuild:
+            _reindex_notes_for_project(p)
+    if needs_note_rebuild:
+        set_setting("fts_needs_rebuild", "0")
 
 
 @app.get("/health")
@@ -1079,29 +1140,34 @@ async def reorder_chapters(request: Request, project: str) -> Response:
     
     if not filenames:
         return JSONResponse(status_code=400, content={"error": "empty order"})
-    
-    # Map original paths to new indices
-    mapping = {f: i+1 for i, f in enumerate(filenames)}
-    
-    # Rename to temp files to avoid collisions
+
+    # Phase 1: rename to .tmp suffix to avoid collisions; remember actual paths
+    tmp_paths: list[tuple[str, Path | None]] = []
     for fname in filenames:
         p = chapter_path(safe_project, fname)
         if p.exists():
-            p.rename(p.with_suffix(".tmp"))
-            
-    # Rename from temp to final with new numbers
-    for i, fname in enumerate(filenames, 1):
-        tmp_p = chapter_path(safe_project, fname).with_suffix(".tmp")
-        if not tmp_p.exists(): continue
-        
+            tmp = p.with_suffix(".tmp")
+            p.rename(tmp)
+            tmp_paths.append((fname, tmp))
+            # Clean stale index rows pointing at the original path
+            with get_conn() as conn:
+                conn.execute("DELETE FROM file_index WHERE path=?", (str(p),))
+                conn.execute("DELETE FROM chapter_fts WHERE path=?", (str(p),))
+        else:
+            tmp_paths.append((fname, None))
+
+    # Phase 2: rename .tmp to final; keep file in same volume directory
+    for i, (fname, tmp_p) in enumerate(tmp_paths, 1):
+        if tmp_p is None or not tmp_p.exists():
+            continue
         parts = fname.split("-", 1)
         name_part = parts[1] if len(parts) > 1 else fname
         new_name = f"{i:05d}-{name_part}"
-        new_p = chapter_path(safe_project, new_name)
-        
+        new_p = tmp_p.parent / new_name  # preserve volume directory
         fm, body = read_markdown(tmp_p)
         fm["chapter"] = str(i)
-        write_markdown(new_p, fm, body)
+        # explicit project so write_markdown indexes correctly
+        write_markdown(new_p, fm, body, project=safe_project)
         tmp_p.unlink()
         
     log_operation("reorder_chapters", safe_project, f"reordered {len(filenames)} chapters", project=safe_project)

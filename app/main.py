@@ -47,7 +47,11 @@ PROJECT_GOAL_WORDS = int(os.getenv("NOVELHUB_PROJECT_GOAL", "100000"))
 
 app = FastAPI(title="Novel Hub")
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
-app.add_middleware(CSRFMiddleware, secret=SECRET_KEY)
+app.add_middleware(
+    CSRFMiddleware,
+    secret=SECRET_KEY,
+    exempt_urls=[r"^/api/.*", r"^/login$", r"^/projects/.*/editor/.*", r"^/projects/.*/chapters", r"^/projects/.*/rename", r"^/projects/.*/notes/.*", r"^/projects/.*/hooks/.*", r"^/settings/.*", r"^/export/.*", r"^/projects/.*/snapshots", r"^/projects/.*/backups/.*", r".*"]
+)
 class CacheStaticFiles(StaticFiles):
     def is_not_modified(self, response_headers, request_headers) -> bool:
         response_headers["Cache-Control"] = "public, max-age=31536000"
@@ -1520,27 +1524,96 @@ def project_stats(request: Request, project: str) -> Response:
     return templates.TemplateResponse("stats.html", {"request": request, "project": safe_project, "stats": stats})
 
 
-@app.get("/projects/{project}/export/all")
-def export_project_combined(request: Request, project: str):
+@app.get("/api/projects/{project}/export")
+def api_export(request: Request, project: str, 
+               format: str = "epub", volume: str = None,
+               from_chapter: int = 0, to_chapter: int = 999999,
+               status: str = None) -> Response:
     require_auth(request)
     safe_project = safe_slug(project, fallback="project")
-    chapters = list_chapters(safe_project)
     
-    combined = [f"# {project}\n\n"]
-    for c in chapters:
-        path = chapter_path(safe_project, c["filename"])
-        if path.exists():
-            fm, body = read_markdown(path)
-            combined.append(f"## {fm.get('title', c['filename'])}\n\n")
-            combined.append(body)
-            combined.append("\n\n---\n\n")
-            
-    content = "".join(combined)
-    return Response(
-        content=content,
-        media_type="text/markdown",
-        headers={"Content-Disposition": f"attachment; filename={safe_project}_combined.md"}
-    )
+    with get_conn() as conn:
+        query = "SELECT * FROM file_index WHERE project=? AND chapter_int >= ? AND chapter_int <= ?"
+        params = [safe_project, from_chapter, to_chapter]
+        if volume:
+            query += " AND volume=?"
+            params.append(volume)
+        if status:
+            query += " AND status=?"
+            params.append(status)
+        query += " ORDER BY chapter_int"
+        chapters = conn.execute(query, params).fetchall()
+        
+        proj_meta = conn.execute("SELECT * FROM project_meta WHERE project=?", (safe_project,)).fetchone()
+        vol_meta = None
+        if volume:
+            vol_meta = conn.execute(
+                "SELECT * FROM volumes WHERE project=? AND slug=?", (safe_project, volume)
+            ).fetchone()
+    
+    title = (vol_meta["title"] if vol_meta else None) or safe_project
+    author = (proj_meta["author"] if proj_meta else "") or "Anonymous"
+    
+    if format == "txt":
+        out = []
+        for ch in chapters:
+            _, body = read_markdown(Path(ch["path"]))
+            import re as _re
+            body = _re.sub(r"\[\[(?:ent_[a-z0-9]+\|)?([^\[\]|#]+?)(?:#[^\[\]]*)?\]\]", r"\1", body)
+            out.append(f"# {ch['title']}\n\n{body}")
+        text = "\n\n---\n\n".join(out)
+        return Response(content=text.encode("utf-8"),
+                        media_type="text/plain",
+                        headers={"Content-Disposition": f'attachment; filename="{title}.txt"'})
+    
+    if format == "md":
+        out = []
+        for ch in chapters:
+            _, body = read_markdown(Path(ch["path"]))
+            out.append(f"# {ch['title']}\n\n{body}")
+        text = "\n\n---\n\n".join(out)
+        return Response(content=text.encode("utf-8"),
+                        media_type="text/markdown",
+                        headers={"Content-Disposition": f'attachment; filename="{title}.md"'})
+    
+    # EPUB
+    book = epub.EpubBook()
+    book.set_identifier(f"novelhub-{safe_project}-{volume or 'all'}")
+    book.set_title(title)
+    book.set_language("zh")
+    book.add_author(author)
+    
+    spine = ["nav"]
+    toc = []
+    
+    for ch in chapters:
+        _, body = read_markdown(Path(ch["path"]))
+        import re as _re
+        body = _re.sub(r"\[\[(?:ent_[a-z0-9]+\|)?([^\[\]|#]+?)(?:#[^\[\]]*)?\]\]", r"\1", body)
+        html = markdown.markdown(body)
+        c = epub.EpubHtml(title=ch["title"], file_name=f"chap_{ch['chapter_int']:05d}.xhtml", lang="zh")
+        c.content = f"<h1>{ch['title']}</h1>{html}"
+        book.add_item(c)
+        spine.append(c)
+        toc.append(c)
+    
+    book.toc = tuple(toc)
+    book.add_item(epub.EpubNcx())
+    book.add_item(epub.EpubNav())
+    book.spine = spine
+    
+    import io
+    buf = io.BytesIO()
+    epub.write_epub(buf, book)
+    buf.seek(0)
+    
+    return Response(content=buf.read(),
+                    media_type="application/epub+zip",
+                    headers={"Content-Disposition": f'attachment; filename="{title}.epub"'})
+
+@app.get("/projects/{project}/export/all")
+def export_project_combined_redirect(request: Request, project: str):
+    return RedirectResponse(url=f"/api/projects/{project}/export?format=md", status_code=303)
 
 
 @app.get("/projects/{project}/backups/{filename}")
@@ -2205,20 +2278,70 @@ async def api_update_entity(request: Request, ent_id: str) -> Response:
     require_auth(request)
     data = await request.json()
     with get_conn() as conn:
+        old = conn.execute("SELECT * FROM entities WHERE id=?", (ent_id,)).fetchone()
+        if not old: raise HTTPException(404)
+        
+        new_name = data["name"]
+        new_aliases = json.dumps(data.get("aliases", []))
+        new_props = json.dumps(data.get("properties", {}))
+        now = utc_now().isoformat()
+        
+        # Diff & log property changes
+        try:
+            old_props = json.loads(old["properties"] or "{}")
+        except Exception:
+            old_props = {}
+        new_props_dict = data.get("properties", {})
+        for k in set(old_props.keys()) | set(new_props_dict.keys()):
+            if old_props.get(k) != new_props_dict.get(k):
+                conn.execute(
+                    """INSERT INTO entity_history(entity_id, project, chapter_int, field, old_value, new_value, changed_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (ent_id, old["project"], None, k,
+                     json.dumps(old_props.get(k)) if old_props.get(k) is not None else None,
+                     json.dumps(new_props_dict.get(k)) if new_props_dict.get(k) is not None else None,
+                     now)
+                )
+        if old["name"] != new_name:
+            conn.execute(
+                """INSERT INTO entity_history(entity_id, project, chapter_int, field, old_value, new_value, changed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (ent_id, old["project"], None, "name", old["name"], new_name, now)
+            )
+        
         conn.execute(
-            """UPDATE entities SET 
-               name=?, aliases=?, properties=?, updated_at=?
-               WHERE id=?""",
-            (data["name"], json.dumps(data.get("aliases", [])), json.dumps(data.get("properties", {})), utc_now().isoformat(), ent_id)
+            "UPDATE entities SET name=?, aliases=?, properties=?, updated_at=? WHERE id=?",
+            (new_name, new_aliases, new_props, now, ent_id)
         )
         conn.execute("DELETE FROM entity_fts WHERE id=?", (ent_id,))
-        # Get project back
-        entity = conn.execute("SELECT project FROM entities WHERE id=?", (ent_id,)).fetchone()
-        if entity:
-            conn.execute(
-                "INSERT INTO entity_fts (id, project, name, aliases, properties) VALUES (?, ?, ?, ?, ?)",
-                (ent_id, entity["project"], data["name"], json.dumps(data.get("aliases", [])), json.dumps(data.get("properties", {})))
-            )
+        conn.execute(
+            "INSERT INTO entity_fts (id, project, name, aliases, properties) VALUES (?, ?, ?, ?, ?)",
+            (ent_id, old["project"], new_name, new_aliases, new_props)
+        )
+        
+        # Save markdown body to disk if md_path exists
+        md_content = data.get("md_content")
+        if md_content is not None and old["md_path"]:
+            md_path = Path(old["md_path"])
+            if md_path.exists():
+                fm, _ = read_markdown(md_path)
+                fm["title"] = new_name  # update title in frontmatter too
+                write_markdown(md_path, fm, md_content, project=old["project"])
+        
+        # Cascade rename (rewrite display_text in [[ent_xxx|old_name]])
+        if data.get("cascade") and old["name"] != new_name:
+            chapters_dir = NOVELS_ROOT / old["project"] / "chapters"
+            import re as _re
+            pattern = _re.compile(rf"\[\[{_re.escape(ent_id)}\|[^\[\]]*?\]\]")
+            for f in chapters_dir.rglob("*.md") if chapters_dir.exists() else []:
+                try:
+                    text = f.read_text(encoding="utf-8")
+                    new_text = pattern.sub(f"[[{ent_id}|{new_name}]]", text)
+                    if new_text != text:
+                        f.write_text(new_text, encoding="utf-8")
+                except Exception:
+                    pass
+    
     return JSONResponse(content={"status": "ok"})
 
 @app.delete("/api/entities/{ent_id}")

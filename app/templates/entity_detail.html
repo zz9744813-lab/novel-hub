@@ -1,27 +1,102 @@
 {% extends "base.html" %}
-{% block title %}{{ entity.name }} · {{ project }} · Novel Hub
-<div class="bg-panel border border-border_color rounded-xl p-6 mt-6">
-    <h3 class="text-sm font-bold text-muted uppercase tracking-widest mb-3">引用维护</h3>
-    <button type="button" 
-            class="bg-accent/10 text-accent border border-accent/20 hover:bg-accent/20 rounded px-4 py-2 text-sm transition-colors"
-            onclick="
-                if (!confirm('扫描所有章节，把 [[{{ entity.name }}]] 这种简写引用绑定到本实体？')) return;
-                this.textContent = '处理中...';
-                this.disabled = true;
-                fetch(`/api/projects/{{ project }}/bulk-bind-entities`, {
-                    method: 'POST', headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({entity_id: '{{ entity.id }}'})
-                }).then(r => r.json()).then(d => {
-                    alert(`已更新 ${d.updated} 章节`);
-                    this.textContent = '批量绑定本实体的引用';
-                    this.disabled = false;
-                });
-            ">批量绑定本实体的引用</button>
-    <p class="text-xs text-muted mt-2 italic">把章节里写作 <code>[[{{ entity.name }}]]</code> 的简写引用，全部改写为带 ID 的 <code>[[{{ entity.id }}|{{ entity.name }}]]</code>。改名后建议跑一次。</p>
-</div>
+{% block title %}{{ entity.name }} · {{ project }} · Novel Hub<script type="importmap">
+{
+  "imports": {
+    "codemirror": "https://cdn.jsdelivr.net/npm/codemirror@6.0.1/+esm",
+    "@codemirror/state": "https://cdn.jsdelivr.net/npm/@codemirror/state@6.4.1/+esm",
+    "@codemirror/view": "https://cdn.jsdelivr.net/npm/@codemirror/view@6.26.3/+esm",
+    "@codemirror/lang-markdown": "https://cdn.jsdelivr.net/npm/@codemirror/lang-markdown@6.2.5/+esm",
+    "@codemirror/commands": "https://cdn.jsdelivr.net/npm/@codemirror/commands@6.5.0/+esm"
+  }
+}
+</script>
+<script type="module">
+import { EditorView, basicSetup } from 'codemirror';
+import { EditorState } from '@codemirror/state';
+import { markdown } from '@codemirror/lang-markdown';
+import { EditorView as View } from '@codemirror/view';
 
+const textarea = document.getElementById('md_content');
+let view;
+
+if (textarea) {
+    view = new EditorView({
+        state: EditorState.create({
+            doc: textarea.value,
+            extensions: [
+                basicSetup,
+                markdown(),
+                View.lineWrapping,
+                View.theme({
+                    "&": {
+                        backgroundColor: "transparent",
+                        height: "100%",
+                        fontSize: "14px"
+                    }
+                })
+            ]
+        }),
+        parent: document.getElementById('cm-container')
+    });
+}
+
+window.deleteEntity = async () => {
+    if (!confirm('Are you sure you want to delete this entity?')) return;
+    const res = await fetch(`/api/entities/{{ entity.id }}`, { method: 'DELETE' });
+    if (res.ok) window.location.href = `/projects/{{ project }}/entities`;
+};
+
+window.saveEntity = async () => {
+    const form = document.getElementById('entity-form');
+    const formData = new FormData(form);
+    const cascade = document.getElementById('cascade-rename')?.checked || false;
+
+    const hiddenPropsEl = document.getElementById('hidden-props');
+    const properties = hiddenPropsEl ? JSON.parse(hiddenPropsEl.value) : {};
+
+    const data = {
+        name: formData.get('name'),
+        kind: formData.get('kind'),
+        aliases: formData.get('aliases').split(',').map(s => s.trim()).filter(s => s),
+        properties: properties,
+        md_content: view ? view.state.doc.toString() : "",
+        cascade: cascade
+    };
+
+    try {
+        const res = await fetch(`/api/entities/{{ entity.id }}`, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)
+        });
+        if (res.ok) {
+            window.NovelHubUI?.showToast(cascade ? 'Entity saved and cascaded' : 'Entity saved');
+            setTimeout(() => window.location.reload(), 500);
+        } else {
+            alert('Failed to save');
+        }
+    } catch (err) {
+        console.error(err);
+    }
+};
+
+window.bulkBind = async () => {
+    if (!confirm('扫描所有章节，把 [[{{ entity.name }}]] 这种简写引用绑定到本实体？')) return;
+    try {
+        const res = await fetch(`/api/projects/{{ project }}/bulk-bind-entities`, { 
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({entity_id: '{{ entity.id }}'})
+        });
+        const data = await res.json();
+        if (data.status === 'ok') {
+            alert(`已更新 ${data.updated} 章节`);
+            window.location.reload();
+        }
+    } catch (err) { console.error(err); }
+};
+</script>
 {% endblock %}
-
 {% block content %}
 <div class="flex flex-col gap-6 max-w-6xl mx-auto w-full py-6">
     <!-- Breadcrumbs -->
@@ -304,164 +379,8 @@
 </div>
 
 <!-- CodeMirror 6 for Entity Description -->
-<script type="importmap">
-{
-  "imports": {
-    "@codemirror/view": "https://esm.sh/@codemirror/view@6.26.3",
-    "@codemirror/state": "https://esm.sh/@codemirror/state@6.4.1",
-    "@codemirror/language": "https://esm.sh/@codemirror/language@6.10.1",
-    "@codemirror/commands": "https://esm.sh/@codemirror/commands@6.5.0",
-    "@codemirror/lang-markdown": "https://esm.sh/@codemirror/lang-markdown@6.2.5",
-    "codemirror": "https://esm.sh/codemirror@6.0.1"
-  }
-}
 
-window.bulkBind = async () => {
-    if (!confirm('This will scan all chapters and bind unbound mentions of this entity. Continue?')) return;
-    try {
-        const res = await fetch(`/api/projects/{{ project }}/bulk-bind-entities`, { method: 'POST' });
-        const data = await res.json();
-        if (data.status === 'ok') {
-            alert(`Updated ${data.updated_chapters} chapters`);
-            window.location.reload();
-        }
-    } catch (err) { console.error(err); }
-};
 
-// Updated saveEntity to handle cascade
-const originalSaveEntity = window.saveEntity;
-window.saveEntity = async () => {
-    const form = document.getElementById('entity-form');
-    const formData = new FormData(form);
-    const cascade = document.getElementById('cascade-rename').checked;
-    
-    const hiddenPropsEl = document.getElementById('hidden-props');
-    const properties = hiddenPropsEl ? JSON.parse(hiddenPropsEl.value) : {};
-
-    const data = {
-        name: formData.get('name'),
-        kind: formData.get('kind'),
-        aliases: formData.get('aliases').split(',').map(s => s.trim()).filter(s => s),
-        properties: properties,
-        md_content: view.state.doc.toString(),
-        cascade: cascade
-    };
-
-    try {
-        const res = await fetch(`/api/entities/{{ entity.id }}`, {
-            method: 'PUT',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(data)
-        });
-        if (res.ok) window.NovelHubUI?.showToast(cascade ? 'Entity saved and cascaded' : 'Entity saved');
-        else alert('Failed to save');
-    } catch (err) {
-        console.error(err);
-    }
-};
-
-</script>
-<script type="module">
-import { EditorView, basicSetup } from 'codemirror';
-import { EditorState } from '@codemirror/state';
-import { markdown } from '@codemirror/lang-markdown';
-
-const textarea = document.getElementById('entity-md');
-const wrapper = document.getElementById('cm-wrapper');
-
-const startState = EditorState.create({
-    doc: textarea.value,
-    extensions: [
-        basicSetup,
-        markdown(),
-        EditorView.lineWrapping,
-        EditorView.theme({
-            "&": { height: "100%", fontSize: "14px" },
-            ".cm-scroller": { overflow: "auto" }
-        })
-    ]
-});
-
-const view = new EditorView({
-    state: startState,
-    parent: wrapper
-});
-
-/* Old saveEntity replaced by injection */
-// window.saveEntity = async () => {
-    const form = document.getElementById('entity-form');
-    const formData = new FormData(form);
-    const data = {
-        name: formData.get('name'),
-        kind: formData.get('kind'),
-        aliases: formData.get('aliases').split(',').map(s => s.trim()).filter(s => s),
-        md_content: view.state.doc.toString()
-    };
-    
-    try {
-        const res = await fetch(`/api/entities/{{ entity.id }}`, {
-            method: 'PUT',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(data)
-        });
-        if (res.ok) window.NovelHubUI?.showToast('Entity saved');
-        else alert('Failed to save');
-    } catch (err) {
-        console.error(err);
-    }
-};
-
-window.deleteEntity = async () => {
-    if (!confirm('Are you sure you want to delete this entity?')) return;
-    const res = await fetch(`/api/entities/{{ entity.id }}`, { method: 'DELETE' });
-    if (res.ok) window.location.href = `/projects/{{ project }}/entities`;
-};
-
-window.bulkBind = async () => {
-    if (!confirm('This will scan all chapters and bind unbound mentions of this entity. Continue?')) return;
-    try {
-        const res = await fetch(`/api/projects/{{ project }}/bulk-bind-entities`, { method: 'POST' });
-        const data = await res.json();
-        if (data.status === 'ok') {
-            alert(`Updated ${data.updated_chapters} chapters`);
-            window.location.reload();
-        }
-    } catch (err) { console.error(err); }
-};
-
-// Updated saveEntity to handle cascade
-const originalSaveEntity = window.saveEntity;
-window.saveEntity = async () => {
-    const form = document.getElementById('entity-form');
-    const formData = new FormData(form);
-    const cascade = document.getElementById('cascade-rename').checked;
-    
-    const hiddenPropsEl = document.getElementById('hidden-props');
-    const properties = hiddenPropsEl ? JSON.parse(hiddenPropsEl.value) : {};
-
-    const data = {
-        name: formData.get('name'),
-        kind: formData.get('kind'),
-        aliases: formData.get('aliases').split(',').map(s => s.trim()).filter(s => s),
-        properties: properties,
-        md_content: view.state.doc.toString(),
-        cascade: cascade
-    };
-
-    try {
-        const res = await fetch(`/api/entities/{{ entity.id }}`, {
-            method: 'PUT',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(data)
-        });
-        if (res.ok) window.NovelHubUI?.showToast(cascade ? 'Entity saved and cascaded' : 'Entity saved');
-        else alert('Failed to save');
-    } catch (err) {
-        console.error(err);
-    }
-};
-
-</script>
 
 <div class="bg-panel border border-border_color rounded-xl p-6 mt-6">
     <h3 class="text-sm font-bold text-muted uppercase tracking-widest mb-3">引用维护</h3>
@@ -483,4 +402,101 @@ window.saveEntity = async () => {
     <p class="text-xs text-muted mt-2 italic">把章节里写作 <code>[[{{ entity.name }}]]</code> 的简写引用，全部改写为带 ID 的 <code>[[{{ entity.id }}|{{ entity.name }}]]</code>。改名后建议跑一次。</p>
 </div>
 
+<script type="importmap">
+{
+  "imports": {
+    "codemirror": "https://cdn.jsdelivr.net/npm/codemirror@6.0.1/+esm",
+    "@codemirror/state": "https://cdn.jsdelivr.net/npm/@codemirror/state@6.4.1/+esm",
+    "@codemirror/view": "https://cdn.jsdelivr.net/npm/@codemirror/view@6.26.3/+esm",
+    "@codemirror/lang-markdown": "https://cdn.jsdelivr.net/npm/@codemirror/lang-markdown@6.2.5/+esm",
+    "@codemirror/commands": "https://cdn.jsdelivr.net/npm/@codemirror/commands@6.5.0/+esm"
+  }
+}
+</script>
+<script type="module">
+import { EditorView, basicSetup } from 'codemirror';
+import { EditorState } from '@codemirror/state';
+import { markdown } from '@codemirror/lang-markdown';
+import { EditorView as View } from '@codemirror/view';
+
+const textarea = document.getElementById('md_content');
+let view;
+
+if (textarea) {
+    view = new EditorView({
+        state: EditorState.create({
+            doc: textarea.value,
+            extensions: [
+                basicSetup,
+                markdown(),
+                View.lineWrapping,
+                View.theme({
+                    "&": {
+                        backgroundColor: "transparent",
+                        height: "100%",
+                        fontSize: "14px"
+                    }
+                })
+            ]
+        }),
+        parent: document.getElementById('cm-container')
+    });
+}
+
+window.deleteEntity = async () => {
+    if (!confirm('Are you sure you want to delete this entity?')) return;
+    const res = await fetch(`/api/entities/{{ entity.id }}`, { method: 'DELETE' });
+    if (res.ok) window.location.href = `/projects/{{ project }}/entities`;
+};
+
+window.saveEntity = async () => {
+    const form = document.getElementById('entity-form');
+    const formData = new FormData(form);
+    const cascade = document.getElementById('cascade-rename')?.checked || false;
+
+    const hiddenPropsEl = document.getElementById('hidden-props');
+    const properties = hiddenPropsEl ? JSON.parse(hiddenPropsEl.value) : {};
+
+    const data = {
+        name: formData.get('name'),
+        kind: formData.get('kind'),
+        aliases: formData.get('aliases').split(',').map(s => s.trim()).filter(s => s),
+        properties: properties,
+        md_content: view ? view.state.doc.toString() : "",
+        cascade: cascade
+    };
+
+    try {
+        const res = await fetch(`/api/entities/{{ entity.id }}`, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)
+        });
+        if (res.ok) {
+            window.NovelHubUI?.showToast(cascade ? 'Entity saved and cascaded' : 'Entity saved');
+            setTimeout(() => window.location.reload(), 500);
+        } else {
+            alert('Failed to save');
+        }
+    } catch (err) {
+        console.error(err);
+    }
+};
+
+window.bulkBind = async () => {
+    if (!confirm('扫描所有章节，把 [[{{ entity.name }}]] 这种简写引用绑定到本实体？')) return;
+    try {
+        const res = await fetch(`/api/projects/{{ project }}/bulk-bind-entities`, { 
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({entity_id: '{{ entity.id }}'})
+        });
+        const data = await res.json();
+        if (data.status === 'ok') {
+            alert(`已更新 ${data.updated} 章节`);
+            window.location.reload();
+        }
+    } catch (err) { console.error(err); }
+};
+</script>
 {% endblock %}

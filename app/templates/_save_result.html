@@ -1,1 +1,5 @@
-<div class="save-ok" data-saved-at="{{ saved_at }}">已保存 · {{ saved_at }} · {{ word_count }} 字</div>
+{% if error %}
+<div class="save-error hidden">{{ error }}</div>
+{% else %}
+<div class="save-ok hidden" data-saved-at="{{ saved_at }}" data-new-mtime="{{ new_mtime }}"></div>
+{% endif %}

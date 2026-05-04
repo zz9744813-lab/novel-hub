@@ -66,6 +66,11 @@ def _ensure_under_root(path: Path, root: Path) -> Path:
 
 def require_auth(request: Request) -> None:
     if not request.session.get("authed"):
+        accept = request.headers.get("accept", "")
+        if request.headers.get("hx-request") == "true":
+            raise HTTPException(status_code=401, headers={"HX-Redirect": "/login"})
+        if "text/html" in accept:
+            raise HTTPException(status_code=303, headers={"Location": "/login"})
         raise HTTPException(status_code=401, detail="auth required")
 
 
@@ -146,6 +151,7 @@ def init_db() -> None:
             CREATE VIRTUAL TABLE IF NOT EXISTS chapter_fts USING fts5(
                 path UNINDEXED,
                 project UNINDEXED,
+                kind UNINDEXED,
                 title,
                 body,
                 tokenize='unicode61 remove_diacritics 2'
@@ -162,15 +168,32 @@ def init_db() -> None:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_fi_project ON file_index(project, chapter_int)")
         except sqlite3.OperationalError:
             pass
+        try:
+            conn.execute("ALTER TABLE operation_logs ADD COLUMN project TEXT")
+        except: pass
+        try:
+            conn.execute("ALTER TABLE operation_logs ADD COLUMN value INTEGER DEFAULT 0")
+        except: pass
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_time_action ON operation_logs(created_at, action)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_target ON operation_logs(target)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_project ON operation_logs(project)")
 
 
-
-def log_operation(action: str, target: str = "", detail: str = "") -> None:
+def log_operation(action: str, target: str = "", detail: str = "", value: int = 0, project: str = "") -> None:
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO operation_logs(action, target, created_at, detail) VALUES (?, ?, ?, ?)",
-            (action, target, utc_now().isoformat(), detail),
+            "INSERT INTO operation_logs(action, target, project, created_at, detail, value) VALUES (?, ?, ?, ?, ?, ?)",
+            (action, target, project, utc_now().isoformat(), detail, value),
         )
+
+
+def _infer_kind(p: Path) -> str:
+    parts = p.parts
+    if "chapters" in parts: return "chapter"
+    if "hooks" in parts: return "hook"
+    if "characters" in parts: return "character"
+    if "world" in parts: return "world"
+    return "other"
 
 
 def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
@@ -312,8 +335,8 @@ def list_chapters(project: str, sync: bool = False) -> list[dict[str, Any]]:
                     )
                     
                     conn.execute("DELETE FROM chapter_fts WHERE path=?", (f_str,))
-                    conn.execute("INSERT INTO chapter_fts(path, project, title, body) VALUES (?, ?, ?, ?)", 
-                                 (f_str, project, meta["title"], body))
+                    conn.execute("INSERT INTO chapter_fts(path, project, kind, title, body) VALUES (?, ?, ?, ?, ?)", 
+                                 (f_str, project, _infer_kind(f), meta["title"], body))
 
         db_rows = conn.execute(
             "SELECT path, word_count, updated_at, title, chapter, chapter_int, status, volume, mtime "
@@ -407,6 +430,7 @@ def scan_projects() -> list[dict[str, Any]]:
                 "latest": latest,
                 "author": meta.get("author", ""),
                 "synopsis": meta.get("synopsis", ""),
+                "daily_goal": meta.get("daily_goal", DAILY_GOAL_WORDS),
             }
         )
     return results
@@ -447,8 +471,8 @@ def write_markdown(path: Path, frontmatter: dict[str, Any], body: str) -> None:
             (str(p), p.parts[-4] if len(p.parts) >= 4 else "", words, utc_now().isoformat(), meta["title"], meta["chapter"], chapter_int, meta["status"], meta["volume"], mtime),
         )
         conn.execute("DELETE FROM chapter_fts WHERE path=?", (str(p),))
-        conn.execute("INSERT INTO chapter_fts(path, project, title, body) VALUES (?, ?, ?, ?)", 
-                     (str(p), p.parts[-4] if len(p.parts) >= 4 else "", meta["title"], body))
+        conn.execute("INSERT INTO chapter_fts(path, project, kind, title, body) VALUES (?, ?, ?, ?, ?)", 
+                     (str(p), p.parts[-4] if len(p.parts) >= 4 else "", _infer_kind(p), meta["title"], body))
 
 
 def parse_csv(value: str) -> list[str]:
@@ -489,6 +513,8 @@ def startup() -> None:
     NOVELS_ROOT.mkdir(parents=True, exist_ok=True)
     BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
     init_db()
+    for p in [item.name for item in NOVELS_ROOT.iterdir() if item.is_dir()]:
+        list_chapters(p, sync=True)
 
 
 @app.get("/health")
@@ -763,7 +789,9 @@ def delete_project(request: Request, project: str) -> Response:
         with get_conn() as conn:
             conn.execute("DELETE FROM file_index WHERE project=?", (safe_project,))
             conn.execute("DELETE FROM ai_pipelines WHERE project=?", (safe_project,))
-        log_operation("delete_project", safe_project)
+            conn.execute("DELETE FROM chapter_fts WHERE project=?", (safe_project,))
+            conn.execute("DELETE FROM project_meta WHERE project=?", (safe_project,))
+        log_operation("delete_project", safe_project, project=safe_project)
     return JSONResponse(content={"status": "ok"})
 
 @app.put("/projects/{project}/rename")
@@ -787,10 +815,13 @@ async def rename_project(request: Request, project: str) -> Response:
             rows = conn.execute("SELECT path FROM file_index WHERE project=?", (safe_project,)).fetchall()
             for r in rows:
                 old_path = r["path"]
-                new_path = old_path.replace(str(old_p), str(new_p), 1)
-                conn.execute("UPDATE file_index SET path=?, project=? WHERE path=?", (new_path, new_name, old_path))
+                new_path_str = old_path.replace(str(old_p), str(new_p), 1)
+                conn.execute("UPDATE file_index SET path=?, project=? WHERE path=?", (new_path_str, new_name, old_path))
+                conn.execute("UPDATE chapter_fts SET path=?, project=? WHERE path=?", (new_path_str, new_name, old_path))
+                
             conn.execute("UPDATE ai_pipelines SET project=? WHERE project=?", (new_name, safe_project))
-        log_operation("rename_project", f"{safe_project} -> {new_name}")
+            conn.execute("UPDATE project_meta SET project=? WHERE project=?", (new_name, safe_project))
+        log_operation("rename_project", f"{project} -> {new_name}", project=new_name)
         
     return JSONResponse(content={"status": "ok", "new_url": f"/projects/{new_name}"})
 
@@ -850,7 +881,7 @@ def create_chapter(
         "draft_version": "v1",
     }
     write_markdown(path, frontmatter, "")
-    log_operation("create_chapter", str(path))
+    log_operation("create_chapter", str(path), project=safe_project)
     return RedirectResponse(url=f"/projects/{safe_project}/editor/{path.name}", status_code=303)
 
 @app.delete("/projects/{project}/chapters/{filename}")
@@ -862,7 +893,8 @@ def delete_chapter(request: Request, project: str, filename: str) -> Response:
         path.unlink()
         with get_conn() as conn:
             conn.execute("DELETE FROM file_index WHERE path=?", (str(path),))
-        log_operation("delete_chapter", str(path))
+            conn.execute("DELETE FROM chapter_fts WHERE path=?", (str(path),))
+        log_operation("delete_chapter", str(path), project=safe_project)
     return JSONResponse(content={"status": "ok", "new_url": f"/projects/{safe_project}"})
 
 @app.put("/projects/{project}/chapters/{filename}/rename")
@@ -884,7 +916,8 @@ async def rename_chapter(request: Request, project: str, filename: str) -> Respo
         old_p.rename(new_p)
         with get_conn() as conn:
             conn.execute("UPDATE file_index SET path=? WHERE path=?", (str(new_p), str(old_p)))
-        log_operation("rename_chapter", f"{old_p.name} -> {new_p.name}")
+            conn.execute("UPDATE chapter_fts SET path=? WHERE path=?", (str(new_p), str(old_p)))
+        log_operation("rename_chapter", f"{filename} -> {new_p.name}", project=safe_project)
         
     return JSONResponse(content={"status": "ok", "new_url": f"/projects/{safe_project}/editor/{new_p.name}"})
 
@@ -1029,7 +1062,7 @@ def save_chapter(
         words_added = 0 # Don't record negative progress in trend
 
     write_markdown(path, frontmatter, body)
-    log_operation("save", str(path), f"words_added={words_added}")
+    log_operation("save", str(path), f"words_added={words_added}", value=words_added, project=safe_project)
     new_mtime = path.stat().st_mtime
     return templates.TemplateResponse(
         "_save_result.html",
@@ -1047,24 +1080,31 @@ async def reorder_chapters(request: Request, project: str) -> Response:
     if not filenames:
         return JSONResponse(status_code=400, content={"error": "empty order"})
     
-    for new_idx, fname in enumerate(filenames, start=1):
-        old_path = chapter_path(safe_project, fname)
-        if not old_path.exists():
-            continue
-            
-        fm, body = read_markdown(old_path)
-        stem_parts = fname.replace(".md", "").split("-", 1)
-        rest = stem_parts[1] if len(stem_parts) > 1 else stem_parts[0]
-        new_name = f"{new_idx:05d}-{rest}.md"
-        new_path = old_path.parent / new_name
-        
-        if old_path != new_path:
-            old_path.rename(new_path)
-            with get_conn() as conn:
-                conn.execute("UPDATE file_index SET path=? WHERE path=?", (str(new_path), str(old_path)))
-                conn.execute("UPDATE chapter_fts SET path=? WHERE path=?", (str(new_path), str(old_path)))
+    # Map original paths to new indices
+    mapping = {f: i+1 for i, f in enumerate(filenames)}
     
-    log_operation("reorder_chapters", safe_project, f"reordered {len(filenames)} chapters")
+    # Rename to temp files to avoid collisions
+    for fname in filenames:
+        p = chapter_path(safe_project, fname)
+        if p.exists():
+            p.rename(p.with_suffix(".tmp"))
+            
+    # Rename from temp to final with new numbers
+    for i, fname in enumerate(filenames, 1):
+        tmp_p = chapter_path(safe_project, fname).with_suffix(".tmp")
+        if not tmp_p.exists(): continue
+        
+        parts = fname.split("-", 1)
+        name_part = parts[1] if len(parts) > 1 else fname
+        new_name = f"{i:05d}-{name_part}"
+        new_p = chapter_path(safe_project, new_name)
+        
+        fm, body = read_markdown(tmp_p)
+        fm["chapter"] = str(i)
+        write_markdown(new_p, fm, body)
+        tmp_p.unlink()
+        
+    log_operation("reorder_chapters", safe_project, f"reordered {len(filenames)} chapters", project=safe_project)
     return JSONResponse(content={"status": "ok"})
 
 
@@ -1226,15 +1266,15 @@ def search_project(request: Request, project: str, q: str = "") -> Response:
     safe_project = safe_slug(project, fallback="project")
     results = []
     if q:
+        escaped = q.replace('"', '""')
         with get_conn() as conn:
             # Query body or title
             rows = conn.execute(
                 """
-                SELECT path, title, snippet(chapter_fts, 3, '<mark class="bg-accent/30 text-accent px-1 rounded">', '</mark>', '...', 64) as excerpt
+                SELECT path, title, snippet(chapter_fts, 4, '<mark class="bg-accent/20 text-accent px-0.5 rounded">', '</mark>', '...', 64) as excerpt
                 FROM chapter_fts
                 WHERE chapter_fts MATCH ? AND project = ?
-                ORDER BY rank
-                LIMIT 50
+                ORDER BY rank LIMIT 50
                 """,
                 (f'"{q}"', safe_project)
             ).fetchall()
@@ -1258,14 +1298,14 @@ def project_stats(request: Request, project: str) -> Response:
         # Detail format: "words_added=123"
         rows = conn.execute(
             """
-            SELECT date(created_at) as day, sum(CAST(substr(detail, 13) as INTEGER)) as words
+            SELECT date(created_at) as day, sum(value) as words
             FROM operation_logs
-            WHERE action='save' AND target LIKE ?
+            WHERE action='save' AND project=?
             GROUP BY day
             ORDER BY day DESC
             LIMIT 90
             """,
-            (f"%{safe_project}%",)
+            (safe_project,)
         ).fetchall()
     
     stats = [{"day": r["day"], "words": r["words"]} for r in rows]
@@ -1357,6 +1397,40 @@ def create_hook(request: Request, project: str, name: str = Form("")) -> Respons
     path = folder / filename
     write_markdown(path, {"title": name, "status": "open"}, f"# {name}\n\n在这里记录待填的坑或伏笔...")
     return RedirectResponse(url=f"/projects/{safe_project}/hooks", status_code=303)
+
+
+@app.post("/projects/{project}/backups/{backup_name}/restore")
+def restore_backup(request: Request, project: str, backup_name: str):
+    require_auth(request)
+    if "__" not in backup_name:
+        raise HTTPException(400)
+    filename = backup_name.split("__", 1)[1]
+    safe_project = safe_slug(project, fallback="project")
+    current_p = chapter_path(safe_project, filename)
+    rel = current_p.relative_to(VAULT_ROOT)
+    backup_p = BACKUP_ROOT / rel.parent / backup_name
+    if not backup_p.exists():
+        raise HTTPException(404)
+    # Backup current before restoring
+    backup_file(current_p)
+    import shutil
+    shutil.copy2(backup_p, current_p)
+    # Reload and index
+    fm, body = read_markdown(current_p)
+    write_markdown(current_p, fm, body)
+    log_operation("restore_backup", str(current_p), backup_name, project=safe_project)
+    return JSONResponse(content={"status": "ok"})
+
+
+@app.post("/settings/reindex")
+def reindex_all(request: Request) -> Response:
+    require_auth(request)
+    if NOVELS_ROOT.exists():
+        for p in NOVELS_ROOT.iterdir():
+            if p.is_dir():
+                list_chapters(p.name, sync=True)
+    log_operation("reindex_all")
+    return RedirectResponse(url="/settings", status_code=303)
 
 
 @app.get("/export", response_class=HTMLResponse)

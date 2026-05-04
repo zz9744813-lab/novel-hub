@@ -68,7 +68,7 @@
       <div class="sticky top-0 z-10 bg-panel/95 backdrop-blur border-b border-border_color p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <input class="text-2xl font-bold bg-transparent border-0 outline-none w-full md:w-auto placeholder:text-border_color" name="title" value="{{ frontmatter.title }}" placeholder="章节标题" />
         <div class="flex items-center gap-3 text-sm text-muted shrink-0">
-          <span class="bg-bg border border-border_color px-2 py-1 rounded text-xs">{{ active.word_count if active else 0 }} 字</span>
+          <span class="bg-bg border border-border_color rounded px-2.5 py-1.5 text-xs text-muted" data-live-wordcount>{{ active.word_count if active else 0 }} 字</span>
           <span id="saved-at" class="text-xs">--</span>
           <div class="h-4 w-px bg-border_color mx-1"></div>
           <div class="flex items-center gap-1.5">

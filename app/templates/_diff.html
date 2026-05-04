@@ -19,4 +19,9 @@
       <div class="text-muted italic text-center py-4">两个版本完全一致</div>
     {% endif %}
   </div>
+  <button type="button" 
+          class="bg-accent text-white hover:bg-accent/90 rounded-lg px-4 py-2 text-xs font-medium transition-colors w-full"
+          onclick="if(confirm('确定要还原到此历史版本吗？当前内容将被覆盖（会生成新备份）。')) fetch(window.location.pathname.replace('/diff/', '/backups/') + '/restore', {method: 'POST'}).then(r=>r.json()).then(d=>{ if(d.status==='ok') window.location.reload(); else alert('还原失败'); })">
+    还原此版本
+  </button>
 </div>

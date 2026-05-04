@@ -80,6 +80,23 @@
           <button type="submit" class="bg-accent text-white hover:bg-accent/90 rounded px-3 py-1.5 text-xs font-medium transition-colors">保存设置</button>
         </form>
       </div>
+
+      <div class="bg-panel border border-border_color rounded-xl p-4 shadow-sm mt-2" x-data="{open: false}">
+        <button @click="open = !open" class="flex items-center justify-between w-full text-sm font-medium text-muted uppercase tracking-wider">
+          章节重排
+          <svg class="w-4 h-4 transition-transform" :class="open && 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+        </button>
+        <div x-show="open" x-transition class="mt-3 pt-3 border-t border-border_color">
+          <p class="text-[10px] text-muted mb-2">每行一个文件名（含.md），系统将按顺序重排物理文件编号。</p>
+          <textarea id="reorder-list" rows="10" class="w-full bg-bg border border-border_color rounded px-2.5 py-1.5 text-[10px] font-mono text-text_color focus:outline-none focus:border-accent resize-none">{% for c in chapters %}{{ c.filename }}
+{% endfor %}</textarea>
+          <button type="button" 
+                  class="w-full mt-2 bg-panel border border-border_color hover:border-accent hover:text-accent rounded px-3 py-1.5 text-xs font-medium transition-colors"
+                  onclick="const order = document.getElementById('reorder-list').value.split('\n').map(s => s.trim()).filter(s => s); if(confirm('确定要按此顺序物理重排文件吗？')) fetch('/projects/{{ project }}/chapters/reorder', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({order})}).then(res => res.json()).then(data => { if(data.status==='ok') window.location.reload(); else alert('失败: ' + (data.error||'未知错误')); })">
+            确认重排
+          </button>
+        </div>
+      </div>
     </div>
 
     <div class="flex-1 w-full bg-panel border border-border_color rounded-xl p-6 shadow-sm min-h-[400px]">

@@ -1,5 +1,26 @@
 {% extends "base.html" %}
-{% block title %}{{ entity.name }} · {{ project }} · Novel Hub{% endblock %}
+{% block title %}{{ entity.name }} · {{ project }} · Novel Hub
+<div class="bg-panel border border-border_color rounded-xl p-6 mt-6">
+    <h3 class="text-sm font-bold text-muted uppercase tracking-widest mb-3">引用维护</h3>
+    <button type="button" 
+            class="bg-accent/10 text-accent border border-accent/20 hover:bg-accent/20 rounded px-4 py-2 text-sm transition-colors"
+            onclick="
+                if (!confirm('扫描所有章节，把 [[{{ entity.name }}]] 这种简写引用绑定到本实体？')) return;
+                this.textContent = '处理中...';
+                this.disabled = true;
+                fetch(`/api/projects/{{ project }}/bulk-bind-entities`, {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({entity_id: '{{ entity.id }}'})
+                }).then(r => r.json()).then(d => {
+                    alert(`已更新 ${d.updated} 章节`);
+                    this.textContent = '批量绑定本实体的引用';
+                    this.disabled = false;
+                });
+            ">批量绑定本实体的引用</button>
+    <p class="text-xs text-muted mt-2 italic">把章节里写作 <code>[[{{ entity.name }}]]</code> 的简写引用，全部改写为带 ID 的 <code>[[{{ entity.id }}|{{ entity.name }}]]</code>。改名后建议跑一次。</p>
+</div>
+
+{% endblock %}
 
 {% block content %}
 <div class="flex flex-col gap-6 max-w-6xl mx-auto w-full py-6">
@@ -60,36 +81,168 @@
 
             
             <!-- T2.5 Structured Properties -->
-            <div class="bg-panel border border-border_color rounded-xl p-6 shadow-sm" x-data="{ kind: '{{ entity.kind }}' }" @change="kind = $event.target.name === 'kind' ? $event.target.value : kind">
-                <h3 class="text-sm font-semibold text-muted uppercase tracking-wider mb-4">Properties (Structured)</h3>
-                
-                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    <!-- Character Fields -->
-                    <template x-if="kind === 'character'">
-                        <div class="contents">
-                            {% set p = entity.properties|from_json %}
-                            <label class="flex flex-col gap-1 text-xs text-muted">Gender <input name="gender" data-prop value="{{ p.gender }}" class="bg-bg border border-border_color rounded px-2 py-1.5 text-sm"></label>
-                            <label class="flex flex-col gap-1 text-xs text-muted">Age <input name="age" data-prop value="{{ p.age }}" class="bg-bg border border-border_color rounded px-2 py-1.5 text-sm"></label>
-                            <label class="flex flex-col gap-1 text-xs text-muted">MBTI <input name="mbti" data-prop value="{{ p.mbti }}" class="bg-bg border border-border_color rounded px-2 py-1.5 text-sm"></label>
-                            <label class="flex flex-col gap-1 text-xs text-muted">Appearance <textarea name="appearance" data-prop class="bg-bg border border-border_color rounded px-2 py-1.5 text-sm">{{ p.appearance }}</textarea></label>
-                            <label class="flex flex-col gap-1 text-xs text-muted">Personality <textarea name="personality" data-prop class="bg-bg border border-border_color rounded px-2 py-1.5 text-sm">{{ p.personality }}</textarea></label>
-                        </div>
-                    </template>
+            <div x-data='{ props: {{ entity_properties|tojson }} }' class="flex flex-col gap-3">
+                <div class="bg-panel border border-border_color rounded-xl p-6 shadow-sm">
+                    <h3 class="text-sm font-semibold text-muted uppercase tracking-wider mb-4">Properties</h3>
                     
-                    <!-- Thread Fields -->
-                    <template x-if="kind === 'thread'">
-                        <div class="contents">
-                            {% set p = entity.properties|from_json %}
-                            <label class="flex flex-col gap-1 text-xs text-muted">Status
-                                <select name="status" data-prop class="bg-bg border border-border_color rounded px-2 py-1.5 text-sm">
-                                    <option value="open" {% if p.status == 'open' %}selected{% endif %}>Open</option>
-                                    <option value="resolving" {% if p.status == 'resolving' %}selected{% endif %}>Resolving</option>
-                                    <option value="closed" {% if p.status == 'closed' %}selected{% endif %}>Closed</option>
+                    <!-- character -->
+                    {% if entity.kind == 'character' %}
+                        <div class="grid grid-cols-2 gap-3 mb-3">
+                            <label class="flex flex-col gap-1 text-xs">性别
+                                <select x-model="props.gender" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none">
+                                    <option value="">--</option><option>男</option><option>女</option><option>其他</option>
                                 </select>
                             </label>
-                            <label class="flex flex-col gap-1 text-xs text-muted">Impact Level <input name="impact_level" data-prop value="{{ p.impact_level }}" class="bg-bg border border-border_color rounded px-2 py-1.5 text-sm"></label>
+                            <label class="flex flex-col gap-1 text-xs">年龄
+                                <input type="number" x-model.number="props.age" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none">
+                            </label>
+                            <label class="flex flex-col gap-1 text-xs">生日
+                                <input type="text" x-model="props.birth" placeholder="YYYY-MM-DD 或自由文本" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none">
+                            </label>
+                            <label class="flex flex-col gap-1 text-xs">死亡时间
+                                <input type="text" x-model="props.death" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none">
+                            </label>
+                            <label class="flex flex-col gap-1 text-xs">MBTI
+                                <input type="text" x-model="props.mbti" placeholder="ISTJ" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none">
+                            </label>
+                            <label class="flex flex-col gap-1 text-xs">身高
+                                <input type="text" x-model="props.height" placeholder="180cm" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none">
+                            </label>
                         </div>
-                    </template>
+                        <div class="flex flex-col gap-3">
+                            <label class="flex flex-col gap-1 text-xs">外貌
+                                <textarea x-model="props.appearance" rows="2" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none custom-scrollbar"></textarea>
+                            </label>
+                            <label class="flex flex-col gap-1 text-xs">性格
+                                <textarea x-model="props.personality" rows="2" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none custom-scrollbar"></textarea>
+                            </label>
+                            <label class="flex flex-col gap-1 text-xs">动机
+                                <textarea x-model="props.motivation" rows="2" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none custom-scrollbar"></textarea>
+                            </label>
+                        </div>
+                    
+                    <!-- location -->
+                    {% elif entity.kind == 'location' %}
+                        <div class="grid grid-cols-2 gap-3">
+                            <label class="flex flex-col gap-1 text-xs">所属地区
+                                <input type="text" x-model="props.region" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none">
+                            </label>
+                            <label class="flex flex-col gap-1 text-xs">地点类型
+                                <select x-model="props.type" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none">
+                                    <option value="">--</option><option>城市</option><option>村庄</option><option>建筑</option><option>自然</option><option>秘境</option>
+                                </select>
+                            </label>
+                            <label class="flex flex-col gap-1 text-xs">气候
+                                <input type="text" x-model="props.climate" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none">
+                            </label>
+                            <label class="flex flex-col gap-1 text-xs">人口
+                                <input type="number" x-model.number="props.population" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none">
+                            </label>
+                            <label class="flex flex-col gap-1 text-xs col-span-2">控制方（实体ID或名）
+                                <input type="text" x-model="props.controlled_by" placeholder="ent_xxx 或留空" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none">
+                            </label>
+                        </div>
+                    
+                    <!-- item -->
+                    {% elif entity.kind == 'item' %}
+                        <div class="grid grid-cols-2 gap-3 mb-3">
+                            <label class="flex flex-col gap-1 text-xs">所有者（实体）
+                                <input type="text" x-model="props.owner_id" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none">
+                            </label>
+                            <label class="flex flex-col gap-1 text-xs">稀有度
+                                <select x-model="props.rarity" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none">
+                                    <option value="">--</option><option>凡品</option><option>珍稀</option><option>传说</option><option>神器</option>
+                                </select>
+                            </label>
+                        </div>
+                        <div class="flex flex-col gap-3">
+                            <label class="flex flex-col gap-1 text-xs">功能
+                                <textarea x-model="props.function" rows="2" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none custom-scrollbar"></textarea>
+                            </label>
+                            <label class="flex flex-col gap-1 text-xs">来历
+                                <textarea x-model="props.origins" rows="2" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none custom-scrollbar"></textarea>
+                            </label>
+                        </div>
+                    
+                    <!-- organization -->
+                    {% elif entity.kind == 'organization' %}
+                        <div class="grid grid-cols-2 gap-3">
+                            <label class="flex flex-col gap-1 text-xs">领导者（实体）
+                                <input type="text" x-model="props.leader_id" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none">
+                            </label>
+                            <label class="flex flex-col gap-1 text-xs">总部
+                                <input type="text" x-model="props.headquarters" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none">
+                            </label>
+                            <label class="flex flex-col gap-1 text-xs">立场
+                                <select x-model="props.alignment" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none">
+                                    <option value="">--</option><option>正派</option><option>中立</option><option>反派</option>
+                                </select>
+                            </label>
+                            <label class="flex flex-col gap-1 text-xs">规模
+                                <input type="text" x-model="props.size" placeholder="千人/百万级 等" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none">
+                            </label>
+                        </div>
+                    
+                    <!-- thread (伏笔) -->
+                    {% elif entity.kind == 'thread' %}
+                        <div class="grid grid-cols-2 gap-3">
+                            <label class="flex flex-col gap-1 text-xs">状态
+                                <select x-model="props.status" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none">
+                                    <option value="open">未填</option>
+                                    <option value="resolving">推进中</option>
+                                    <option value="closed">已填</option>
+                                </select>
+                            </label>
+                            <label class="flex flex-col gap-1 text-xs">影响等级
+                                <select x-model="props.impact_level" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none">
+                                    <option value="">--</option><option>主线</option><option>支线</option><option>背景</option>
+                                </select>
+                            </label>
+                            <label class="flex flex-col gap-1 text-xs">埋设章节
+                                <input type="text" x-model="props.start_chapter" placeholder="如：00050" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none">
+                            </label>
+                            <label class="flex flex-col gap-1 text-xs">预计填埋章节
+                                <input type="text" x-model="props.end_chapter" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none">
+                            </label>
+                        </div>
+                    
+                    <!-- concept -->
+                    {% elif entity.kind == 'concept' %}
+                        <div class="flex flex-col gap-3">
+                            <label class="flex flex-col gap-1 text-xs">体系类型
+                                <input type="text" x-model="props.system_type" placeholder="修炼/魔法/科技 等" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none">
+                            </label>
+                            <label class="flex flex-col gap-1 text-xs">限制条件
+                                <textarea x-model="props.limitations" rows="2" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none custom-scrollbar"></textarea>
+                            </label>
+                            <label class="flex flex-col gap-1 text-xs">普及程度
+                                <input type="text" x-model="props.prevalence" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none">
+                            </label>
+                        </div>
+                    
+                    <!-- event -->
+                    {% elif entity.kind == 'event' %}
+                        <div class="flex flex-col gap-3">
+                            <label class="flex flex-col gap-1 text-xs">时间
+                                <input type="text" x-model="props.timestamp" placeholder="自由文本" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none">
+                            </label>
+                            <label class="flex flex-col gap-1 text-xs">参与者（逗号分隔的实体ID）
+                                <input type="text" x-model="props.participants" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none">
+                            </label>
+                            <label class="flex flex-col gap-1 text-xs">结果
+                                <textarea x-model="props.outcome" rows="2" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none custom-scrollbar"></textarea>
+                            </label>
+                            <label class="flex flex-col gap-1 text-xs">历史意义
+                                <textarea x-model="props.historical_significance" rows="2" class="bg-bg border border-border_color rounded px-2 py-1 focus:border-accent outline-none custom-scrollbar"></textarea>
+                            </label>
+                        </div>
+                    
+                    {% else %}
+                        <textarea x-model="props" rows="6" class="bg-bg border border-border_color rounded px-2 py-1 font-mono text-xs focus:border-accent outline-none custom-scrollbar"></textarea>
+                    {% endif %}
+                    
+                    <!-- 隐藏字段，提交时把 props 序列化进去 -->
+                    <input type="hidden" name="properties" id="hidden-props" :value="JSON.stringify(props)">
                 </div>
             </div>
 
@@ -182,11 +335,8 @@ window.saveEntity = async () => {
     const formData = new FormData(form);
     const cascade = document.getElementById('cascade-rename').checked;
     
-    // T2.5: Collect properties from structured form
-    const properties = {};
-    document.querySelectorAll('[data-prop]').forEach(el => {
-        properties[el.name] = el.value;
-    });
+    const hiddenPropsEl = document.getElementById('hidden-props');
+    const properties = hiddenPropsEl ? JSON.parse(hiddenPropsEl.value) : {};
 
     const data = {
         name: formData.get('name'),
@@ -286,11 +436,8 @@ window.saveEntity = async () => {
     const formData = new FormData(form);
     const cascade = document.getElementById('cascade-rename').checked;
     
-    // T2.5: Collect properties from structured form
-    const properties = {};
-    document.querySelectorAll('[data-prop]').forEach(el => {
-        properties[el.name] = el.value;
-    });
+    const hiddenPropsEl = document.getElementById('hidden-props');
+    const properties = hiddenPropsEl ? JSON.parse(hiddenPropsEl.value) : {};
 
     const data = {
         name: formData.get('name'),
@@ -315,4 +462,25 @@ window.saveEntity = async () => {
 };
 
 </script>
+
+<div class="bg-panel border border-border_color rounded-xl p-6 mt-6">
+    <h3 class="text-sm font-bold text-muted uppercase tracking-widest mb-3">引用维护</h3>
+    <button type="button" 
+            class="bg-accent/10 text-accent border border-accent/20 hover:bg-accent/20 rounded px-4 py-2 text-sm transition-colors"
+            onclick="
+                if (!confirm('扫描所有章节，把 [[{{ entity.name }}]] 这种简写引用绑定到本实体？')) return;
+                this.textContent = '处理中...';
+                this.disabled = true;
+                fetch(`/api/projects/{{ project }}/bulk-bind-entities`, {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({entity_id: '{{ entity.id }}'})
+                }).then(r => r.json()).then(d => {
+                    alert(`已更新 ${d.updated} 章节`);
+                    this.textContent = '批量绑定本实体的引用';
+                    this.disabled = false;
+                });
+            ">批量绑定本实体的引用</button>
+    <p class="text-xs text-muted mt-2 italic">把章节里写作 <code>[[{{ entity.name }}]]</code> 的简写引用，全部改写为带 ID 的 <code>[[{{ entity.id }}|{{ entity.name }}]]</code>。改名后建议跑一次。</p>
+</div>
+
 {% endblock %}

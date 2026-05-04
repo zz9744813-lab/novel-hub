@@ -7,7 +7,9 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 import json
-from typing import Any
+import gzip
+import hashlib
+from typing import Any, List, Dict, Tuple
 
 import markdown
 import yaml
@@ -17,6 +19,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response, JSONResp
 from fastapi.staticfiles import StaticFiles
 
 from app.services.ai_client import generate_ai_content
+from app.services.wiki_link import update_entity_refs
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -156,6 +159,80 @@ def init_db() -> None:
                 body,
                 tokenize='unicode61 remove_diacritics 2'
             );
+
+            -- C-Route (v6) Schema
+            CREATE TABLE IF NOT EXISTS entities (
+                id TEXT PRIMARY KEY,
+                project TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                name TEXT NOT NULL,
+                aliases TEXT,
+                md_path TEXT,
+                properties TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_entities_project_kind ON entities(project, kind);
+            CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(project, name);
+
+            CREATE TABLE IF NOT EXISTS entity_relations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                target_id TEXT NOT NULL,
+                relation_type TEXT NOT NULL,
+                notes TEXT,
+                created_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_rel_source ON entity_relations(source_id);
+            CREATE INDEX IF NOT EXISTS idx_rel_target ON entity_relations(target_id);
+
+            CREATE TABLE IF NOT EXISTS scenes (
+                id TEXT PRIMARY KEY,
+                chapter_path TEXT NOT NULL,
+                project TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                title TEXT,
+                pov TEXT,
+                location_id TEXT,
+                word_count INTEGER,
+                char_offset_start INTEGER,
+                char_offset_end INTEGER,
+                summary TEXT,
+                status TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_scenes_chapter ON scenes(chapter_path, seq);
+
+            CREATE TABLE IF NOT EXISTS entity_refs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chapter_path TEXT NOT NULL,
+                scene_id TEXT,
+                entity_id TEXT NOT NULL,
+                ref_kind TEXT,
+                char_offset INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_refs_entity ON entity_refs(entity_id);
+            CREATE INDEX IF NOT EXISTS idx_refs_chapter ON entity_refs(chapter_path);
+
+            CREATE TABLE IF NOT EXISTS volumes (
+                project TEXT NOT NULL,
+                slug TEXT NOT NULL,
+                title TEXT,
+                seq INTEGER,
+                synopsis TEXT,
+                target_words INTEGER,
+                PRIMARY KEY (project, slug)
+            );
+
+            CREATE TABLE IF NOT EXISTS snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chapter_path TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                label TEXT,
+                content_hash TEXT,
+                content BLOB
+            );
+            CREATE INDEX IF NOT EXISTS idx_snapshots_chapter ON snapshots(chapter_path, created_at);
             """
         )
         try:
@@ -261,24 +338,36 @@ def read_markdown(path: Path) -> tuple[dict[str, Any], str]:
     return parse_frontmatter(content)
 
 
-def backup_file(path: Path) -> None:
+def backup_file(path: Path, label: str = "auto") -> None:
     p = _ensure_under_root(path, VAULT_ROOT)
     if not p.exists():
         return
-    rel = p.relative_to(VAULT_ROOT)
-    backup_name = f"{utc_now().strftime('%Y%m%dT%H%M%SZ')}__{p.name}"
-    dest_dir = BACKUP_ROOT / rel.parent
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / backup_name
-    shutil.copy2(p, dest)
+    content = p.read_text(encoding="utf-8")
+    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
     
-    all_backups = sorted(list(dest_dir.glob(f"*__{p.name}")), key=lambda x: x.name)
-    if len(all_backups) > 20:
-        for old in all_backups[:-20]:
-            try:
-                old.unlink()
-            except Exception:
-                pass
+    with get_conn() as conn:
+        # Deduplication: check if last snapshot for this file has same hash
+        last = conn.execute(
+            "SELECT content_hash FROM snapshots WHERE chapter_path = ? ORDER BY created_at DESC LIMIT 1",
+            (str(p),)
+        ).fetchone()
+        
+        if last and last["content_hash"] == content_hash:
+            return # No change
+            
+        compressed = gzip.compress(content.encode("utf-8"))
+        conn.execute(
+            "INSERT INTO snapshots(chapter_path, created_at, label, content_hash, content) VALUES (?, ?, ?, ?, ?)",
+            (str(p), utc_now().isoformat(), label, content_hash, compressed)
+        )
+        # Cleanup policy: Keep last 50
+        conn.execute(
+            """DELETE FROM snapshots WHERE id IN (
+                SELECT id FROM snapshots WHERE chapter_path = ? 
+                ORDER BY created_at DESC LIMIT -1 OFFSET 50
+            )""",
+            (str(p),)
+        )
 
 
 def count_words(text: str) -> int:
@@ -315,8 +404,25 @@ def list_markdown_files(folder: Path) -> list[Path]:
     return sorted(folder.glob("*.md"))
 
 
-def normalize_meta(fm: dict[str, Any], stem: str) -> dict[str, Any]:
-    return {
+def normalize_meta(fm: dict[str, Any], stem: str, project: str = None) -> dict[str, Any]:
+    def resolve_entities(items, kind):
+        if not items: return []
+        if not project: return items
+        resolved = []
+        with get_conn() as conn:
+            for item in items:
+                if isinstance(item, str):
+                    # Try to bind ID by name
+                    row = conn.execute("SELECT id FROM entities WHERE project=? AND name=?", (project, item)).fetchone()
+                    if row:
+                        resolved.append({"id": row["id"], "name": item})
+                    else:
+                        resolved.append({"id": None, "name": item}) # Unbound
+                else:
+                    resolved.append(item)
+        return resolved
+
+    res = {
         "title": fm.get("title", stem),
         "chapter": fm.get("chapter", ""),
         "status": fm.get("status", "draft"),
@@ -325,11 +431,12 @@ def normalize_meta(fm: dict[str, Any], stem: str) -> dict[str, Any]:
         "synopsis": fm.get("synopsis", ""),
         "notes": fm.get("notes", ""),
         "pov": fm.get("pov", ""),
-        "characters": fm.get("characters", []),
-        "locations": fm.get("locations", []),
+        "characters": resolve_entities(fm.get("characters", []), "character"),
+        "locations": resolve_entities(fm.get("locations", []), "location"),
         "warnings": fm.get("warnings", []),
         "draft_version": fm.get("draft_version", ""),
     }
+    return res
 
 
 def list_chapters(project: str, sync: bool = False) -> list[dict[str, Any]]:
@@ -351,7 +458,7 @@ def list_chapters(project: str, sync: bool = False) -> list[dict[str, Any]]:
                 
                 if not cached or cached.get("mtime") != mtime:
                     fm, body = read_markdown(f)
-                    meta = normalize_meta(fm, f.stem)
+                    meta = normalize_meta(fm, f.stem, project=project)
                     words = count_words(body)
                     try:
                         chapter_int = int(meta["chapter"])
@@ -498,7 +605,15 @@ def write_markdown(path: Path, frontmatter: dict[str, Any], body: str, project: 
     if project is None:
         project = _project_from_path(p)
 
-    meta = normalize_meta(frontmatter, p.stem)
+    # T1.3: Convert strings to objects in frontmatter for "new format" writing
+    meta = normalize_meta(frontmatter, p.stem, project=project)
+    frontmatter["characters"] = meta["characters"]
+    frontmatter["locations"] = meta["locations"]
+    
+    # Write file first
+    content = dump_frontmatter(frontmatter, body)
+    p.write_text(content, encoding="utf-8")
+
     words = count_words(body)
     mtime = p.stat().st_mtime
     try:
@@ -529,6 +644,31 @@ def write_markdown(path: Path, frontmatter: dict[str, Any], body: str, project: 
             "INSERT INTO chapter_fts(path, project, kind, title, body) VALUES (?, ?, ?, ?, ?)",
             (str(p), project, _infer_kind(p), meta["title"], body),
         )
+
+        # T1.4: Scenes Indexing
+        conn.execute("DELETE FROM scenes WHERE chapter_path=?", (str(p),))
+        scene_matches = list(re.finditer(r"^##\s+(.*)$", body, re.MULTILINE))
+        if not scene_matches:
+            # Whole chapter as one scene
+            sc_id = f"sc_{hashlib.sha1((str(p) + '1').encode()).hexdigest()[:8]}"
+            conn.execute(
+                "INSERT INTO scenes(id, chapter_path, project, seq, title, word_count, char_offset_start, char_offset_end) VALUES (?,?,?,?,?,?,?,?)",
+                (sc_id, str(p), project, 1, meta["title"], words, 0, len(body))
+            )
+        else:
+            for i, match in enumerate(scene_matches):
+                title = match.group(1).strip()
+                start = match.end()
+                end = scene_matches[i+1].start() if i + 1 < len(scene_matches) else len(body)
+                scene_body = body[start:end]
+                sc_id = f"sc_{hashlib.sha1((str(p) + str(i+1)).encode()).hexdigest()[:8]}"
+                conn.execute(
+                    "INSERT INTO scenes(id, chapter_path, project, seq, title, word_count, char_offset_start, char_offset_end) VALUES (?,?,?,?,?,?,?,?)",
+                    (sc_id, str(p), project, i+1, title, count_words(scene_body), start, end)
+                )
+
+    # T1.2: Wiki Link Refs
+    update_entity_refs(str(p), body, project)
 
 
 def parse_csv(value: str) -> list[str]:
@@ -999,7 +1139,7 @@ def editor_page(request: Request, project: str, filename: str) -> Response:
     if not path.exists():
         raise HTTPException(status_code=404, detail="chapter not found")
     fm, body = read_markdown(path)
-    meta = normalize_meta(fm, path.stem)
+    meta = normalize_meta(fm, path.stem, project=safe_project)
     # Editor uses DB index directly without scanning
     chapters = list_chapters(safe_project, sync=False)
     active = next((c for c in chapters if c["filename"] == path.name), None)
@@ -1498,6 +1638,91 @@ def reindex_all(request: Request) -> Response:
     log_operation("reindex_all")
     return RedirectResponse(url="/settings", status_code=303)
 
+
+# --- C-Route (v6) API Routes ---
+
+@app.get("/api/entities")
+def api_list_entities(request: Request, project: str, kind: str = None, q: str = None) -> Response:
+    require_auth(request)
+    with get_conn() as conn:
+        query = "SELECT * FROM entities WHERE project = ?"
+        params = [project]
+        if kind:
+            query += " AND kind = ?"
+            params.append(kind)
+        if q:
+            query += " AND (name LIKE ? OR aliases LIKE ?)"
+            params.append(f"%{q}%")
+            params.append(f"%{q}%")
+        rows = conn.execute(query, params).fetchall()
+        return JSONResponse(content={"status": "ok", "entities": [dict(r) for r in rows]})
+
+@app.post("/api/entities")
+async def api_create_entity(request: Request) -> Response:
+    require_auth(request)
+    data = await request.json()
+    project = data.get("project")
+    kind = data.get("kind")
+    name = data.get("name")
+    if not project or not name:
+        raise HTTPException(400, "project and name required")
+    
+    ent_id = data.get("id") or f"ent_{hashlib.sha1((project + name + str(utc_now())).encode()).hexdigest()[:8]}"
+    now = utc_now().isoformat()
+    
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO entities (id, project, kind, name, aliases, properties, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (ent_id, project, kind, name, json.dumps(data.get("aliases", [])), json.dumps(data.get("properties", {})), now, now)
+        )
+    return JSONResponse(content={"status": "ok", "id": ent_id})
+
+@app.get("/api/entities/{ent_id}")
+def api_get_entity(request: Request, ent_id: str) -> Response:
+    require_auth(request)
+    with get_conn() as conn:
+        entity = conn.execute("SELECT * FROM entities WHERE id = ?", (ent_id,)).fetchone()
+        if not entity: raise HTTPException(404)
+        relations = conn.execute(
+            """SELECT er.*, e.name as target_name FROM entity_relations er 
+               JOIN entities e ON er.target_id = e.id 
+               WHERE source_id = ?""", (ent_id,)).fetchall()
+        appearances = conn.execute("SELECT * FROM entity_refs WHERE entity_id = ?", (ent_id,)).fetchall()
+        return JSONResponse(content={
+            "status": "ok", 
+            "entity": dict(entity), 
+            "relations": [dict(r) for r in relations],
+            "appearances": [dict(a) for a in appearances]
+        })
+
+@app.post("/api/entity-relations")
+async def api_create_relation(request: Request) -> Response:
+    require_auth(request)
+    data = await request.json()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO entity_relations (project, source_id, target_id, relation_type, notes, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (data["project"], data["source_id"], data["target_id"], data["relation_type"], data.get("notes", ""), utc_now().isoformat())
+        )
+    return JSONResponse(content={"status": "ok"})
+
+@app.get("/api/projects/{project}/outline")
+def api_get_outline(request: Request, project: str) -> Response:
+    require_auth(request)
+    with get_conn() as conn:
+        # Simple tree: Volumes -> Chapters -> Scenes
+        volumes = conn.execute("SELECT * FROM volumes WHERE project = ? ORDER BY seq", (project,)).fetchall()
+        chapters = conn.execute("SELECT * FROM file_index WHERE project = ? ORDER BY volume, chapter_int", (project,)).fetchall()
+        scenes = conn.execute("SELECT * FROM scenes WHERE project = ? ORDER BY chapter_path, seq", (project,)).fetchall()
+        
+        return JSONResponse(content={
+            "status": "ok",
+            "volumes": [dict(v) for v in volumes],
+            "chapters": [dict(c) for c in chapters],
+            "scenes": [dict(s) for s in scenes]
+        })
 
 @app.get("/export", response_class=HTMLResponse)
 def export_page(request: Request) -> Response:

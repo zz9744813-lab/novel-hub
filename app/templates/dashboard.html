@@ -104,7 +104,9 @@
     <div class="border-2 border-dashed border-border_color rounded-xl p-12 text-center flex flex-col items-center justify-center">
       <svg class="w-12 h-12 mb-4 text-border_color" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
       <p class="text-muted mb-4">在 <code>/root/ObsidianVault/Novels</code> 下创建你的第一部作品。</p>
-      <button class="bg-border_color/30 text-muted border border-border_color rounded-lg px-4 py-2 text-sm font-medium cursor-not-allowed" disabled>创建示例项目</button>
+      <form action="/examples/create" method="post">
+        <button type="submit" class="bg-accent text-white hover:bg-accent/90 border border-accent rounded-lg px-4 py-2 text-sm font-medium transition-colors">创建示例项目</button>
+      </form>
     </div>
     {% endif %}
   </article>

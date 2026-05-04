@@ -41,12 +41,6 @@
     editor.scrollTo(null, Math.max(0, targetY));
   });
 
-  if (titleInput && titleMirror) {
-    titleInput.addEventListener('input', () => {
-      titleMirror.value = titleInput.value;
-    });
-  }
-
   if (fontPicker) {
     fontPicker.addEventListener('change', () => {
       const wrap = editor.getWrapperElement();
@@ -84,4 +78,66 @@
       form.requestSubmit();
     }
   }, 60000);
+
+  // Tag fields handling
+  document.querySelectorAll('[data-tag-field]').forEach(field => {
+    const input = field.querySelector('[data-input]');
+    const chipsContainer = field.querySelector('.chips');
+    const targetName = field.dataset.target;
+    const hiddenInput = document.querySelector(`[data-hidden="${targetName}"]`);
+
+    if (!input || !chipsContainer || !hiddenInput) return;
+
+    function renderChips() {
+      const tags = hiddenInput.value.split(',').map(t => t.trim()).filter(t => t);
+      chipsContainer.innerHTML = '';
+
+      tags.forEach(tag => {
+        const chip = document.createElement('div');
+        chip.className = 'inline-flex items-center gap-1 bg-accent/10 border border-accent/20 text-accent rounded-full px-2 py-0.5 text-xs';
+        chip.innerHTML = `
+          <span>${tag}</span>
+          <button type="button" class="hover:text-danger hover:bg-danger/10 rounded-full w-4 h-4 flex items-center justify-center transition-colors">&times;</button>
+        `;
+        chip.querySelector('button').addEventListener('click', () => {
+          removeTag(tag);
+        });
+        chipsContainer.appendChild(chip);
+      });
+    }
+
+    function addTag(tag) {
+      tag = tag.trim();
+      if (!tag) return;
+
+      let tags = hiddenInput.value.split(',').map(t => t.trim()).filter(t => t);
+      if (!tags.includes(tag)) {
+        tags.push(tag);
+        hiddenInput.value = tags.join(',');
+        renderChips();
+        form.dataset.dirty = 'true';
+        setSaveState('未保存');
+      }
+      input.value = '';
+    }
+
+    function removeTag(tagToRemove) {
+      let tags = hiddenInput.value.split(',').map(t => t.trim()).filter(t => t);
+      tags = tags.filter(t => t !== tagToRemove);
+      hiddenInput.value = tags.join(',');
+      renderChips();
+      form.dataset.dirty = 'true';
+      setSaveState('未保存');
+    }
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ',') {
+        e.preventDefault();
+        addTag(input.value);
+      }
+    });
+
+    // Initial render
+    renderChips();
+  });
 })();

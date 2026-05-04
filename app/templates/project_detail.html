@@ -21,10 +21,10 @@
         <button class="bg-accent text-white hover:bg-accent/90 border border-accent rounded-lg px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap">新建章节</button>
       </form>
       <div class="h-8 w-px bg-border_color mx-1"></div>
-      <a class="bg-panel border border-border_color hover:border-accent/50 rounded-lg px-4 py-2 text-sm font-medium transition-colors" href="/projects/{{ project }}/characters">Characters</a>
-      <a class="bg-panel border border-border_color hover:border-accent/50 rounded-lg px-4 py-2 text-sm font-medium transition-colors" href="/projects/{{ project }}/world">World</a>
+      <a class="bg-panel border border-border_color hover:border-accent/50 rounded-lg px-4 py-2 text-sm font-medium transition-colors" href="/projects/{{ project }}/characters" x-text="$store.i18n.t('proj_chars')">角色设定</a>
+      <a class="bg-panel border border-border_color hover:border-accent/50 rounded-lg px-4 py-2 text-sm font-medium transition-colors" href="/projects/{{ project }}/world" x-text="$store.i18n.t('proj_world')">世界观设定</a>
       <a class="bg-accent/10 text-accent border border-accent/20 hover:bg-accent/20 rounded-lg px-4 py-2 text-sm font-medium transition-colors flex items-center gap-1.5" href="/ai-pipeline/{{ project }}">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg> AI
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg> <span x-text="$store.i18n.t('nav_pipeline')">AI 流水线</span>
       </a>
     </div>
   </div>
@@ -34,7 +34,7 @@
       <div class="bg-panel border border-border_color rounded-xl p-4 shadow-sm">
         <h3 class="text-sm font-medium text-muted uppercase tracking-wider mb-3">章节状态</h3>
         <div class="flex flex-col gap-1">
-          <a class="px-3 py-2 rounded-lg text-sm font-medium transition-colors {% if status_filter == 'all' %}bg-accent text-white{% else %}text-muted hover:bg-bg hover:text-text_color{% endif %}" href="/projects/{{ project }}">全部章节</a>
+          <a class="px-3 py-2 rounded-lg text-sm font-medium transition-colors {% if status_filter == 'all' %}bg-accent text-white{% else %}text-muted hover:bg-bg hover:text-text_color{% endif %}" href="/projects/{{ project }}" x-text="$store.i18n.t('all_chapters')">全部章节</a>
           {% for s in status_options %}
           <a class="px-3 py-2 rounded-lg text-sm font-medium transition-colors flex justify-between items-center {% if status_filter == s %}bg-accent text-white{% else %}text-muted hover:bg-bg hover:text-text_color{% endif %}" href="/projects/{{ project }}?status={{ s }}">
             <span class="uppercase">{{ s }}</span>

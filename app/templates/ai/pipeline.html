@@ -91,6 +91,11 @@
                 </button>
               </div>
               <textarea x-model="card.content" class="w-full bg-bg border border-border_color rounded-lg p-3 text-sm min-h-[100px] outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all resize-y" placeholder="输入核心梗概、设定细节或 AI 提示词..."></textarea>
+              <div class="flex justify-end mt-2">
+                <button @click="applyCard(card)" class="bg-accent/10 text-accent border border-accent/20 hover:bg-accent/20 rounded px-3 py-1.5 text-xs font-medium transition-colors">
+                  应用到项目 (Export)
+                </button>
+              </div>
             </div>
 
           </div>
@@ -132,7 +137,7 @@ document.addEventListener('alpine:init', () => {
             return this.stages.find(s => s.id === this.activeStage);
         },
         init() {
-            // Load initial data from DB or fallback to mock data
+            // Load initial data from DB
             try {
                 const initialStages = JSON.parse('{{ stages_data|tojson|safe }}');
                 if (Object.keys(initialStages).length > 0) {
@@ -142,13 +147,6 @@ document.addEventListener('alpine:init', () => {
                         }
                         return s;
                     });
-                } else {
-                    // Fallback mock data
-                    const outlineStage = this.stages.find(s => s.id === 'outline');
-                    outlineStage.cards.push(
-                        { id: 'c1', title: '卷一：初入江湖', content: '主角离开村庄，在镇上遇到第一个事件，结识女主角。' },
-                        { id: 'c2', title: '卷二：宗门大比', content: '加入宗门后开始修炼，最终在大比中一鸣惊人。' }
-                    );
                 }
             } catch (e) {
                 console.error("Error loading initial stages:", e);
@@ -193,6 +191,35 @@ document.addEventListener('alpine:init', () => {
         removeCard(id) {
             this.currentStage.cards = this.currentStage.cards.filter(c => c.id !== id);
         },
+        async applyCard(card) {
+            NovelHubUI.showToast('正在应用...');
+            try {
+                const response = await fetch(`/ai-pipeline/{{ project }}/apply`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        stage: this.activeStage,
+                        title: card.title,
+                        content: card.content
+                    })
+                });
+                if (response.ok) {
+                    NovelHubUI.showToast('应用成功');
+                    const res = await response.json();
+                    if (res.redirect_url) {
+                        window.location.href = res.redirect_url;
+                    }
+                } else {
+                    const data = await response.json();
+                    NovelHubUI.showToast(data.error || '应用失败');
+                }
+            } catch (err) {
+                console.error(err);
+                NovelHubUI.showToast('请求异常');
+            }
+        },
         async generateAI() {
             NovelHubUI.showToast('正在调用 AI 生成内容...');
 
@@ -216,12 +243,22 @@ document.addEventListener('alpine:init', () => {
                 const data = await response.json();
 
                 if (response.ok) {
-                    const id = 'c' + Date.now();
-                    this.currentStage.cards.push({
-                        id: id,
-                        title: 'AI 生成内容',
-                        content: data.result
-                    });
+                    if (Array.isArray(data.result)) {
+                        data.result.forEach((card, index) => {
+                            this.currentStage.cards.push({
+                                id: 'c' + Date.now() + index,
+                                title: card.title || '无标题',
+                                content: card.content || ''
+                            });
+                        });
+                    } else {
+                        // Fallback logic
+                        this.currentStage.cards.push({
+                            id: 'c' + Date.now(),
+                            title: 'AI 生成内容',
+                            content: String(data.result)
+                        });
+                    }
                     NovelHubUI.showToast('AI 生成完成');
                 } else {
                     NovelHubUI.showToast(data.error || 'AI 生成失败');

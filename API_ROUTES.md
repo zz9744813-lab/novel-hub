@@ -1,68 +1,65 @@
-# Novel Hub C-Route API Reference (v6)
+# Novel Hub v14 API Routes
 
-## 1. Entities Management
-Manage characters, locations, items, threads, etc.
+所有需要登录的页面/API 都会检查 session。实验模块默认由 feature flag 关闭，关闭时返回 `404`。
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/api/entities` | List entities. Params: `project`, `kind`, `q` (search). |
-| `POST` | `/api/entities` | Create a new entity. |
-| `GET` | `/api/entities/{id}` | Get entity details. |
-| `PUT` | `/api/entities/{id}` | Update entity metadata/properties. |
-| `DELETE` | `/api/entities/{id}` | Remove entity. |
-
-### Request/Response Schemas
-- **POST /api/entities**:
-    - Request: `{ "project": "str", "kind": "str", "name": "str", "aliases": ["str"], "properties": {} }`
-    - Response: `{ "status": "ok", "id": "ent_xxxx" }`
-
----
-
-## 2. Entity Relations
-Track relationships between entities.
+## Core
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/api/entity-relations` | Create a relationship. |
-| `DELETE` | `/api/entity-relations/{id}` | Delete a relationship. |
+| `GET` | `/` | Dashboard |
+| `GET` | `/login` | Login page |
+| `POST` | `/login` | Login, limited to `5/minute` |
+| `GET` | `/settings` | Runtime/settings page |
+| `POST` | `/settings/ai` | Save encrypted AI settings |
+| `POST` | `/settings/reindex` | Rebuild indexes |
 
-- **POST /api/entity-relations**:
-    - Request: `{ "source_id": "ent_1", "target_id": "ent_2", "relation_type": "family_of", "notes": "str" }`
-
----
-
-## 3. Scenes & Outline
-Manage scene-level breakdown within chapters.
+## Projects & Chapters
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/api/projects/{p}/scenes` | List scenes for a chapter. |
-| `POST` | `/api/projects/{p}/scenes` | Manual scene creation/extraction. |
-| `PUT` | `/api/scenes/{id}` | Update scene metadata (POV, summary, etc). |
-| `DELETE` | `/api/scenes/{id}` | Merge scene back or delete. |
-| `GET` | `/api/projects/{p}/outline` | Get full project outline tree. |
+| `GET` | `/projects/{project}` | Project detail |
+| `POST` | `/projects/{project}/chapters/new` | Create chapter |
+| `GET` | `/projects/{project}/editor/{filename}` | Desktop editor |
+| `GET` | `/projects/{project}/chapters/{filename}/read` | Mobile/read-only view |
+| `POST` | `/projects/{project}/chapters/{filename}` | Save chapter |
+| `GET` | `/projects/{project}/search` | Project search |
+| `GET` | `/projects/{project}/export` | Export page |
+| `GET` | `/api/projects/{project}/export` | Export TXT/EPUB |
 
----
-
-## 4. Analysis & Views
-Advanced writing tools and visualizations.
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/api/projects/{p}/timeline` | Timeline data. Params: `lane` (pov/char/status). |
-| `GET` | `/api/projects/{p}/threads-board` | Plot hole / Thread kanban data. |
-| `GET` | `/api/entities/{id}/appearances` | Reverse lookup for entity occurrences. |
-
----
-
-## 5. Snapshots (History)
-Integrated version control.
+## Entities
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/api/projects/{p}/snapshots` | Create manual snapshot. |
-| `GET` | `/api/projects/{p}/snapshots` | List snapshots for a chapter. |
-| `POST` | `/api/snapshots/{id}/restore` | Rollback to a specific snapshot. |
+| `GET` | `/projects/{project}/entities` | Entity list |
+| `GET` | `/projects/{project}/entities/{ent_id}` | Entity detail |
+| `GET` | `/api/entities` | List/search entities |
+| `POST` | `/api/entities` | Create entity |
+| `GET` | `/api/entities/{ent_id}` | Entity JSON |
+| `PUT` | `/api/entities/{ent_id}` | Update entity |
+| `DELETE` | `/api/entities/{ent_id}` | Delete entity |
+| `POST` | `/api/entity-relations` | Create relation |
+| `DELETE` | `/api/entity-relations/{rel_id}` | Delete relation |
 
-- **GET /api/projects/{p}/snapshots**:
-    - Response: `[{ "id": 1, "created_at": "...", "label": "...", "hash": "..." }]`
+## Snapshots
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/projects/{project}/snapshots` | Create manual snapshot |
+| `GET` | `/api/snapshots/{snap_id}/diff` | Show snapshot diff |
+
+## Feature-Gated Advanced Routes
+
+| Flag | Method | Endpoint | Description |
+|---|---|---|---|
+| `NOVELHUB_FEATURE_AI` | `GET` | `/api/projects/{project}/ai/generate` | AI streaming generation |
+| `NOVELHUB_FEATURE_AI` | `POST` | `/api/projects/{project}/ai/outline/volume` | Generate volume synopsis |
+| `NOVELHUB_FEATURE_AI` | `POST` | `/api/projects/{project}/ai/outline/chapter` | Generate chapter outlines |
+| `NOVELHUB_FEATURE_AI` + `NOVELHUB_FEATURE_SCENES` | `POST` | `/api/projects/{project}/ai/outline/scene` | Split chapter into scenes |
+| `NOVELHUB_FEATURE_AI` + `NOVELHUB_FEATURE_SCENES` | `POST` | `/api/projects/{project}/ai/outline/draft` | Expand scene draft |
+| `NOVELHUB_FEATURE_SCENES` | `GET` | `/api/projects/{project}/scenes` | Scene list |
+| `NOVELHUB_FEATURE_SCENES` | `POST` | `/api/projects/{project}/scenes` | Create scene |
+| `NOVELHUB_FEATURE_THREADS` | `GET` | `/projects/{project}/threads-board` | Threads board page |
+| `NOVELHUB_FEATURE_THREADS` | `GET` | `/api/projects/{project}/threads-board` | Threads board JSON |
+| `NOVELHUB_FEATURE_TIMELINE` | `GET` | `/projects/{project}/timeline` | Timeline page |
+| `NOVELHUB_FEATURE_TIMELINE` | `GET` | `/api/projects/{project}/timeline` | Timeline JSON |
+| `NOVELHUB_FEATURE_GRAPH` | `GET` | `/projects/{project}/graph` | Entity graph page |

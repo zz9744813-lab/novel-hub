@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}Settings · Novel Hub{% endblock %}
+{% block title %}设置 · Novel Hub{% endblock %}
 {% block content %}
 <section class="max-w-4xl mx-auto w-full flex flex-col gap-6">
   <div class="bg-panel border border-border_color rounded-xl p-6 shadow-sm">
-    <h2 class="text-2xl font-semibold mb-2" x-text="$store.i18n.t('settings_title')">Settings</h2>
+    <h2 class="text-2xl font-semibold mb-2">设置</h2>
     <p class="text-muted text-sm">系统信息仅展示路径与状态，不泄露敏感密码。</p>
   </div>
 
@@ -12,19 +12,19 @@
       <div class="bg-panel border border-border_color rounded-xl p-6 shadow-sm">
         <h3 class="text-lg font-medium mb-4 flex items-center gap-2">
             <svg class="w-5 h-5 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
-            System Info
+            系统信息
         </h3>
         <div class="flex flex-col gap-3">
           <div class="flex justify-between items-center py-2 border-b border-border_color/50 last:border-0">
-            <span class="text-sm text-muted">Vault Root</span>
+            <span class="text-sm text-muted">资料库路径</span>
             <code class="text-xs bg-bg px-2 py-1 rounded border border-border_color">{{ vault_root }}</code>
           </div>
           <div class="flex justify-between items-center py-2 border-b border-border_color/50 last:border-0">
-            <span class="text-sm text-muted">Database</span>
+            <span class="text-sm text-muted">数据库</span>
             <code class="text-xs bg-bg px-2 py-1 rounded border border-border_color">{{ db_path }}</code>
           </div>
           <div class="flex justify-between items-center py-2 border-b border-border_color/50 last:border-0">
-            <span class="text-sm text-muted">Backup Dir</span>
+            <span class="text-sm text-muted">备份目录</span>
             <code class="text-xs bg-bg px-2 py-1 rounded border border-border_color">{{ backup_root }}</code>
           </div>
           <div class="flex justify-between items-center py-2 border-b border-border_color/50 last:border-0">
@@ -62,12 +62,13 @@
       <div class="bg-panel border border-border_color rounded-xl p-6 shadow-sm">
         <h3 class="text-lg font-medium mb-4 flex items-center gap-2">
           <svg class="w-5 h-5 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-          AI Pipeline Configuration
+          AI 配置
         </h3>
         <form action="/settings/ai" method="post" class="flex flex-col gap-4">
           <div class="flex flex-col gap-1.5">
             <label class="text-sm font-medium text-muted">API Key</label>
-            <input type="password" name="ai_api_key" value="{{ ai_api_key }}" placeholder="sk-..." class="w-full bg-bg border border-border_color rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" />
+            <p class="text-xs text-muted">{% if ai_api_key_configured %}已配置。留空表示不修改现有密钥。{% else %}未配置。保存后将加密写入本地设置。{% endif %}</p>
+            <input type="password" name="ai_api_key" placeholder="{% if ai_api_key_configured %}留空表示不修改{% else %}输入 API Key{% endif %}" autocomplete="new-password" class="w-full bg-bg border border-border_color rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" />
           </div>
           <div class="flex flex-col gap-1.5">
             <label class="text-sm font-medium text-muted">Base URL</label>
@@ -77,7 +78,12 @@
             <label class="text-sm font-medium text-muted">Model</label>
             <input type="text" name="ai_model" value="{{ ai_model }}" placeholder="gpt-3.5-turbo" class="w-full bg-bg border border-border_color rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" />
           </div>
-          <button type="submit" class="mt-2 bg-accent text-white hover:bg-accent/90 border border-accent rounded-lg px-4 py-2 text-sm font-medium transition-colors w-full" x-text="$store.i18n.t('save_ai_settings')">Save AI Settings</button>
+          <div class="flex flex-col sm:flex-row gap-2 mt-2">
+            <button type="submit" class="bg-accent text-white hover:bg-accent/90 border border-accent rounded-lg px-4 py-2 text-sm font-medium transition-colors flex-1">保存 AI 配置</button>
+            {% if ai_api_key_configured %}
+            <button type="submit" name="clear_ai_api_key" value="1" class="bg-bg text-danger hover:bg-danger/10 border border-danger/50 rounded-lg px-4 py-2 text-sm font-medium transition-colors">清除密钥</button>
+            {% endif %}
+          </div>
         </form>
       </div>
     </div>

@@ -1,15 +1,16 @@
 import re
+import os
 from typing import List, Tuple, Dict, Any
 import sqlite3
 from pathlib import Path
 
-# Assuming the database path is consistent with the main app
-DB_PATH = Path(__file__).resolve().parent.parent.parent / "novelhub.db"
+DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent.parent / "novelhub.db"
 
 WIKI_LINK_PATTERN = re.compile(r"\[\[(.*?)\]\]")
 
 def get_conn():
-    conn = sqlite3.connect(DB_PATH)
+    db_path = Path(os.getenv("NOVELHUB_DB_PATH", str(DEFAULT_DB_PATH))).expanduser()
+    conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     return conn
 

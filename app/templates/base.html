@@ -28,50 +28,12 @@
         'all_chapters': '全部章节',
         'settings_title': '系统设置',
         'save_ai_settings': '保存 AI 配置',
-      },
-      'en-US': {
-        'nav_pipeline': 'AI Pipeline',
-        'nav_settings': 'Settings',
-        'nav_logout': 'Logout',
-        'system_ready': 'System Ready',
-        'pipeline_title': 'AI Writing Pipeline',
-        'pipeline_current': 'Current Project',
-        'pipeline_unselected': 'Not selected (Please select below)',
-        'pipeline_enter': 'Enter Pipeline',
-        'pipeline_add_card': 'Add Card',
-        'pipeline_ai_gen': 'AI Generate',
-        'pipeline_save': 'Save Pipeline State',
-        'pipeline_empty': 'No cards in this stage. Click top right to add or generate with AI.',
-        'proj_chars': 'Characters',
-        'proj_world': 'World',
-        'all_chapters': 'All Chapters',
-        'settings_title': 'Settings',
-        'save_ai_settings': 'Save AI Settings',
-      },
-      'ja-JP': {
-        'nav_pipeline': 'AI パイプライン',
-        'nav_settings': '設定',
-        'nav_logout': 'ログアウト',
-        'system_ready': 'システム準備完了',
-        'pipeline_title': 'AI 創作パイプライン',
-        'pipeline_current': '現在のプロジェクト',
-        'pipeline_unselected': '未選択（下で選択してください）',
-        'pipeline_enter': 'パイプラインに入る',
-        'pipeline_add_card': 'カードを追加',
-        'pipeline_ai_gen': 'AI 生成',
-        'pipeline_save': '状態を保存',
-        'pipeline_empty': 'このステージにはカードがありません。右上から追加またはAI生成してください。',
-        'proj_chars': 'キャラクター',
-        'proj_world': '世界観',
-        'all_chapters': 'すべての章',
-        'settings_title': '設定',
-        'save_ai_settings': 'AI 設定を保存',
       }
     };
 
     document.addEventListener('alpine:init', () => {
         Alpine.store('i18n', {
-            locale: '{{ get_locale(request) }}',
+            locale: 'zh-CN',
             t(key) {
                 return I18N[this.locale]?.[key] || I18N['zh-CN'][key] || key;
             }
@@ -126,23 +88,11 @@
       <div class="hidden md:flex items-center gap-3">
 {% if project %}
 <a href="/projects/{{ project }}/outline" class="flex items-center gap-1.5 px-3 py-1.5 rounded-md hover:bg-panel transition-colors text-sm">大纲</a>
+{% if feature_enabled('threads') %}
 <a href="/projects/{{ project }}/threads-board" class="flex items-center gap-1.5 px-3 py-1.5 rounded-md hover:bg-panel transition-colors text-sm">伏笔</a>
 {% endif %}
+{% endif %}
         
-
-        <!-- Language Switcher -->
-        <div class="relative" x-data="{ open: false }">
-          <button @click="open = !open" @click.away="open = false" class="flex items-center gap-1 p-1.5 rounded-md text-muted hover:text-text_color hover:bg-panel border border-transparent hover:border-border_color transition-all">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129"></path></svg>
-          </button>
-          <div x-show="open" style="display: none;" class="absolute right-0 mt-2 w-32 bg-panel border border-border_color rounded-lg shadow-lg py-1 z-50">
-            <form action="/settings/locale" method="post">
-              <button type="submit" name="locale" value="zh-CN" class="w-full text-left px-4 py-2 text-sm hover:bg-bg transition-colors {% if get_locale(request) == 'zh-CN' %}text-accent font-medium{% endif %}">简体中文</button>
-              <button type="submit" name="locale" value="en-US" class="w-full text-left px-4 py-2 text-sm hover:bg-bg transition-colors {% if get_locale(request) == 'en-US' %}text-accent font-medium{% endif %}">English</button>
-              <button type="submit" name="locale" value="ja-JP" class="w-full text-left px-4 py-2 text-sm hover:bg-bg transition-colors {% if get_locale(request) == 'ja-JP' %}text-accent font-medium{% endif %}">日本語</button>
-            </form>
-          </div>
-        </div>
 
         <button @click="theme = theme === 'dark' ? 'light' : 'dark'" class="p-1.5 rounded-md text-muted hover:text-text_color hover:bg-panel border border-transparent hover:border-border_color transition-all">
           <svg x-show="theme === 'dark'" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
@@ -166,8 +116,12 @@
           {% if project %}
           <a href="/projects/{{ project }}" class="hover:text-accent">{{ project }}</a>
           <a href="/projects/{{ project }}/outline" class="hover:text-accent">大纲</a>
+          {% if feature_enabled('threads') %}
           <a href="/projects/{{ project }}/threads-board" class="hover:text-accent">伏笔</a>
+          {% endif %}
+          {% if feature_enabled('timeline') %}
           <a href="/projects/{{ project }}/timeline" class="hover:text-accent">时间线</a>
+          {% endif %}
           <a href="/projects/{{ project }}/entities" class="hover:text-accent">实体</a>
           {% endif %}
           <a href="/settings" class="hover:text-accent">设置</a>

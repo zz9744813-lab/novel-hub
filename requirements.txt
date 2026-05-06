@@ -11,3 +11,4 @@ EbookLib==0.20
 starlette-csrf==3.0.0
 slowapi==0.1.9
 pytest==9.0.3
+httpx==0.28.1

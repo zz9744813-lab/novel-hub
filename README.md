@@ -1,93 +1,87 @@
 # Novel Hub
 
-专业级个人小说创作工作台（FastAPI + SQLite + Jinja2 + HTMX + CodeMirror）。
+Novel Hub 是一个面向长篇小说创作的本地优先工作台。正文以 Markdown 文件为真实来源，SQLite 负责索引、搜索、统计、实体关系、快照和运行设置。
 
-> 正文始终直接读写 Markdown 文件，SQLite 仅保存索引/统计/设置/操作日志。
+当前版本按 `NovelHub_refactor_task_list.docx` 的 P0 要求收敛为 v14：默认关闭高风险实验模块，核心编辑链路优先保证稳定、可恢复、可审计。
 
 ## 技术栈
 
-- FastAPI
-- SQLite
-- Jinja2 + HTMX
-- CodeMirror 5（CDN）
-- systemd（首版不依赖 Docker）
+- FastAPI + Jinja2 + HTMX
+- SQLite / FTS
+- CodeMirror 6（ESM importmap）
+- Alpine.js
+- slowapi 登录限流
+- cryptography/Fernet 加密本地 AI 设置
+- systemd 部署
 
-## 核心特性
+## 核心能力
 
-- 深色默认 + 浅色切换
-- Dashboard 写作仪表盘
-- Projects 卡片管理 + 新建项目
-- Project 详情（总览、章节筛选、新建章节）
-- 三栏写作工作台（左章节树 / 中央编辑 / 右元信息）
-- Frontmatter 字段完整支持：
-  - `title`, `chapter`, `status`, `volume`, `tags`
-  - `synopsis`, `notes`, `pov`, `characters`, `locations`, `warnings`, `draft_version`
-- 保存前自动备份到 `.novelhub-backups`
-- Characters / World 列表与预览
-- Export 页面 + TXT 导出
-- Settings 页面（路径、状态、Syncthing 提醒）
+- 项目、章节、实体、搜索、导出、统计与设置页
+- 三栏编辑器：章节树 / CodeMirror 6 编辑区 / 元信息侧栏
+- Markdown frontmatter 字段：`title`, `chapter`, `status`, `volume`, `tags`, `synopsis`, `notes`, `pov`, `characters`, `locations`, `warnings`, `draft_version`
+- 保存前自动快照，强制覆盖会额外创建 `pre_overwrite` 快照
+- 保存冲突检测：若外部修改导致 `loaded_mtime` 过期，前端会提示确认后再覆盖
+- 单次原子写入：`write_markdown()` 只通过临时文件 + `os.replace()` 落盘
+- 移动端编辑器提供只读视图入口
+- 登录接口 `5/minute` 限流
 
-## 目录结构
+## Feature Flags
 
-```text
-app/
-  main.py
-  static/
-    css/app.css
-    js/editor.js
-    js/ui.js
-  templates/
-    base.html
-    login.html
-    dashboard.html
-    projects.html
-    project_detail.html
-    editor.html
-    characters.html
-    world.html
-    export.html
-    settings.html
-    _save_result.html
-    _preview.html
-    _note_preview.html
-    _export_result.html
-deploy/novelhub.service
-requirements.txt
-.env.example
+高级模块默认关闭，避免未配置 AI 或实验视图影响核心写作流程。
+
+```env
+NOVELHUB_FEATURE_AI=0
+NOVELHUB_FEATURE_AI_CHECK=0
+NOVELHUB_FEATURE_GRAPH=0
+NOVELHUB_FEATURE_TIMELINE=0
+NOVELHUB_FEATURE_SCENES=0
+NOVELHUB_FEATURE_THREADS=0
 ```
 
-## Vault 目录约定
+开启后对应 UI 与 API 才会暴露。默认关闭时，相关路由返回 `404`。
 
-默认 Vault Root：`/root/ObsidianVault`
+## 配置
 
-```text
-/root/ObsidianVault/Novels/MyNovel/
-  chapters/
-    001-intro.md
-  characters/
-    hero.md
-  world/
-    loc-capital.md
+复制 `.env.example` 为 `.env`，至少设置：
+
+```env
+NOVELHUB_PASSWORD=<login-password>
+NOVELHUB_SECRET_KEY=<random-secret>
+NOVELHUB_ENCRYPTION_KEY=<fernet-key-or-random-secret>
+NOVELHUB_VAULT_ROOT=/root/ObsidianVault
+NOVELHUB_BACKUP_ROOT=/root/ObsidianVault/.novelhub-backups
+NOVELHUB_DB_PATH=/opt/novel-hub/data/novelhub.db
+NOVELHUB_APP_ENV=development
 ```
+
+生产环境建议：
+
+```env
+NOVELHUB_APP_ENV=production
+```
+
+生产模式会拒绝默认密码、默认 secret 和空加密密钥。
 
 ## 本地运行
 
 ```bash
-python3 -m venv .venv
+python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-# 编辑 .env 设置密码/密钥
 uvicorn app.main:app --host 0.0.0.0 --port 8787 --reload
 ```
 
-登录：`http://<VPS_IP>:8787/login`
+访问：
+
+```text
+http://127.0.0.1:8787/login
+```
 
 ## systemd 部署
 
 ```bash
-# 假设部署目录 /opt/novel-hub
-python3 -m venv /opt/novel-hub/.venv
+python -m venv /opt/novel-hub/.venv
 /opt/novel-hub/.venv/bin/pip install -r /opt/novel-hub/requirements.txt
 cp /opt/novel-hub/.env.example /opt/novel-hub/.env
 
@@ -97,25 +91,32 @@ sudo systemctl enable --now novelhub
 sudo systemctl status novelhub
 ```
 
-## 配置变量（与代码一致）
+## 安全说明
 
-- `NOVELHUB_PASSWORD`
-- `NOVELHUB_SECRET_KEY`
-- `NOVELHUB_VAULT_ROOT`
-- `NOVELHUB_BACKUP_ROOT`
-- `NOVELHUB_DB_PATH`
-- `NOVELHUB_DAILY_GOAL`
-- `NOVELHUB_PROJECT_GOAL`
+- 不提交 `.env`、数据库、备份、Vault、真实小说正文
+- AI API Key 只存加密值，设置页不会回显完整密钥
+- CSRF 中间件目前明确停用，等所有表单和 fetch 调用补齐 token 后再重新启用
+- 登录失败会触发速率限制
 
-## 安全与同步注意
+## 验证
 
-- 不要提交真实 `.env`
-- 不要提交数据库、备份、ObsidianVault、小说正文
-- VPS 参与写入 Markdown 时，Syncthing 文件夹应使用 **Send & Receive**
+```bash
+python -m compileall app tests
+python -m pytest tests -v
+```
 
-## CDN 说明
+## 目录
 
-本项目使用以下 CDN：
-- HTMX: `https://unpkg.com/htmx.org@1.9.12`
-- CodeMirror 5: `https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/...`
-- Google Fonts (Inter / Noto Serif SC)
+```text
+app/
+  main.py
+  static/
+    css/app.css
+    js/editor.js
+    js/ui.js
+  templates/
+tests/
+deploy/
+requirements.txt
+.env.example
+```

@@ -25,6 +25,11 @@ html[data-theme="light"] {
 
 /* Keep CodeMirror and Markdown specific styles */
 .CodeMirror { border: 0 !important; background: transparent !important; height: auto; min-height: 65vh; font-size: 18px; line-height: 1.9; font-family: 'Noto Serif SC','Songti SC','STSong','Georgia',serif; color: var(--text); }
+.cm-editor { border: 0 !important; background: transparent !important; min-height: 65vh; font-size: 18px; line-height: 1.9; font-family: 'Noto Serif SC','Songti SC','STSong','Georgia',serif; color: var(--text); }
+.cm-focused { outline: none !important; }
+.cm-scroller { min-height: 65vh; font-family: inherit !important; }
+.cm-content { caret-color: var(--accent); padding: 0 !important; }
+.cm-line { padding: 0 !important; }
 .markdown-body { line-height: 1.9; font-family: 'Noto Serif SC','Songti SC','STSong','Georgia',serif; max-width: 780px; }
 
 /* Custom Scrollbar */

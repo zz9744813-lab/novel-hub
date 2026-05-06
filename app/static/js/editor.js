@@ -402,7 +402,33 @@ if (textarea) {
         form.dataset.dirty = 'false';
         const savedAt = ok.dataset.savedAt;
         if (savedAtEl) savedAtEl.textContent = savedAt;
+        const newMtime = ok.dataset.newMtime;
+        const loadedInput = form.querySelector('input[name="loaded_mtime"]');
+        if (newMtime && loadedInput) loadedInput.value = newMtime;
+        window.NovelHubEditor = window.NovelHubEditor || {};
+        if (newMtime) window.NovelHubEditor.loadedMtime = newMtime;
         window.NovelHubUI?.showToast('保存成功');
+      } else {
+        const err = evt.target.querySelector('.save-error');
+        if (err) {
+          setSaveState('保存冲突');
+          if (err.dataset.errorCode === 'chapter_conflict') {
+            const overwrite = confirm(`${err.textContent}\n\n是否创建覆盖前快照并强制覆盖？取消则保留当前未保存内容。`);
+            if (overwrite) {
+              let forceInput = form.querySelector('input[name="force"]');
+              if (!forceInput) {
+                forceInput = document.createElement('input');
+                forceInput.type = 'hidden';
+                forceInput.name = 'force';
+                form.appendChild(forceInput);
+              }
+              forceInput.value = 'true';
+              form.requestSubmit();
+            }
+          } else {
+            window.NovelHubUI?.showToast(err.textContent || '保存失败', 'error');
+          }
+        }
       }
     }
   });

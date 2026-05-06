@@ -42,8 +42,54 @@ BACKUP_ROOT = Path(os.getenv("NOVELHUB_BACKUP_ROOT", str(VAULT_ROOT / ".novelhub
 DB_PATH = Path(os.getenv("NOVELHUB_DB_PATH", str(BASE_DIR / "novelhub.db"))).expanduser()
 ADMIN_PASSWORD = os.getenv("NOVELHUB_PASSWORD", "")
 SECRET_KEY = os.getenv("NOVELHUB_SECRET_KEY", "change-me")
+ENCRYPTION_KEY = os.getenv("NOVELHUB_ENCRYPTION_KEY", "")
+APP_ENV = os.getenv("NOVELHUB_APP_ENV", "development").lower()
 DAILY_GOAL_WORDS = int(os.getenv("NOVELHUB_DAILY_GOAL", "2000"))
 PROJECT_GOAL_WORDS = int(os.getenv("NOVELHUB_PROJECT_GOAL", "100000"))
+
+
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+FEATURES = {
+    "ai": env_bool("NOVELHUB_FEATURE_AI", False),
+    "ai_check": env_bool("NOVELHUB_FEATURE_AI_CHECK", False),
+    "graph": env_bool("NOVELHUB_FEATURE_GRAPH", False),
+    "timeline": env_bool("NOVELHUB_FEATURE_TIMELINE", False),
+    "scenes": env_bool("NOVELHUB_FEATURE_SCENES", False),
+    "threads": env_bool("NOVELHUB_FEATURE_THREADS", False),
+}
+
+
+def feature_enabled(name: str) -> bool:
+    return bool(FEATURES.get(name, False))
+
+
+def require_feature(name: str) -> None:
+    if not feature_enabled(name):
+        raise HTTPException(status_code=404, detail=f"feature disabled: {name}")
+
+
+def validate_runtime_config() -> None:
+    if APP_ENV != "production":
+        return
+    missing = []
+    if not ADMIN_PASSWORD:
+        missing.append("NOVELHUB_PASSWORD")
+    if not SECRET_KEY or SECRET_KEY == "change-me":
+        missing.append("NOVELHUB_SECRET_KEY")
+    if not ENCRYPTION_KEY:
+        missing.append("NOVELHUB_ENCRYPTION_KEY")
+    if missing:
+        raise RuntimeError("Missing required production config: " + ", ".join(missing))
+
+
+validate_runtime_config()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -86,6 +132,7 @@ def inject_locale(request: Request):
     return get_setting("locale", "zh-CN")
 
 templates.env.globals["get_locale"] = inject_locale
+templates.env.globals["feature_enabled"] = feature_enabled
 
 FRONTMATTER_PATTERN = re.compile(r"^---\n(.*?)\n---\n?", re.DOTALL)
 STATUS_ORDER = ["idea", "outline", "draft", "rewrite", "polish", "done", "published"]
@@ -132,6 +179,41 @@ def set_setting(key: str, value: str) -> None:
             "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (key, value)
         )
+
+
+def _settings_fernet() -> Fernet:
+    raw = ENCRYPTION_KEY or SECRET_KEY
+    try:
+        return Fernet(raw.encode("utf-8"))
+    except Exception:
+        key = base64.urlsafe_b64encode(hashlib.sha256(raw.encode("utf-8")).digest())
+        return Fernet(key)
+
+
+def set_setting_encrypted(key: str, value: str) -> None:
+    if not value:
+        return
+    token = _settings_fernet().encrypt(value.encode("utf-8")).decode("utf-8")
+    set_setting(key, f"enc::{token}")
+
+
+def clear_setting(key: str) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+
+
+def get_setting_decrypted(key: str, default: str = "") -> str:
+    value = get_setting(key, default)
+    if not value:
+        return default
+    if not value.startswith("enc::"):
+        # Backward compatibility: migrate old plaintext settings on first read.
+        set_setting_encrypted(key, value)
+        return value
+    try:
+        return _settings_fernet().decrypt(value[5:].encode("utf-8")).decode("utf-8")
+    except Exception:
+        return default
 
 
 def get_conn() -> sqlite3.Connection:
@@ -681,22 +763,19 @@ def _project_from_path(p: Path) -> str:
 def write_markdown(path: Path, frontmatter: dict[str, Any], body: str, project: str = None) -> None:
     p = _ensure_under_root(path, VAULT_ROOT)
     p.parent.mkdir(parents=True, exist_ok=True)
-    if p.exists():
-        backup_file(p)
-    content = dump_frontmatter(frontmatter, body)
-    p.write_text(content, encoding="utf-8")
 
     if project is None:
         project = _project_from_path(p)
 
-    # T1.3: Convert strings to objects in frontmatter for "new format" writing
+    frontmatter = dict(frontmatter)
     meta = normalize_meta(frontmatter, p.stem, project=project)
     frontmatter["characters"] = meta["characters"]
     frontmatter["locations"] = meta["locations"]
-    
-    # Write file first
+
+    if p.exists():
+        backup_file(p)
     content = dump_frontmatter(frontmatter, body)
-    p.write_text(content, encoding="utf-8")
+    write_atomic(p, content)
 
     words = count_words(body)
     mtime = p.stat().st_mtime
@@ -753,6 +832,15 @@ def write_markdown(path: Path, frontmatter: dict[str, Any], body: str, project: 
 
     # T1.2: Wiki Link Refs
     update_entity_refs(str(p), body, project)
+
+
+def write_atomic(path: Path, content: str) -> None:
+    tmp = path.with_name(f".{path.name}.tmp")
+    with tmp.open("w", encoding="utf-8", newline="\n") as fh:
+        fh.write(content)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
 
 
 def parse_csv(value: str) -> list[str]:
@@ -1216,6 +1304,7 @@ def save_chapter(
     draft_version: str = Form(""),
     body: str = Form(""),
     loaded_mtime: str = Form(""),
+    force: bool = Form(False),
 ) -> Response:
     require_auth(request)
     safe_project = safe_slug(project, fallback="project")
@@ -1228,10 +1317,19 @@ def save_chapter(
         try:
             loaded_mtime = float(loaded_mtime)
             current_mtime = path.stat().st_mtime
-            if abs(current_mtime - loaded_mtime) > 0.5:
+            if abs(current_mtime - loaded_mtime) > 0.5 and not force:
+                current_content = path.read_text(encoding="utf-8") if path.exists() else ""
                 return templates.TemplateResponse(
                     "_save_result.html",
-                    {"request": request, "error": "\u6587\u4ef6\u5df2\u88ab\u5176\u4ed6\u6765\u6e90\u4fee\u6539\uff0c\u8bf7\u5237\u65b0\u9875\u9762\u540e\u91cd\u8bd5\u3002"},
+                    {
+                        "request": request,
+                        "error": "文件已被其他来源修改，请先查看冲突再决定是否覆盖。",
+                        "error_code": "chapter_conflict",
+                        "current_mtime": current_mtime,
+                        "loaded_mtime": loaded_mtime,
+                        "current_hash": hashlib.sha256(current_content.encode("utf-8")).hexdigest(),
+                        "loaded_hash": "",
+                    },
                 )
         except (ValueError, OSError):
             pass
@@ -1272,11 +1370,13 @@ def save_chapter(
     if words_added < 0:
         words_added = 0 # Don't record negative progress in trend
 
+    if force and path.exists():
+        backup_file(path, label="pre_overwrite")
     write_markdown(path, frontmatter, body)
     log_operation("save", str(path), f"words_added={words_added}", value=words_added, project=safe_project)
     new_mtime = path.stat().st_mtime
-    # T4.6: trigger background consistency check
-    background_tasks.add_task(run_consistency_check, safe_project, str(path))
+    if feature_enabled("ai_check"):
+        background_tasks.add_task(run_consistency_check, safe_project, str(path))
 
     return templates.TemplateResponse(
         "_save_result.html",
@@ -1833,6 +1933,7 @@ Please list any plot inconsistencies, out-of-character behaviors, or timeline er
 @app.post("/api/projects/{project}/ai/outline/volume")
 async def ai_outline_volume(request: Request, project: str) -> Response:
     """T4.3 AI generate volume outline."""
+    require_feature("ai")
     require_auth(request)
     data = await request.json()
     api_key = get_setting_decrypted("ai_api_key")
@@ -1853,6 +1954,7 @@ async def ai_outline_volume(request: Request, project: str) -> Response:
 @app.post("/api/projects/{project}/ai/outline/chapter")
 async def ai_outline_chapter(request: Request, project: str) -> Response:
     """T4.3: AI splits a volume into N chapter outlines."""
+    require_feature("ai")
     require_auth(request)
     data = await request.json()
     volume_slug = data.get("slug")
@@ -1929,6 +2031,8 @@ Generate {num_chapters} chapter outlines for this volume. Return as JSON array, 
 @app.post("/api/projects/{project}/ai/outline/scene")
 async def ai_outline_scene(request: Request, project: str) -> Response:
     """Split a chapter into scene H2 markers with summaries."""
+    require_feature("ai")
+    require_feature("scenes")
     require_auth(request)
     data = await request.json()
     chapter_filename = data.get("chapter")
@@ -1987,6 +2091,8 @@ Generate {num_scenes} scenes for this chapter. Each scene should be a beat in th
 @app.post("/api/projects/{project}/ai/outline/draft")
 async def ai_outline_draft(request: Request, project: str) -> Response:
     """Expand a scene's summary into prose draft."""
+    require_feature("ai")
+    require_feature("scenes")
     require_auth(request)
     data = await request.json()
     chapter_filename = data.get("chapter")
@@ -2079,6 +2185,7 @@ async def api_ai_generate(
     chapter: str = None,
     text: str = ""
 ) -> Response:
+    require_feature("ai")
     require_auth(request)
     
     # Get settings
@@ -2123,6 +2230,7 @@ Instructions:
 
 @app.get("/projects/{project}/threads-board", response_class=HTMLResponse)
 def threads_board_page(request: Request, project: str) -> Response:
+    require_feature("threads")
     require_auth(request)
     return templates.TemplateResponse("threads_board.html", {"request": request, "project": project})
 
@@ -2200,6 +2308,7 @@ def api_list_volumes(request: Request, project: str) -> Response:
 
 @app.get("/api/projects/{project}/timeline")
 def api_get_timeline(request: Request, project: str, lane: str = None) -> Response:
+    require_feature("timeline")
     require_auth(request)
     with get_conn() as conn:
         chapters = conn.execute("SELECT path, title, chapter_int, volume FROM file_index WHERE project=? ORDER BY chapter_int", (project,)).fetchall()
@@ -2398,6 +2507,7 @@ def api_delete_relation(request: Request, rel_id: int) -> Response:
 
 @app.get("/api/projects/{project}/threads-board")
 def api_threads_board(request: Request, project: str) -> Response:
+    require_feature("threads")
     require_auth(request)
     with get_conn() as conn:
         # Get all entities of kind 'thread'
@@ -2429,6 +2539,7 @@ async def api_create_snapshot(request: Request, project: str) -> Response:
 
 @app.get("/api/projects/{project}/scenes")
 def api_list_scenes(request: Request, project: str, chapter: str = None) -> Response:
+    require_feature("scenes")
     require_auth(request)
     with get_conn() as conn:
         query = "SELECT * FROM scenes WHERE project = ?"
@@ -2443,6 +2554,7 @@ def api_list_scenes(request: Request, project: str, chapter: str = None) -> Resp
 
 @app.post("/api/projects/{project}/scenes")
 async def api_create_scene(request: Request, project: str) -> Response:
+    require_feature("scenes")
     require_auth(request)
     data = await request.json()
     # Logic to insert H2 into file or just record in DB? 
@@ -2542,6 +2654,7 @@ def entities_page(request: Request, project: str, kind: str = None) -> Response:
 
 @app.get("/projects/{project}/graph", response_class=HTMLResponse)
 def graph_page(request: Request, project: str) -> Response:
+    require_feature("graph")
     require_auth(request)
     return templates.TemplateResponse("graph.html", {"request": request, "project": project})
 
@@ -2556,6 +2669,7 @@ def api_list_relations(request: Request, project: str) -> Response:
 
 @app.get("/projects/{project}/timeline", response_class=HTMLResponse)
 def timeline_page(request: Request, project: str) -> Response:
+    require_feature("timeline")
     require_auth(request)
     safe_project = safe_slug(project, fallback="project")
     return templates.TemplateResponse("timeline.html", {"request": request, "project": safe_project})
@@ -2595,6 +2709,7 @@ def entity_detail_page(request: Request, project: str, ent_id: str) -> Response:
 
 @app.put("/api/scenes/{sc_id}")
 async def api_update_scene(request: Request, sc_id: str) -> Response:
+    require_feature("scenes")
     require_auth(request)
     data = await request.json()
     with get_conn() as conn:
@@ -2608,6 +2723,7 @@ async def api_update_scene(request: Request, sc_id: str) -> Response:
 
 @app.delete("/api/scenes/{sc_id}")
 def api_delete_scene(request: Request, sc_id: str) -> Response:
+    require_feature("scenes")
     require_auth(request)
     with get_conn() as conn:
         conn.execute("DELETE FROM scenes WHERE id=?", (sc_id,))
@@ -2662,7 +2778,7 @@ def settings_page(request: Request) -> Response:
     with get_conn() as conn:
         log_count = conn.execute("SELECT COUNT(1) as c FROM operation_logs").fetchone()["c"]
 
-    ai_api_key = get_setting("ai_api_key", "")
+    ai_api_key_configured = bool(get_setting_decrypted("ai_api_key", ""))
     ai_base_url = get_setting("ai_base_url", "https://api.openai.com/v1")
     ai_model = get_setting("ai_model", "gpt-3.5-turbo")
 
@@ -2675,9 +2791,10 @@ def settings_page(request: Request) -> Response:
             "backup_root": str(BACKUP_ROOT),
             "login_state": "已登录",
             "log_count": log_count,
-            "ai_api_key": ai_api_key,
+            "ai_api_key_configured": ai_api_key_configured,
             "ai_base_url": ai_base_url,
             "ai_model": ai_model,
+            "features": FEATURES,
         },
     )
 
@@ -2687,9 +2804,13 @@ def update_ai_settings(
     ai_api_key: str = Form(""),
     ai_base_url: str = Form(""),
     ai_model: str = Form(""),
+    clear_ai_api_key: str = Form(""),
 ) -> Response:
     require_auth(request)
-    set_setting_encrypted("ai_api_key", ai_api_key)
+    if clear_ai_api_key == "1":
+        clear_setting("ai_api_key")
+    elif ai_api_key.strip():
+        set_setting_encrypted("ai_api_key", ai_api_key.strip())
     set_setting("ai_base_url", ai_base_url)
     set_setting("ai_model", ai_model)
     log_operation("update_ai_settings")
@@ -2698,7 +2819,7 @@ def update_ai_settings(
 @app.post("/settings/locale")
 def update_locale(request: Request, locale: str = Form(...)) -> Response:
     require_auth(request)
-    if locale in ["zh-CN", "en-US", "ja-JP"]:
+    if locale == "zh-CN":
         set_setting("locale", locale)
     log_operation("update_locale", detail=locale)
     # Redirect back to the referrer or home

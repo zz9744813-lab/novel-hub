@@ -1,64 +1,64 @@
-# Novel Hub C-Route Architecture (v6)
+# Novel Hub v14 Architecture
 
-## 1. Overview & Data Flow
-Novel Hub follows a **File-as-Truth, DB-as-Index** philosophy. Markdown files in the vault are the primary source of truth for content, while the SQLite database provides high-performance indexing, relational tracking, and complex metadata management.
+## 核心原则
 
-### Data Flow Diagram
+Novel Hub 采用 **File-as-Truth, DB-as-Index**：
+
+- Markdown 文件是正文与可外部编辑内容的真实来源
+- SQLite 保存索引、统计、搜索、实体、场景、快照、设置与操作日志
+- 每次文件写入后同步更新索引
+- 高级模块通过 feature flag 控制，默认关闭
+
 ```mermaid
 graph TD
-    User[User / Frontend] -->|HTTP/HTMX| API[FastAPI Logic]
-    API -->|Write| MD[Markdown Files .md]
-    API -->|Index/Relate| SQL[(SQLite DB)]
-    MD -->|Scanner/Startup| SQL
-    SQL -->|Query/Search| API
-    API -->|Render| User
+    Browser["Browser / HTMX / CodeMirror 6"] --> App["FastAPI + Jinja templates"]
+    App --> Markdown["Markdown files in Vault"]
+    App --> SQLite["SQLite / FTS / settings"]
+    Markdown --> Scanner["startup + save indexer"]
+    Scanner --> SQLite
+    SQLite --> App
 ```
 
-- **Consistency Policy**: 
-    - Every file write (`write_markdown`) triggers a database update (`file_index`, `chapter_fts`).
-    - Entity metadata is stored in the DB (`entities`), but detailed descriptions are still kept in `.md` files in `characters/`, `world/`, etc., for external editing compatibility.
-    - Scenes are logical divisions within a chapter `.md` (marked by `## ` headers) and are indexed into the `scenes` table upon saving the chapter.
+## 编辑保存链路
 
-## 2. Entity Model
-Entities replace the legacy unstructured notes. Every entity has a unique ID (`ent_xxxxxxxx`) and belongs to a specific `kind`.
+1. 编辑器提交正文、frontmatter 字段、`loaded_mtime`
+2. 服务端读取当前文件 mtime
+3. 若当前文件已被外部修改且未显式 `force=true`，返回 `chapter_conflict`
+4. 前端提示用户确认
+5. 强制覆盖时先创建 `pre_overwrite` 快照
+6. `write_markdown()` 用临时文件 + `os.replace()` 原子写入
+7. 写入后更新 `file_index`、FTS、场景/实体引用等索引
+8. 返回新的 `mtime`，前端更新隐藏字段，避免下一次误报冲突
 
-### Entity Types & Attributes (Properties JSON)
-| Kind | Core Purpose | Specific Attributes (JSON) |
-|---|---|---|
-| **Character** | People/Creatures | `gender`, `age`, `birth`, `death`, `mbti`, `height`, `appearance`, `personality`, `motivation` |
-| **Location** | Setting/Geography | `parent_id` (nested), `climate`, `map_url`, `population`, `security_level` |
-| **Item** | Artifacts/Tools | `owner_id`, `rarity`, `function`, `origins` |
-| **Organization** | Groups/Guilds | `leader_id`, `headquarters`, `alignment`, `size` |
-| **Thread** | Plot lines / Hooks | `status` (open/resolving/closed), `impact_level`, `start_chapter`, `end_chapter` |
-| **Concept** | Magic/Systems/Lore | `system_type`, `limitations`, `prevalence` |
-| **Event** | Historical / Major | `timestamp`, `participants`, `outcome`, `historical_significance` |
+## Feature Flags
 
-## 3. Wiki Link Syntax Specification
-Novel Hub supports internal linking using the double-bracket syntax.
+默认关闭：
 
-### Parsing Rules
-- `[[Name]]`: Matches an entity by its primary `name` or `aliases`.
-- `[[Name|Display Text]]`: Matches entity by `name` but displays `Display Text`.
-- `[[ent_id]]`: Direct ID link (permanent, survives renames).
-- `[[ent_id|Display Text]]`: Preferred format for robust version control.
-- `[[Name#Anchor]]`: Links to a specific section (H2 scene) within an entity or chapter.
+- `NOVELHUB_FEATURE_AI`
+- `NOVELHUB_FEATURE_AI_CHECK`
+- `NOVELHUB_FEATURE_GRAPH`
+- `NOVELHUB_FEATURE_TIMELINE`
+- `NOVELHUB_FEATURE_SCENES`
+- `NOVELHUB_FEATURE_THREADS`
 
-**Ambiguity Resolution**: If multiple entities share the same name/alias, the system marks the reference as `ambiguous` and requires manual ID binding via the UI.
+关闭时对应 UI 不展示，对应 API/页面返回 `404`。这让基础写作、实体、搜索、导出等稳定链路不被实验模块影响。
 
-## 4. Scene Model
-Scenes are not separate files. They are segments within a chapter file delimited by `## Scene Title`.
+## 设置与密钥
 
-- **Indexing**: The system records `char_offset_start` and `char_offset_end` for each H2 block.
-- **Granular Editing**: The UI can "break" a large chapter into scenes for focused writing while saving back to a single `.md` file.
-- **POV Tracking**: Scenes have a dedicated `POV` field in the DB, allowing for density analysis in the timeline view.
+AI API Key 通过 Fernet 加密后写入 `settings` 表。设置页只显示“已配置/未配置”，不会回显完整 key。
 
-## 5. Migration Strategy (v5 to v6)
-1. **Snapshot**: Create a full backup of the `vault/` and `novelhub.db`.
-2. **Entity Creation**: Scan `characters/`, `world/`, and `hooks/`.
-    - Create a row in `entities` for each file.
-    - Generate `id = sha1(rel_path)[:8]`.
-    - Map `kind` based on folder and frontmatter `category`.
-3. **Reference Mapping**: 
-    - Parse existing `characters: [...]` and `tags: [...]` in chapter frontmatter.
-    - Attempt to bind names to the newly created `entities.id`.
-4. **Cleanup**: Keep the original `.md` files but treat the `entities` table as the primary registry for metadata.
+生产环境下必须设置非默认的：
+
+- `NOVELHUB_PASSWORD`
+- `NOVELHUB_SECRET_KEY`
+- `NOVELHUB_ENCRYPTION_KEY`
+
+## 移动端
+
+编辑器在小屏下不直接开放编辑，而是显示只读视图入口：
+
+```text
+/projects/{project}/chapters/{filename}/read
+```
+
+顶栏在小屏切换为抽屉导航。

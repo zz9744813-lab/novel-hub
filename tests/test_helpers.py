@@ -192,3 +192,30 @@ def test_export_page_uses_project_name_for_options(tmp_path):
 
     assert res.status_code == 200
     assert 'value="demo"' in res.text
+
+
+def test_core_project_pages_render_after_ui_cleanup(tmp_path):
+    configure_temp_runtime(tmp_path)
+    project = "demo"
+    chapters_dir = main.NOVELS_ROOT / project / "chapters"
+    chapters_dir.mkdir(parents=True, exist_ok=True)
+    main.set_project_meta(project, 100000, "author", "A short synopsis", 2000)
+    write_markdown(
+        chapters_dir / "00001-start.md",
+        {"title": "Start", "chapter": "1", "status": "draft", "synopsis": "Opening beat"},
+        "hello world",
+        project=project,
+    )
+
+    with TestClient(app) as client:
+        login(client)
+        checks = [
+            ("/", "下一步"),
+            ("/projects", "新建项目"),
+            (f"/projects/{project}", "项目操作"),
+            (f"/projects/{project}/stats", "每日字数"),
+        ]
+        for url, expected in checks:
+            res = client.get(url)
+            assert res.status_code == 200
+            assert expected in res.text

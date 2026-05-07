@@ -9,37 +9,6 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
   <script>
-    const I18N = {
-      'zh-CN': {
-        'nav_pipeline': 'AI 流水线',
-        'nav_settings': '设置',
-        'nav_logout': '退出',
-        'system_ready': '系统就绪',
-        'pipeline_title': 'AI 创作流水线',
-        'pipeline_current': '当前项目',
-        'pipeline_unselected': '未选择 (请在下方选择或创建)',
-        'pipeline_enter': '进入流水线',
-        'pipeline_add_card': '添加卡片',
-        'pipeline_ai_gen': 'AI 生成',
-        'pipeline_save': '保存流水线状态',
-        'pipeline_empty': '当前阶段暂无卡片。点击右上角添加卡片或由 AI 自动生成。',
-        'proj_chars': '角色设定',
-        'proj_world': '世界观设定',
-        'all_chapters': '全部章节',
-        'settings_title': '系统设置',
-        'save_ai_settings': '保存 AI 配置',
-      }
-    };
-
-    document.addEventListener('alpine:init', () => {
-        Alpine.store('i18n', {
-            locale: 'zh-CN',
-            t(key) {
-                return I18N[this.locale]?.[key] || I18N['zh-CN'][key] || key;
-            }
-        });
-    });
-
     tailwind.config = {
       darkMode: ['class', '[data-theme="dark"]'],
       theme: {
@@ -84,7 +53,7 @@
         <a href="/projects/{{ project }}" class="text-muted hover:text-text_color transition-colors">{{ project }}</a>
         {% endif %}
       </div>
-      <div class="text-xs text-muted font-mono" id="global-save-state" x-text="$store.i18n.t('system_ready')">System Ready</div>
+      <div class="text-xs text-muted font-mono" id="global-save-state">系统就绪</div>
       <div class="hidden md:flex items-center gap-3">
         {% include '_workflow_nav.html' ignore missing %}
         
@@ -93,10 +62,10 @@
           <svg x-show="theme === 'dark'" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
           <svg x-show="theme === 'light'" class="w-5 h-5" style="display: none;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path></svg>
         </button>
-        <a href="/settings" class="p-1.5 rounded-md text-muted hover:text-text_color hover:bg-panel border border-transparent hover:border-border_color transition-all" :title="$store.i18n.t('nav_settings')">
+        <a href="/settings" class="p-1.5 rounded-md text-muted hover:text-text_color hover:bg-panel border border-transparent hover:border-border_color transition-all" title="设置">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
         </a>
-        <a href="/logout" class="p-1.5 rounded-md text-muted hover:text-danger hover:bg-danger/10 border border-transparent transition-all" :title="$store.i18n.t('nav_logout')">
+        <a href="/logout" class="p-1.5 rounded-md text-muted hover:text-danger hover:bg-danger/10 border border-transparent transition-all" title="登出">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
         </a>
       </div>

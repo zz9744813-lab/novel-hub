@@ -101,6 +101,17 @@ def test_write_atomic_replaces_content(tmp_path):
     assert not list(tmp_path.glob("*.tmp"))
 
 
+def test_sqlite_connection_pragmas(tmp_path):
+    configure_temp_runtime(tmp_path)
+
+    with main.get_conn() as conn:
+        busy_timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        foreign_keys = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+
+    assert busy_timeout == 5000
+    assert foreign_keys == 1
+
+
 def test_write_markdown_roundtrip_single_frontmatter(tmp_path):
     configure_temp_runtime(tmp_path)
     path = main.NOVELS_ROOT / "demo" / "chapters" / "chapter.md"

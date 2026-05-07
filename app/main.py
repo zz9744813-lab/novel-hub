@@ -2827,7 +2827,13 @@ def stage_page(request: Request, project: str, stage: str) -> Response:
         )
 
     if stage == "chapter_outline":
-        chapters = list_chapters(safe_project, sync=False)
+        chapters = []
+        for chapter in list_chapters(safe_project, sync=False):
+            item = dict(chapter)
+            modified = item.get("modified")
+            if isinstance(modified, datetime):
+                item["modified"] = modified.isoformat()
+            chapters.append(item)
         return templates.TemplateResponse(
             "stage_chapter_outline.html",
             {**common_ctx, "chapters": chapters},

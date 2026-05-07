@@ -86,12 +86,7 @@
       </div>
       <div class="text-xs text-muted font-mono" id="global-save-state" x-text="$store.i18n.t('system_ready')">System Ready</div>
       <div class="hidden md:flex items-center gap-3">
-{% if project %}
-<a href="/projects/{{ project }}/outline" class="flex items-center gap-1.5 px-3 py-1.5 rounded-md hover:bg-panel transition-colors text-sm">大纲</a>
-{% if feature_enabled('threads') %}
-<a href="/projects/{{ project }}/threads-board" class="flex items-center gap-1.5 px-3 py-1.5 rounded-md hover:bg-panel transition-colors text-sm">伏笔</a>
-{% endif %}
-{% endif %}
+        {% include '_workflow_nav.html' ignore missing %}
         
 
         <button @click="theme = theme === 'dark' ? 'light' : 'dark'" class="p-1.5 rounded-md text-muted hover:text-text_color hover:bg-panel border border-transparent hover:border-border_color transition-all">
@@ -115,14 +110,7 @@
           <a href="/" class="hover:text-accent">仪表盘</a>
           {% if project %}
           <a href="/projects/{{ project }}" class="hover:text-accent">{{ project }}</a>
-          <a href="/projects/{{ project }}/outline" class="hover:text-accent">大纲</a>
-          {% if feature_enabled('threads') %}
-          <a href="/projects/{{ project }}/threads-board" class="hover:text-accent">伏笔</a>
-          {% endif %}
-          {% if feature_enabled('timeline') %}
-          <a href="/projects/{{ project }}/timeline" class="hover:text-accent">时间线</a>
-          {% endif %}
-          <a href="/projects/{{ project }}/entities" class="hover:text-accent">实体</a>
+          {% include '_workflow_nav_mobile.html' ignore missing %}
           {% endif %}
           <a href="/settings" class="hover:text-accent">设置</a>
           <a href="/logout" class="hover:text-danger">登出</a>

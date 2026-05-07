@@ -134,6 +134,51 @@ def inject_locale(request: Request):
 templates.env.globals["get_locale"] = inject_locale
 templates.env.globals["feature_enabled"] = feature_enabled
 
+# Workflow stages
+from app.services.stage_service import (
+    STAGES,
+    STAGE_KEYS,
+    stage_label as _stage_label,
+    compute_stage_status as _compute_stage_status,
+    next_actionable_stage as _next_actionable_stage,
+)
+from app.services.prompts_service import (
+    is_stage_done as _is_stage_done,
+    get_global_prompt as _get_global_prompt,
+    get_stage_prompt as _get_stage_prompt,
+    set_global_prompt as _set_global_prompt,
+    set_stage_prompt as _set_stage_prompt,
+    mark_stage_done as _mark_stage_done,
+    build_layered_prompt as _build_layered_prompt,
+)
+
+templates.env.globals["WORKFLOW_STAGES"] = STAGES
+templates.env.globals["stage_label"] = _stage_label
+
+
+def project_stage_status_map(project: str) -> dict[str, str]:
+    """Return {stage_key: 'todo'|'in_progress'|'done'} for the project."""
+    out: dict[str, str] = {}
+    with get_conn() as conn:
+        for stage_key in STAGE_KEYS:
+            done = _is_stage_done(get_setting, project, stage_key)
+            out[stage_key] = _compute_stage_status(stage_key, project, NOVELS_ROOT, conn, done)
+    return out
+
+
+def project_next_stage(project: str) -> tuple[str, str]:
+    with get_conn() as conn:
+        return _next_actionable_stage(
+            project,
+            NOVELS_ROOT,
+            conn,
+            lambda stage: _is_stage_done(get_setting, project, stage),
+        )
+
+
+templates.env.globals["project_stage_status_map"] = project_stage_status_map
+templates.env.globals["project_next_stage"] = project_next_stage
+
 FRONTMATTER_PATTERN = re.compile(r"^---\n(.*?)\n---\n?", re.DOTALL)
 STATUS_ORDER = ["idea", "outline", "draft", "rewrite", "polish", "done", "published"]
 
@@ -922,31 +967,6 @@ def dashboard(request: Request) -> Response:
     # Better logic for quick project: the project with the most recently modified chapter
     quick_project = chapters[0]["project"] if chapters else (projects[0]["name"] if projects else None)
 
-
-    # T3.5 Upgrade dashboard data
-    with get_conn() as conn:
-        # Top 10 characters by appearance
-        top_characters = [dict(r) for r in conn.execute("""
-            SELECT e.name, COUNT(er.id) as count
-            FROM entities e
-            JOIN entity_refs er ON e.id = er.entity_id
-            WHERE e.kind = 'character'
-            GROUP BY e.id ORDER BY count DESC LIMIT 10
-        """).fetchall()]
-        
-        # Thread stats
-        thread_info = conn.execute("""
-            SELECT 
-                COUNT(*) as total,
-                COUNT(CASE WHEN properties LIKE '%"status": "open"%' OR properties NOT LIKE '%"status":%' THEN 1 END) as open_count
-            FROM entities WHERE kind = 'thread'
-        """).fetchone()
-        
-        # POV distribution
-        pov_stats = [dict(r) for r in conn.execute("""
-            SELECT pov, COUNT(*) as count FROM scenes GROUP BY pov ORDER BY count DESC
-        """).fetchall()]
-
     return templates.TemplateResponse(
         "dashboard.html",
         {
@@ -958,9 +978,6 @@ def dashboard(request: Request) -> Response:
             "trend": trend_data,
             "daily_goal": DAILY_GOAL_WORDS,
             "quick_project": quick_project,
-            "top_characters": top_characters,
-            "thread_stats": dict(thread_info) if thread_info else {"total": 0, "open_count": 0},
-            "pov_stats": pov_stats
         },
     )
 
@@ -1235,15 +1252,11 @@ def editor_page(request: Request, project: str, filename: str) -> Response:
                JOIN entity_refs er ON e.id = er.entity_id 
                WHERE er.chapter_path = ?""", (str(path),)).fetchall()
         
-        # Open threads (kind='thread', status='open' in properties JSON)
-        threads = conn.execute(
-            "SELECT * FROM entities WHERE project = ? AND kind = 'thread' AND properties LIKE '%\"status\": \"open\"%'", 
-            (safe_project,)).fetchall()
-            
         snapshots = conn.execute(
             "SELECT id, created_at, label FROM snapshots WHERE chapter_path = ? ORDER BY created_at DESC LIMIT 50",
             (str(path),)).fetchall()
 
+    from app.services.prompts_service import get_stage_prompt
     return templates.TemplateResponse(
         "editor.html",
         {
@@ -1258,8 +1271,8 @@ def editor_page(request: Request, project: str, filename: str) -> Response:
             "goal": proj_meta.get("target_words", PROJECT_GOAL_WORDS),
             "mtime": path.stat().st_mtime,
             "mentioned_entities": [dict(e) for e in mentioned],
-            "open_threads": [dict(t) for t in threads],
-            "snapshots": [dict(s) for s in snapshots]
+            "snapshots": [dict(s) for s in snapshots],
+            "writing_prompt": get_stage_prompt(get_setting, safe_project, "writing"),
         },
     )
 
@@ -1451,69 +1464,16 @@ def preview_markdown(request: Request, body: str = Form("")) -> Response:
     return templates.TemplateResponse("_preview.html", {"request": request, "html": html})
 
 
-@app.post("/projects/{project}/characters/new")
-def create_character(
-    request: Request,
-    project: str,
-    name: str = Form("新角色"),
-) -> Response:
-    require_auth(request)
-    safe_project = safe_slug(project, fallback="project")
-    filename = f"{safe_slug(name, fallback='character')}.md"
-    p = project_path(safe_project) / "characters" / filename
-    p.parent.mkdir(parents=True, exist_ok=True)
-    if not p.exists():
-        frontmatter = {"name": name, "tags": [], "role": ""}
-        write_markdown(p, frontmatter, f"这是 {name} 的介绍。")
-        log_operation("create_character", str(p))
-    return RedirectResponse(url=f"/projects/{safe_project}/characters", status_code=303)
-
-
 @app.get("/projects/{project}/characters", response_class=HTMLResponse)
-def characters_page(request: Request, project: str) -> Response:
-    return RedirectResponse(url=f"/projects/{project}/entities?kind=character", status_code=301)
-
-
-@app.post("/projects/{project}/world/new")
-def create_world_item(
-    request: Request,
-    project: str,
-    name: str = Form("新条目"),
-    category: str = Form("locations"),
-) -> Response:
-    require_auth(request)
-    safe_project = safe_slug(project, fallback="project")
-
-    prefix_map = {
-        "locations": "loc",
-        "organizations": "org",
-        "items": "ite",
-        "timeline": "tim"
-    }
-    prefix = prefix_map.get(category, "loc")
-
-    filename = f"{prefix}-{safe_slug(name, fallback='world')}.md"
-    p = project_path(safe_project) / "world" / filename
-    p.parent.mkdir(parents=True, exist_ok=True)
-    if not p.exists():
-        frontmatter = {"name": name, "category": category, "tags": []}
-        write_markdown(p, frontmatter, f"这是 {name} 的介绍。")
-        log_operation("create_world_item", str(p))
-    return RedirectResponse(url=f"/projects/{safe_project}/world", status_code=303)
+def characters_page_legacy(request: Request, project: str) -> Response:
+    """Legacy redirect; new flow uses /projects/{project}/stage/characters."""
+    return RedirectResponse(url=f"/projects/{project}/stage/characters", status_code=301)
 
 
 @app.get("/projects/{project}/world", response_class=HTMLResponse)
-def world_page(request: Request, project: str) -> Response:
-    return RedirectResponse(url=f"/projects/{project}/entities?kind=world", status_code=301)
-    categories = {"locations": [], "organizations": [], "items": [], "timeline": []}
-    for item in items:
-        key = "locations"
-        for candidate in categories:
-            if item["name"].lower().startswith(candidate[:3]):
-                key = candidate
-                break
-        categories[key].append(item)
-    return templates.TemplateResponse("world.html", {"request": request, "project": safe_project, "items": items, "categories": categories})
+def world_page_legacy(request: Request, project: str) -> Response:
+    """Legacy redirect; new flow uses /projects/{project}/stage/worldview."""
+    return RedirectResponse(url=f"/projects/{project}/stage/worldview", status_code=301)
 
 
 @app.get("/projects/{project}/notes/{folder}/{filename}", response_class=HTMLResponse)
@@ -1762,27 +1722,6 @@ def view_diff(request: Request, project: str, backup_name: str):
     return templates.TemplateResponse("_diff.html", {"request": request, "diff": diff})
 
 
-@app.get("/projects/{project}/hooks", response_class=HTMLResponse)
-def hooks_page(request: Request, project: str) -> Response:
-    require_auth(request)
-    safe_project = safe_slug(project, fallback="project")
-    items = list_notes(safe_project, "hooks")
-    return templates.TemplateResponse("hooks.html", {"request": request, "project": safe_project, "items": items})
-
-
-@app.post("/projects/{project}/hooks/new")
-def create_hook(request: Request, project: str, name: str = Form("")) -> Response:
-    require_auth(request)
-    safe_project = safe_slug(project, fallback="project")
-    folder = project_path(safe_project) / "hooks"
-    folder.mkdir(parents=True, exist_ok=True)
-    
-    filename = f"{safe_slug(name, fallback='hook')}.md"
-    path = folder / filename
-    write_markdown(path, {"title": name, "status": "open"}, f"# {name}\n\n在这里记录待填的坑或伏笔...")
-    return RedirectResponse(url=f"/projects/{safe_project}/hooks", status_code=303)
-
-
 @app.post("/api/snapshots/{snap_id}/restore")
 def restore_snapshot(request: Request, snap_id: int) -> Response:
     require_auth(request)
@@ -1942,9 +1881,11 @@ async def ai_outline_volume(request: Request, project: str) -> Response:
     from app.services.ai_context import build_context
     from app.services.ai_client import generate_ai_content
     context = build_context(project, None, "outline")
-    prompt = f"Based on the project context:\n{context}\nPlease generate a 3-5 paragraph synopsis for a new volume named '{data.get('slug')}'. Just return the synopsis text."
-    
-    resp = await generate_ai_content(api_key, get_setting("ai_base_url"), get_setting("ai_model"), "You are an outline planner.", prompt)
+    base_prompt = f"基于以下项目上下文:\n{context}\n\n请为名为 '{data.get('slug')}' 的卷生成 3-5 段中文大纲。直接返回大纲正文,不要前后说明。"
+    from app.services.prompts_service import build_layered_prompt
+    user_prompt = build_layered_prompt(get_setting, project, "outline", base_prompt)
+
+    resp = await generate_ai_content(api_key, get_setting("ai_base_url"), get_setting("ai_model"), "你是一名资深小说大纲规划师,中文输出。", user_prompt)
     if resp:
         with get_conn() as conn:
             conn.execute("UPDATE volumes SET synopsis = ? WHERE project = ? AND slug = ?", (resp.strip(), project, data.get("slug")))
@@ -1973,15 +1914,16 @@ async def ai_outline_chapter(request: Request, project: str) -> Response:
         vol = conn.execute("SELECT * FROM volumes WHERE project=? AND slug=?", (safe_project, volume_slug)).fetchone()
         if not vol: raise HTTPException(404, "volume not found")
     
-    prompt = f"""Volume synopsis:
+    base_prompt = f"""卷大纲:
 {vol['synopsis']}
 
-Project context:
+项目上下文:
 {context}
 
-Generate {num_chapters} chapter outlines for this volume. Return as JSON array, each item has: title (string), synopsis (string, 2-3 sentences). Return ONLY valid JSON, no markdown fences."""
-    
-    response = await generate_ai_content(api_key, get_setting("ai_base_url"), get_setting("ai_model"), "You are a chapter outline generator. Return ONLY valid JSON.", prompt)
+请为该卷生成 {num_chapters} 个章节大纲。返回 JSON 数组,每项包含:title(字符串,中文),synopsis(字符串,2-3 句中文)。只返回合法 JSON,不要 markdown 代码块,不要任何前后说明。"""
+    from app.services.prompts_service import build_layered_prompt
+    user_prompt = build_layered_prompt(get_setting, safe_project, "chapter_outline", base_prompt)
+    response = await generate_ai_content(api_key, get_setting("ai_base_url"), get_setting("ai_model"), "你是一名章节大纲生成器。只输出合法 JSON。", user_prompt)
     
     if not response: return JSONResponse({"status": "error"})
     
@@ -2140,43 +2082,6 @@ Expand this scene into prose. Keep the existing H2 title and beat summary at top
     write_markdown(ch_path, fm, new_body, project=safe_project)
     return JSONResponse({"status": "ok", "draft": response.strip()})
 
-@app.get("/projects/{project}/entities/{ent_id}/arc", response_class=HTMLResponse)
-def entity_arc_page(request: Request, project: str, ent_id: str) -> Response:
-    require_auth(request)
-    with get_conn() as conn:
-        entity = conn.execute("SELECT * FROM entities WHERE id=?", (ent_id,)).fetchone()
-        if not entity: raise HTTPException(404)
-        
-        # Aggregate data for arc
-        # 1. Appearance density by chapter
-        appearances = conn.execute("""
-            SELECT fi.chapter_int, COUNT(er.id) as count
-            FROM file_index fi
-            LEFT JOIN entity_refs er ON fi.path = er.chapter_path AND er.entity_id = ?
-            WHERE fi.project = ?
-            GROUP BY fi.chapter_int
-            ORDER BY fi.chapter_int
-        """, (ent_id, project)).fetchall()
-        
-        # 2. Relation changes (simplified: just list relations involving this entity)
-        relations = conn.execute("""
-            SELECT er.*, e.name as target_name 
-            FROM entity_relations er
-            JOIN entities e ON er.target_id = e.id
-            WHERE source_id = ?
-        """, (ent_id,)).fetchall()
-
-    return templates.TemplateResponse(
-        "entity_arc.html", 
-        {
-            "request": request, 
-            "project": project, 
-            "entity": dict(entity),
-            "appearances": [dict(a) for a in appearances],
-            "relations": [dict(r) for r in relations]
-        }
-    )
-
 @app.get("/api/projects/{project}/ai/generate")
 async def api_ai_generate(
     request: Request, 
@@ -2204,21 +2109,23 @@ async def api_ai_generate(
     
     full_context = build_context(safe_project, ch_path, mode)
     
-    system_prompt = f"""You are a professional creative writing assistant.
-Context of the novel:
+    system_prompt = "你是一名资深小说写作助手。中文输出。保持与上下文一致的人物性格、世界观、文风。"
+    mode_instructions = {
+        "continue": "请基于以下上下文,自然地续写接下来的几段。",
+        "rewrite": "请润色用户给出的文本,保持原意,提升语感与节奏。",
+        "check": "请检查用户给出的文本,找出与项目设定不一致或前后矛盾之处。直接列出。",
+        "echo": "请基于上下文,建议本章如何呼应之前埋下的伏笔或设定。",
+    }
+    base_prompt = f"""项目上下文:
 {full_context}
 
-Mode: {mode}
-Instructions:
-- If 'continue', write the next few paragraphs naturally.
-- If 'rewrite', polish the provided text.
-- If 'check', find inconsistencies or plot holes.
-- If 'echo', suggest how this chapter can reference previous setup/threads.
-- Stay consistent with character personalities and world settings.
-- Write in the same language as the context (likely Chinese).
-"""
+任务:{mode_instructions.get(mode, mode_instructions['continue'])}
 
-    user_prompt = text or "Please continue the story."
+用户提供的文本:
+{text or '(无)'}
+"""
+    from app.services.prompts_service import build_layered_prompt
+    user_prompt = build_layered_prompt(get_setting, safe_project, "writing", base_prompt)
 
     async def event_generator():
         async for chunk in generate_ai_content_stream(api_key, base_url, model, system_prompt, user_prompt):
@@ -2228,16 +2135,10 @@ Instructions:
     from fastapi.responses import StreamingResponse
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-@app.get("/projects/{project}/threads-board", response_class=HTMLResponse)
-def threads_board_page(request: Request, project: str) -> Response:
-    require_feature("threads")
-    require_auth(request)
-    return templates.TemplateResponse("threads_board.html", {"request": request, "project": project})
-
 @app.get("/projects/{project}/outline", response_class=HTMLResponse)
-def project_outline_page(request: Request, project: str) -> Response:
-    require_auth(request)
-    return templates.TemplateResponse("outline.html", {"request": request, "project": project})
+def project_outline_page_legacy(request: Request, project: str) -> Response:
+    """Legacy redirect; new flow uses /projects/{project}/stage/outline."""
+    return RedirectResponse(url=f"/projects/{project}/stage/outline", status_code=301)
 
 @app.put("/api/projects/{project}/volumes/{slug}")
 async def api_update_volume(request: Request, project: str, slug: str) -> Response:
@@ -2305,31 +2206,6 @@ def api_list_volumes(request: Request, project: str) -> Response:
             (safe_project,)
         ).fetchall()
     return JSONResponse({"status": "ok", "volumes": [dict(r) for r in rows]})
-
-@app.get("/api/projects/{project}/timeline")
-def api_get_timeline(request: Request, project: str, lane: str = None) -> Response:
-    require_feature("timeline")
-    require_auth(request)
-    with get_conn() as conn:
-        chapters = conn.execute("SELECT path, title, chapter_int, volume FROM file_index WHERE project=? ORDER BY chapter_int", (project,)).fetchall()
-        scenes = conn.execute("SELECT id, chapter_path, seq, title, pov, location_id FROM scenes WHERE project=? ORDER BY chapter_path, seq", (project,)).fetchall()
-        # Only refs for entities in this project
-        refs = conn.execute("""
-            SELECT er.*, e.name as entity_name, e.kind as entity_kind 
-            FROM entity_refs er
-            JOIN entities e ON er.entity_id = e.id
-            WHERE e.project = ?
-        """, (project,)).fetchall()
-        
-        volumes = conn.execute("SELECT * FROM volumes WHERE project = ? ORDER BY seq", (project,)).fetchall()
-
-        return JSONResponse(content={
-            "status": "ok",
-            "volumes": [dict(v) for v in volumes],
-            "chapters": [dict(c) for c in chapters],
-            "scenes": [dict(s) for s in scenes],
-            "entity_refs": [dict(r) for r in refs]
-        })
 
 @app.get("/api/entities/{ent_id}/appearances")
 def api_get_entity_appearances(request: Request, ent_id: str) -> Response:
@@ -2505,23 +2381,6 @@ def api_delete_relation(request: Request, rel_id: int) -> Response:
     return JSONResponse(content={"status": "ok"})
 
 
-@app.get("/api/projects/{project}/threads-board")
-def api_threads_board(request: Request, project: str) -> Response:
-    require_feature("threads")
-    require_auth(request)
-    with get_conn() as conn:
-        # Get all entities of kind 'thread'
-        threads = conn.execute("SELECT * FROM entities WHERE project = ? AND kind = 'thread'", (project,)).fetchall()
-        # Parse properties to group by status
-        board = {"open": [], "resolving": [], "closed": []}
-        for t in threads:
-            props = json.loads(t["properties"] or "{}")
-            status = props.get("status", "open")
-            if status not in board: board[status] = []
-            board[status].append(dict(t))
-        return JSONResponse(content={"status": "ok", "board": board})
-
-
 @app.post("/api/projects/{project}/snapshots")
 async def api_create_snapshot(request: Request, project: str) -> Response:
     require_auth(request)
@@ -2652,27 +2511,12 @@ def entities_page(request: Request, project: str, kind: str = None) -> Response:
         )
 
 
-@app.get("/projects/{project}/graph", response_class=HTMLResponse)
-def graph_page(request: Request, project: str) -> Response:
-    require_feature("graph")
-    require_auth(request)
-    return templates.TemplateResponse("graph.html", {"request": request, "project": project})
-
-
 @app.get("/api/entity-relations")
 def api_list_relations(request: Request, project: str) -> Response:
     require_auth(request)
     with get_conn() as conn:
         relations = conn.execute("SELECT * FROM entity_relations WHERE project = ?", (project,)).fetchall()
         return JSONResponse(content={"status": "ok", "relations": [dict(r) for r in relations]})
-
-
-@app.get("/projects/{project}/timeline", response_class=HTMLResponse)
-def timeline_page(request: Request, project: str) -> Response:
-    require_feature("timeline")
-    require_auth(request)
-    safe_project = safe_slug(project, fallback="project")
-    return templates.TemplateResponse("timeline.html", {"request": request, "project": safe_project})
 
 
 @app.get("/projects/{project}/entities/{ent_id}", response_class=HTMLResponse)
@@ -2781,6 +2625,8 @@ def settings_page(request: Request) -> Response:
     ai_api_key_configured = bool(get_setting_decrypted("ai_api_key", ""))
     ai_base_url = get_setting("ai_base_url", "https://api.openai.com/v1")
     ai_model = get_setting("ai_model", "gpt-3.5-turbo")
+    from app.services.prompts_service import get_global_prompt
+    global_prompt = get_global_prompt(get_setting)
 
     return templates.TemplateResponse(
         "settings.html",
@@ -2795,6 +2641,7 @@ def settings_page(request: Request) -> Response:
             "ai_base_url": ai_base_url,
             "ai_model": ai_model,
             "features": FEATURES,
+            "global_prompt": global_prompt,
         },
     )
 
@@ -2870,3 +2717,317 @@ async def api_update_snapshot(request: Request, snap_id: int) -> Response:
     with get_conn() as conn:
         conn.execute(f"UPDATE snapshots SET {','.join(fields)} WHERE id=?", params)
     return JSONResponse({"status": "ok"})
+
+
+# ===== Workflow prompt slots =====
+
+@app.get("/api/prompts/{project}/{stage}")
+def api_get_prompt(request: Request, project: str, stage: str) -> Response:
+    require_auth(request)
+    from app.services.stage_service import is_valid_stage
+    from app.services.prompts_service import get_stage_prompt
+    if not is_valid_stage(stage):
+        raise HTTPException(400, f"unknown stage: {stage}")
+    safe_project = safe_slug(project, fallback="project")
+    return JSONResponse({"status": "ok", "content": get_stage_prompt(get_setting, safe_project, stage)})
+
+
+@app.put("/api/prompts/{project}/{stage}")
+async def api_set_prompt(request: Request, project: str, stage: str) -> Response:
+    require_auth(request)
+    from app.services.stage_service import is_valid_stage
+    from app.services.prompts_service import set_stage_prompt
+    if not is_valid_stage(stage):
+        raise HTTPException(400, f"unknown stage: {stage}")
+    safe_project = safe_slug(project, fallback="project")
+    data = await request.json()
+    set_stage_prompt(set_setting, safe_project, stage, data.get("content", ""))
+    log_operation("set_stage_prompt", target=f"{safe_project}:{stage}")
+    return JSONResponse({"status": "ok"})
+
+
+@app.put("/api/prompts/global")
+async def api_set_global_prompt(request: Request) -> Response:
+    require_auth(request)
+    from app.services.prompts_service import set_global_prompt
+    data = await request.json()
+    set_global_prompt(set_setting, data.get("content", ""))
+    log_operation("set_global_prompt")
+    return JSONResponse({"status": "ok"})
+
+
+# ===== Stage status (mark done) =====
+
+@app.put("/api/stages/{project}/{stage}/done")
+async def api_mark_stage_done(request: Request, project: str, stage: str) -> Response:
+    require_auth(request)
+    from app.services.stage_service import is_valid_stage
+    from app.services.prompts_service import mark_stage_done
+    if not is_valid_stage(stage):
+        raise HTTPException(400, f"unknown stage: {stage}")
+    safe_project = safe_slug(project, fallback="project")
+    data = await request.json()
+    mark_stage_done(set_setting, safe_project, stage, bool(data.get("done", True)))
+    return JSONResponse({"status": "ok"})
+
+
+# ===== Workflow stage page dispatcher =====
+
+@app.get("/projects/{project}/stage/{stage}", response_class=HTMLResponse)
+def stage_page(request: Request, project: str, stage: str) -> Response:
+    """Unified workflow stage entry. Each stage renders its own template."""
+    require_auth(request)
+    safe_project = safe_slug(project, fallback="project")
+    from app.services.stage_service import is_valid_stage, STAGE_LABELS
+    from app.services.prompts_service import get_stage_prompt, is_stage_done
+    if not is_valid_stage(stage):
+        raise HTTPException(404, f"unknown stage: {stage}")
+
+    stage_prompt = get_stage_prompt(get_setting, safe_project, stage)
+    stage_done = is_stage_done(get_setting, safe_project, stage)
+    common_ctx = {
+        "request": request,
+        "project": safe_project,
+        "stage": stage,
+        "stage_label_zh": STAGE_LABELS[stage],
+        "stage_prompt": stage_prompt,
+        "stage_done": stage_done,
+    }
+
+    if stage == "premise":
+        f = NOVELS_ROOT / safe_project / ".workflow" / "premise.md"
+        content = f.read_text(encoding="utf-8") if f.exists() else ""
+        return templates.TemplateResponse("stage_premise.html", {**common_ctx, "content": content})
+
+    if stage == "worldview":
+        f = NOVELS_ROOT / safe_project / ".workflow" / "worldview.md"
+        content = f.read_text(encoding="utf-8") if f.exists() else ""
+        return templates.TemplateResponse("stage_worldview.html", {**common_ctx, "content": content})
+
+    if stage == "characters":
+        with get_conn() as conn:
+            entities = conn.execute(
+                "SELECT * FROM entities WHERE project=? AND kind='character' ORDER BY name",
+                (safe_project,),
+            ).fetchall()
+        return templates.TemplateResponse(
+            "stage_characters.html",
+            {**common_ctx, "entities": [dict(e) for e in entities]},
+        )
+
+    if stage == "outline":
+        with get_conn() as conn:
+            volumes = conn.execute(
+                "SELECT * FROM volumes WHERE project=? ORDER BY seq",
+                (safe_project,),
+            ).fetchall()
+        return templates.TemplateResponse(
+            "stage_outline.html",
+            {**common_ctx, "volumes": [dict(v) for v in volumes]},
+        )
+
+    if stage == "chapter_outline":
+        chapters = []
+        for chapter in list_chapters(safe_project, sync=False):
+            item = dict(chapter)
+            modified = item.get("modified")
+            if isinstance(modified, datetime):
+                item["modified"] = modified.isoformat()
+            chapters.append(item)
+        return templates.TemplateResponse(
+            "stage_chapter_outline.html",
+            {**common_ctx, "chapters": chapters},
+        )
+
+    if stage == "writing":
+        return RedirectResponse(url=f"/projects/{safe_project}", status_code=303)
+
+    raise HTTPException(404)
+
+
+@app.put("/api/projects/{project}/workflow/{stage}/content")
+async def api_save_stage_content(request: Request, project: str, stage: str) -> Response:
+    """Save markdown content for premise/worldview stages."""
+    require_auth(request)
+    from app.services.stage_service import is_valid_stage
+    if not is_valid_stage(stage) or stage not in ("premise", "worldview"):
+        raise HTTPException(400, f"stage {stage} has no markdown content")
+    safe_project = safe_slug(project, fallback="project")
+    data = await request.json()
+    content = data.get("content", "")
+    folder = NOVELS_ROOT / safe_project / ".workflow"
+    folder.mkdir(parents=True, exist_ok=True)
+    f = folder / f"{stage}.md"
+    write_atomic(f, content)
+    log_operation("save_stage_content", target=f"{safe_project}:{stage}", value=len(content))
+    return JSONResponse({"status": "ok", "saved_chars": len(content)})
+
+
+# ===== Stage-specific AI generation =====
+
+@app.post("/api/projects/{project}/stage/premise/ai")
+async def api_ai_premise(request: Request, project: str) -> Response:
+    require_feature("ai")
+    require_auth(request)
+    api_key = get_setting_decrypted("ai_api_key")
+    if not api_key:
+        return JSONResponse({"status": "error", "detail": "AI 未配置,请先去设置页填 API Key"}, status_code=400)
+
+    data = await request.json()
+    action = data.get("action", "discuss")
+    current = (data.get("current") or "").strip()
+    safe_project = safe_slug(project, fallback="project")
+    base_map = {
+        "discuss": "我正在为一本长篇小说做立意。这是目前草稿。请用 3-5 句话反馈:最强点、最弱点、两个可以追问的问题。\n\n当前草稿:\n" + (current or "(空)"),
+        "logline": "请基于以下方向,给我 3 个一句话简介(每个 30-60 字)。每个用不同切入角度,且要有钩子。\n\n方向:\n" + (current or "(空,你自己想 3 个有趣方向)"),
+        "refs": "请推荐 5 部题材或氛围接近以下立意的作品(小说/影视),每部一行,格式:作品名 — 一句话说为什么相似。\n\n立意:\n" + (current or "(空)"),
+        "critique": "请挑出以下立意的 3 个薄弱点。直接说,不要夸奖。如果立意为空,请说\"目前还没东西可以挑\"。\n\n立意:\n" + (current or "(空)"),
+    }
+    from app.services.ai_client import generate_ai_content
+    from app.services.prompts_service import build_layered_prompt
+    user_prompt = build_layered_prompt(get_setting, safe_project, "premise", base_map.get(action, base_map["discuss"]))
+    text = await generate_ai_content(
+        api_key,
+        get_setting("ai_base_url", "https://api.openai.com/v1"),
+        get_setting("ai_model", "gpt-3.5-turbo"),
+        "你是一名资深小说编辑,中文输出,简洁直接,不要客套。",
+        user_prompt,
+    )
+    if not text:
+        return JSONResponse({"status": "error", "detail": "AI 没有返回内容"}, status_code=502)
+    return JSONResponse({"status": "ok", "text": text})
+
+
+@app.post("/api/projects/{project}/stage/worldview/ai")
+async def api_ai_worldview(request: Request, project: str) -> Response:
+    require_feature("ai")
+    require_auth(request)
+    api_key = get_setting_decrypted("ai_api_key")
+    if not api_key:
+        return JSONResponse({"status": "error", "detail": "AI 未配置"}, status_code=400)
+
+    data = await request.json()
+    action = data.get("action", "extend")
+    current = (data.get("current") or "").strip()
+    safe_project = safe_slug(project, fallback="project")
+    premise_path = NOVELS_ROOT / safe_project / ".workflow" / "premise.md"
+    premise = premise_path.read_text(encoding="utf-8") if premise_path.exists() else ""
+    head = f"立意参考:\n{premise[:800]}\n\n当前世界观稿:\n{current or '(空)'}\n\n"
+    base_map = {
+        "extend": head + "请帮我把世界观骨架填补完整。建议补:时代地理、核心规则、主要势力、视觉氛围。每节 2-4 句即可,具体不空泛。",
+        "inconsistency": head + "请找出 3 处设定中的潜在漏洞或自相矛盾。直接列出,不要绕弯。",
+        "names": head + "请基于上述世界观,起 8 个地名或势力名。每行一个,格式:名字 — 一句话用途。",
+        "timeline": head + "请列出 5-8 个对故事至关重要的时间节点。每行一个,格式:[时间] 事件 — 影响。",
+    }
+    from app.services.ai_client import generate_ai_content
+    from app.services.prompts_service import build_layered_prompt
+    user_prompt = build_layered_prompt(get_setting, safe_project, "worldview", base_map.get(action, base_map["extend"]))
+    text = await generate_ai_content(
+        api_key,
+        get_setting("ai_base_url", "https://api.openai.com/v1"),
+        get_setting("ai_model", "gpt-3.5-turbo"),
+        "你是一名资深小说世界观顾问。中文输出。具体,不空泛。",
+        user_prompt,
+    )
+    if not text:
+        return JSONResponse({"status": "error", "detail": "AI 没有返回"}, status_code=502)
+    return JSONResponse({"status": "ok", "text": text})
+
+
+@app.post("/api/projects/{project}/stage/characters/ai")
+async def api_ai_characters(request: Request, project: str) -> Response:
+    require_feature("ai")
+    require_auth(request)
+    api_key = get_setting_decrypted("ai_api_key")
+    if not api_key:
+        return JSONResponse({"status": "error", "detail": "AI 未配置"}, status_code=400)
+
+    data = await request.json()
+    action = data.get("action", "cast")
+    safe_project = safe_slug(project, fallback="project")
+    premise = NOVELS_ROOT / safe_project / ".workflow" / "premise.md"
+    worldview = NOVELS_ROOT / safe_project / ".workflow" / "worldview.md"
+    premise_text = premise.read_text(encoding="utf-8") if premise.exists() else ""
+    worldview_text = worldview.read_text(encoding="utf-8") if worldview.exists() else ""
+    head = f"立意:\n{premise_text[:600]}\n\n世界观:\n{worldview_text[:800]}\n\n"
+    base_map = {
+        "cast": head + "请基于上面的设定,给我 3 个候选主角。每个用 4-6 行写:姓名、年龄、职业、核心动机、致命缺陷、出场动作画面。",
+        "antagonist": head + "请配一个反派或对手。要求:动机能站得住脚,与主角形成镜像或互补。4-6 行。",
+        "relations": head + "请基于设定,提议一个 5-7 人的人物关系网,并指出 1 个最有戏剧张力的对子。",
+        "flaw": head + "请给主角一个致命缺陷(不是优点的反面),要能驱动后期反转。给 3 个候选,每个 2-3 行。",
+    }
+    from app.services.ai_client import generate_ai_content
+    from app.services.prompts_service import build_layered_prompt
+    user_prompt = build_layered_prompt(get_setting, safe_project, "characters", base_map.get(action, base_map["cast"]))
+    text = await generate_ai_content(
+        api_key,
+        get_setting("ai_base_url", "https://api.openai.com/v1"),
+        get_setting("ai_model", "gpt-3.5-turbo"),
+        "你是一名资深小说人物顾问。中文输出。具体,可视化,不空泛。",
+        user_prompt,
+    )
+    if not text:
+        return JSONResponse({"status": "error", "detail": "AI 没有返回"}, status_code=502)
+    return JSONResponse({"status": "ok", "text": text})
+
+
+@app.put("/api/projects/{project}/chapters/{filename}/synopsis")
+async def api_update_chapter_synopsis(request: Request, project: str, filename: str) -> Response:
+    """Lightweight synopsis update that only touches chapter frontmatter."""
+    require_auth(request)
+    safe_project = safe_slug(project, fallback="project")
+    path = chapter_path(safe_project, filename)
+    if not path.exists():
+        raise HTTPException(404, "chapter not found")
+    data = await request.json()
+    fm, body = read_markdown(path)
+    fm["synopsis"] = data.get("synopsis", "")
+    write_markdown(path, fm, body, project=safe_project)
+    log_operation("update_synopsis", target=str(path))
+    return JSONResponse({"status": "ok"})
+
+
+@app.post("/api/projects/{project}/stage/chapter_outline/ai")
+async def api_ai_chapter_outline_one(request: Request, project: str) -> Response:
+    """Generate a synopsis for a single chapter."""
+    require_feature("ai")
+    require_auth(request)
+    api_key = get_setting_decrypted("ai_api_key")
+    if not api_key:
+        return JSONResponse({"status": "error", "detail": "AI 未配置"}, status_code=400)
+
+    data = await request.json()
+    filename = data.get("filename")
+    if not filename:
+        raise HTTPException(400, "missing filename")
+    safe_project = safe_slug(project, fallback="project")
+    path = chapter_path(safe_project, filename)
+    if not path.exists():
+        raise HTTPException(404)
+
+    fm, body = read_markdown(path)
+    chapters = list_chapters(safe_project, sync=False)
+    idx = next((i for i, c in enumerate(chapters) if c["filename"] == filename), -1)
+    prev_syn = chapters[idx - 1].get("synopsis", "") if idx > 0 else ""
+    next_syn = chapters[idx + 1].get("synopsis", "") if idx >= 0 and idx + 1 < len(chapters) else ""
+    base_prompt = f"""请为这一章生成 1-3 句中文梗概,用于做细纲。直接返回梗概,不要前后说明。
+本章号:{fm.get('chapter', '')}
+本章标题:{fm.get('title', '')}
+所在卷:{fm.get('volume', '')}
+上一章梗概:{prev_syn or '(无)'}
+下一章梗概:{next_syn or '(无)'}
+本章已写正文(摘要):{(body or '')[:500]}
+"""
+    from app.services.ai_client import generate_ai_content
+    from app.services.prompts_service import build_layered_prompt
+    user_prompt = build_layered_prompt(get_setting, safe_project, "chapter_outline", base_prompt)
+    text = await generate_ai_content(
+        api_key,
+        get_setting("ai_base_url", "https://api.openai.com/v1"),
+        get_setting("ai_model", "gpt-3.5-turbo"),
+        "你是一名章节大纲规划师。中文输出。1-3 句话,具体不空泛。",
+        user_prompt,
+    )
+    if not text:
+        return JSONResponse({"status": "error", "detail": "AI 没有返回"}, status_code=502)
+    return JSONResponse({"status": "ok", "text": text.strip()})

@@ -1,17 +1,34 @@
 import json
+import os
 import sqlite3
 from pathlib import Path
-from typing import Dict, Any, List
-import re
 
+
+def _read_markdown_body(path: Path) -> str:
+    """Read markdown body without importing app.main from this service module."""
+    text = path.read_text(encoding="utf-8")
+    if text.startswith("---"):
+        parts = text.split("---", 2)
+        if len(parts) == 3:
+            return parts[2].lstrip("\n")
+    return text
+
+
+def _get_conn() -> sqlite3.Connection:
+    base_dir = Path(__file__).resolve().parents[2]
+    db_path = Path(os.getenv("NOVELHUB_DB_PATH", str(base_dir / "novelhub.db"))).expanduser()
+    conn = sqlite3.connect(db_path, timeout=30.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
 
 
 def build_context(project: str, chapter_path: str = None, mode: str = "continue") -> str:
     """
     Builds a rich context prompt for AI generation.
     """
-    from app.main import get_conn
-    with get_conn() as conn:
+    with _get_conn() as conn:
         context_parts = []
     
         # 1. Project Level
@@ -54,8 +71,7 @@ def build_context(project: str, chapter_path: str = None, mode: str = "continue"
                     (project, curr_ch['chapter_int'])
                 ).fetchone()
                 if prev_ch and Path(prev_ch['path']).exists():
-                    from app.main import read_markdown # Import inside to avoid circular deps if possible
-                    _, body = read_markdown(Path(prev_ch['path']))
+                    body = _read_markdown_body(Path(prev_ch['path']))
                     tail = body.strip()[-500:]
                     context_parts.append(f"### 上一章结尾:\n...{tail}")
     
@@ -79,10 +95,9 @@ def build_context(project: str, chapter_path: str = None, mode: str = "continue"
         ).fetchall()
         if samples:
             context_parts.append("### 文风示例:")
-            from app.main import read_markdown
             for s in samples:
                 if Path(s['path']).exists():
-                    _, body = read_markdown(Path(s['path']))
+                    body = _read_markdown_body(Path(s['path']))
                     context_parts.append(f"示例:\n{body[:300]}...")
     
     return "\n\n".join(context_parts)

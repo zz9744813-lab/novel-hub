@@ -274,6 +274,7 @@ def test_no_stale_visible_english_copy_in_outline_and_editor_js():
         "Real Name",
         "Unbound name link",
         "Loading entity info",
+        "鏈繚瀛",
     ]
     for text in stale_outline:
         assert text not in outline

@@ -66,16 +66,16 @@
         </h3>
         <form action="/settings/ai" method="post" class="flex flex-col gap-4">
           <div class="flex flex-col gap-1.5">
-            <label class="text-sm font-medium text-muted">API Key</label>
+            <label class="text-sm font-medium text-muted">API 密钥</label>
             <p class="text-xs text-muted">{% if ai_api_key_configured %}已配置。留空表示不修改现有密钥。{% else %}未配置。保存后将加密写入本地设置。{% endif %}</p>
-            <input type="password" name="ai_api_key" placeholder="{% if ai_api_key_configured %}留空表示不修改{% else %}输入 API Key{% endif %}" autocomplete="new-password" class="w-full bg-bg border border-border_color rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" />
+            <input type="password" name="ai_api_key" placeholder="{% if ai_api_key_configured %}留空表示不修改{% else %}输入 API 密钥{% endif %}" autocomplete="new-password" class="w-full bg-bg border border-border_color rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" />
           </div>
           <div class="flex flex-col gap-1.5">
-            <label class="text-sm font-medium text-muted">Base URL</label>
+            <label class="text-sm font-medium text-muted">接口地址</label>
             <input type="text" name="ai_base_url" value="{{ ai_base_url }}" placeholder="https://api.openai.com/v1" class="w-full bg-bg border border-border_color rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" />
           </div>
           <div class="flex flex-col gap-1.5">
-            <label class="text-sm font-medium text-muted">Model</label>
+            <label class="text-sm font-medium text-muted">模型名称</label>
             <input type="text" name="ai_model" value="{{ ai_model }}" placeholder="gpt-3.5-turbo" class="w-full bg-bg border border-border_color rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" />
           </div>
           <div class="flex flex-col sm:flex-row gap-2 mt-2">

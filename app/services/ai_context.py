@@ -17,9 +17,9 @@ def build_context(project: str, chapter_path: str = None, mode: str = "continue"
         # 1. Project Level
         proj_meta = conn.execute("SELECT * FROM project_meta WHERE project = ?", (project,)).fetchone()
         if proj_meta:
-            context_parts.append(f"### Project: {project}")
-            context_parts.append(f"Synopsis: {proj_meta['synopsis']}")
-            context_parts.append(f"Author Style: {proj_meta['author']}")
+            context_parts.append(f"### 项目:{project}")
+            context_parts.append(f"简介:{proj_meta['synopsis']}")
+            context_parts.append(f"作者文风:{proj_meta['author']}")
     
         # 2. Main Characters (Top 5)
         chars = conn.execute(
@@ -27,7 +27,7 @@ def build_context(project: str, chapter_path: str = None, mode: str = "continue"
             (project,)
         ).fetchall()
         if chars:
-            context_parts.append("### Key Characters:")
+            context_parts.append("### 主要人物:")
             for c in chars:
                 props = json.loads(c['properties'] or '{}')
                 desc = f"{c['name']}: {props.get('appearance', '')} {props.get('personality', '')}".strip()
@@ -44,9 +44,9 @@ def build_context(project: str, chapter_path: str = None, mode: str = "continue"
                         (project, curr_ch['volume'])
                     ).fetchone()
                     if vol and vol['synopsis']:
-                        context_parts.append(f"### Current Volume ({curr_ch['volume']}):\n{vol['synopsis']}")
+                        context_parts.append(f"### 当前卷({curr_ch['volume']}):\n{vol['synopsis']}")
                 
-                context_parts.append(f"### Current Chapter Synopsis:\n{curr_ch['synopsis']}")
+                context_parts.append(f"### 本章梗概:\n{curr_ch['synopsis']}")
     
                 # Previous chapter context
                 prev_ch = conn.execute(
@@ -57,7 +57,7 @@ def build_context(project: str, chapter_path: str = None, mode: str = "continue"
                     from app.main import read_markdown # Import inside to avoid circular deps if possible
                     _, body = read_markdown(Path(prev_ch['path']))
                     tail = body.strip()[-500:]
-                    context_parts.append(f"### Previous Chapter Ending:\n...{tail}")
+                    context_parts.append(f"### 上一章结尾:\n...{tail}")
     
                 # Mentioned Entities in this chapter
                 refs = conn.execute("""
@@ -67,22 +67,22 @@ def build_context(project: str, chapter_path: str = None, mode: str = "continue"
                     WHERE er.chapter_path = ?
                 """, (chapter_path,)).fetchall()
                 if refs:
-                    context_parts.append("### Entities in this Chapter:")
+                    context_parts.append("### 本章实体:")
                     for r in refs:
                         p = json.loads(r['properties'] or '{}')
                         context_parts.append(f"- {r['name']}: {json.dumps(p)}")
     
-        # 4. Style Samples (2 random done chapters)
+        # 4. 文风示例(随机取 2 章已完成正文)
         samples = conn.execute(
             "SELECT path FROM file_index WHERE project = ? AND status = 'done' ORDER BY RANDOM() LIMIT 2",
             (project,)
         ).fetchall()
         if samples:
-            context_parts.append("### Style Samples:")
+            context_parts.append("### 文风示例:")
             from app.main import read_markdown
             for s in samples:
                 if Path(s['path']).exists():
                     _, body = read_markdown(Path(s['path']))
-                    context_parts.append(f"Sample:\n{body[:300]}...")
+                    context_parts.append(f"示例:\n{body[:300]}...")
     
     return "\n\n".join(context_parts)

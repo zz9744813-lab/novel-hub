@@ -58,8 +58,3 @@
 | `NOVELHUB_FEATURE_AI` + `NOVELHUB_FEATURE_SCENES` | `POST` | `/api/projects/{project}/ai/outline/draft` | Expand scene draft |
 | `NOVELHUB_FEATURE_SCENES` | `GET` | `/api/projects/{project}/scenes` | Scene list |
 | `NOVELHUB_FEATURE_SCENES` | `POST` | `/api/projects/{project}/scenes` | Create scene |
-| `NOVELHUB_FEATURE_THREADS` | `GET` | `/projects/{project}/threads-board` | Threads board page |
-| `NOVELHUB_FEATURE_THREADS` | `GET` | `/api/projects/{project}/threads-board` | Threads board JSON |
-| `NOVELHUB_FEATURE_TIMELINE` | `GET` | `/projects/{project}/timeline` | Timeline page |
-| `NOVELHUB_FEATURE_TIMELINE` | `GET` | `/api/projects/{project}/timeline` | Timeline JSON |
-| `NOVELHUB_FEATURE_GRAPH` | `GET` | `/projects/{project}/graph` | Entity graph page |

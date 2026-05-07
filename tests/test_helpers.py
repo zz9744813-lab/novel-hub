@@ -249,3 +249,33 @@ def test_editor_mobile_overlay_and_entity_list_are_chinese(tmp_path):
         assert entities_res.status_code == 200
         assert "新建实体" in entities_res.text
         assert "New Entity" not in entities_res.text
+
+
+def test_no_stale_visible_english_copy_in_outline_and_editor_js():
+    outline = (Path(__file__).resolve().parent.parent / "app" / "templates" / "outline.html").read_text(encoding="utf-8")
+    editor_js = (Path(__file__).resolve().parent.parent / "app" / "static" / "js" / "editor.js").read_text(encoding="utf-8")
+    stale_outline = [
+        "No synopsis",
+        "No POV",
+        "Click a chapter",
+        "Loading outline",
+        "Back to Project",
+        "AI Split",
+        "Root (No Volume)",
+        "Select a volume",
+    ]
+    stale_editor = [
+        "0 words",
+        "Delete this scene",
+        "Entity not found",
+        "View Detail",
+        "Has notes",
+        "No notes yet",
+        "Real Name",
+        "Unbound name link",
+        "Loading entity info",
+    ]
+    for text in stale_outline:
+        assert text not in outline
+    for text in stale_editor:
+        assert text not in editor_js

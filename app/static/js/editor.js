@@ -89,7 +89,7 @@ if (textarea) {
                 let realName = isID ? entityCache[match[1]] : null;
                 builder.push(Decoration.mark({
                     class: isID ? "wiki-link-id" : "wiki-link-name",
-                    attributes: realName ? {title: `Real Name: ${realName}`} : {}
+                    attributes: realName ? {title: `实体名称：${realName}`} : {}
                 }).range(from, to));
             }
         }
@@ -114,7 +114,7 @@ if (textarea) {
         create(view) {
             let dom = document.createElement("div");
             dom.className = "cm-wiki-tooltip p-3 bg-panel border border-border_color rounded shadow-lg text-sm max-w-xs";
-            dom.textContent = "Loading entity info...";
+            dom.textContent = "正在加载实体信息...";
             
             // Extract ID or Name
             const match = /\[\[(ent_[^|\]]+)/.exec(raw);
@@ -127,17 +127,17 @@ if (textarea) {
                             dom.innerHTML = `
                                 <div class="font-bold text-accent mb-1">${e.name}</div>
                                 <div class="text-xs text-muted mb-2">${e.kind}</div>
-                                <div class="text-xs">${e.md_path ? 'Has notes' : 'No notes yet'}</div>
+                                <div class="text-xs">${e.md_path ? '已有说明' : '暂无说明'}</div>
                                 <div class="mt-2 text-xs flex gap-1">
-                                    <a href="/projects/${project}/entities/${e.id}" class="text-accent hover:underline">View Detail</a>
+                                    <a href="/projects/${project}/entities/${e.id}" class="text-accent hover:underline">查看详情</a>
                                 </div>
                             `;
                         } else {
-                            dom.textContent = "Entity not found";
+                            dom.textContent = "未找到实体";
                         }
                     });
             } else {
-                dom.textContent = "Unbound name link. Click to bind.";
+                dom.textContent = "未绑定的名称链接。可在实体库中绑定。";
             }
             return {dom};
         }
@@ -184,23 +184,23 @@ if (textarea) {
             <div class="px-4 py-2 bg-bg/50 border-b border-border_color flex items-center justify-between">
                 <div class="flex items-center gap-3">
                     <span class="cursor-move text-muted text-xs">::</span>
-                    <span class="text-[10px] font-bold text-muted uppercase tracking-widest">Scene ${idx + 1}</span>
+                    <span class="text-[10px] font-bold text-muted uppercase tracking-widest">场景 ${idx + 1}</span>
                     <input type="text" class="scene-title bg-transparent font-bold text-sm focus:outline-none" value="${s.title}">
                 </div>
                 <div class="flex items-center gap-4">
                     <div class="flex items-center gap-2 text-[10px] text-muted uppercase tracking-tighter">
-                        POV: <input class="scene-pov bg-panel border-0 rounded px-1 w-16" value="">
-                        Loc: <input class="scene-loc bg-panel border-0 rounded px-1 w-16" value="">
+                        视角: <input class="scene-pov bg-panel border-0 rounded px-1 w-16" value="">
+                        地点: <input class="scene-loc bg-panel border-0 rounded px-1 w-16" value="">
                     </div>
                     <div class="flex items-center gap-2">
-                        <button class="text-[10px] text-muted hover:text-accent p-1" data-action="split-here" title="Split at cursor">✂️</button>
-                        <button class="text-[10px] text-muted hover:text-danger p-1" data-action="delete-scene" title="Merge up (Delete H2)">🗑️</button>
+                        <button class="text-[10px] text-muted hover:text-accent p-1" data-action="split-here" title="从光标处拆分">✂️</button>
+                        <button class="text-[10px] text-muted hover:text-danger p-1" data-action="delete-scene" title="删除场景标题并合并到上一段">🗑️</button>
                     </div>
                 </div>
             </div>
             <div class="scene-cm-container p-4 min-h-[100px]"></div>
             <div class="px-4 py-1 bg-bg/30 border-t border-border_color/30 flex justify-between items-center">
-                <span class="text-[10px] text-muted font-mono" data-scene-wordcount>0 words</span>
+                <span class="text-[10px] text-muted font-mono" data-scene-wordcount>0 字</span>
             </div>
         `;
 
@@ -217,7 +217,7 @@ if (textarea) {
                         if (update.docChanged) {
                             const cjk = (update.state.doc.toString().match(/[\u4e00-\u9fff]/g) || []).length;
                             const latin = (update.state.doc.toString().match(/[A-Za-z0-9]+/g) || []).length;
-                            block.querySelector('[data-scene-wordcount]').textContent = (cjk + latin) + ' words';
+                            block.querySelector('[data-scene-wordcount]').textContent = (cjk + latin) + ' 字';
                             syncScenesToFull();
                         }
                     }),
@@ -259,7 +259,7 @@ if (textarea) {
         };
 
         block.querySelector('[data-action="delete-scene"]').onclick = () => {
-            if (!confirm('Delete this scene header and merge into previous?')) return;
+            if (!confirm('删除这个场景标题，并把内容合并到上一段吗？')) return;
             let fullText = "";
             sceneViews.forEach((sv, i) => {
                 if (i !== idx) {

@@ -6,34 +6,11 @@
   <title>{% block title %}Novel Hub{% endblock %}</title>
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
-  <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
-  <script>
-    tailwind.config = {
-      darkMode: ['class', '[data-theme="dark"]'],
-      theme: {
-        extend: {
-          colors: {
-            bg: 'var(--bg)',
-            panel: 'var(--panel)',
-            border_color: 'var(--border)',
-            text_color: 'var(--text)',
-            muted: 'var(--muted)',
-            accent: 'var(--accent)',
-            danger: 'var(--danger)',
-            sidebar: 'var(--sidebar)',
-          },
-          fontFamily: {
-            sans: ['Inter', 'system-ui', 'sans-serif'],
-            serif: ['Noto Serif SC', 'serif'],
-          }
-        }
-      }
-    }
-  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Serif+SC:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/tailwind.css" />
   <link rel="stylesheet" href="/static/css/app.css" />
 </head>
 <body x-data="{ sidebarOpen: true, theme: localStorage.getItem('theme') || 'dark' }"

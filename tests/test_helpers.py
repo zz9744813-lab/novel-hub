@@ -298,3 +298,17 @@ def test_tailwind_uses_local_compiled_css():
     assert "登录 · Novel Hub" in login
     assert "面向长篇小说创作的本地工作台" in login
     assert "Login · Novel Hub" not in login
+
+
+def test_editor_uses_local_codemirror_bundle():
+    root = Path(__file__).resolve().parent.parent
+    editor_template = (root / "app" / "templates" / "editor.html").read_text(encoding="utf-8")
+    source_js = root / "app" / "static" / "js" / "editor.js"
+    bundle_js = root / "app" / "static" / "js" / "editor.bundle.js"
+
+    assert "type=\"importmap\"" not in editor_template
+    assert "esm.sh" not in editor_template
+    assert "/static/js/editor.bundle.js" in editor_template
+    assert source_js.exists()
+    assert bundle_js.exists()
+    assert "EditorView" in bundle_js.read_text(encoding="utf-8")

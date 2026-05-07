@@ -64,26 +64,7 @@
         <a href="/projects/{{ project }}" class="bg-panel border border-border_color px-6 py-3 rounded-lg font-medium hover:border-accent transition-all">返回项目</a>
     </div>
 </div>
-<!-- CodeMirror 6 (ESM) -->
-<script type="importmap">
-{
-  "imports": {
-    "@codemirror/view": "https://esm.sh/@codemirror/view@6.26.3",
-    "@codemirror/state": "https://esm.sh/@codemirror/state@6.4.1",
-    "@codemirror/language": "https://esm.sh/@codemirror/language@6.10.1",
-    "@codemirror/commands": "https://esm.sh/@codemirror/commands@6.5.0",
-    "@codemirror/search": "https://esm.sh/@codemirror/search@6.5.6",
-    "@codemirror/autocomplete": "https://esm.sh/@codemirror/autocomplete@6.16.0",
-    "@codemirror/lint": "https://esm.sh/@codemirror/lint@6.7.0",
-    "@codemirror/lang-markdown": "https://esm.sh/@codemirror/lang-markdown@6.2.5",
-    "@codemirror/theme-one-dark": "https://esm.sh/@codemirror/theme-one-dark@6.1.2",
-    "@lezer/common": "https://esm.sh/@lezer/common@1.2.1",
-    "@lezer/highlight": "https://esm.sh/@lezer/highlight@1.2.0",
-    "@lezer/markdown": "https://esm.sh/@lezer/markdown@1.3.0",
-    "codemirror": "https://esm.sh/codemirror@6.0.1"
-  }
-}
-</script>
+<!-- CodeMirror 6 is bundled locally by npm run build:js. -->
 <section class="flex-1 flex overflow-hidden bg-bg" data-editor-workspace data-project="{{ project }}" data-filename="{{ filename }}">
   <aside class="sidebar w-64 bg-sidebar border-r border-border_color flex flex-col shrink-0 transition-all duration-300 left" data-panel="left">
     <div class="p-4 border-b border-border_color flex flex-col gap-3">
@@ -300,5 +281,5 @@ window.deleteChapter = async () => {
 </script>
 {% endblock %}
 {% block scripts %}
-<script type="module" src="/static/js/editor.js"></script>
+<script src="/static/js/editor.bundle.js"></script>
 {% endblock %}

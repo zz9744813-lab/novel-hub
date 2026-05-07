@@ -11,6 +11,7 @@ Novel Hub 是一个面向长篇小说创作的本地优先工作台。正文以 
 - CodeMirror 6（ESM importmap）
 - Alpine.js
 - Tailwind CSS CLI（本地预编译，不使用 CDN）
+- esbuild 本地打包 CodeMirror 编辑器
 - slowapi 登录限流
 - cryptography/Fernet 加密本地 AI 设置
 - systemd 部署
@@ -70,7 +71,7 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 npm install
-npm run build:css
+npm run build
 cp .env.example .env
 uvicorn app.main:app --host 0.0.0.0 --port 8787 --reload
 ```
@@ -87,7 +88,7 @@ http://127.0.0.1:8787/login
 python -m venv /opt/novel-hub/.venv
 /opt/novel-hub/.venv/bin/pip install -r /opt/novel-hub/requirements.txt
 npm --prefix /opt/novel-hub install
-npm --prefix /opt/novel-hub run build:css
+npm --prefix /opt/novel-hub run build
 cp /opt/novel-hub/.env.example /opt/novel-hub/.env
 
 sudo cp /opt/novel-hub/deploy/novelhub.service /etc/systemd/system/novelhub.service
@@ -108,7 +109,7 @@ sudo systemctl status novelhub
 ```bash
 python -m compileall app tests
 python -m pytest tests -v
-npm run build:css
+npm run build
 ```
 
 ## 目录
@@ -119,6 +120,7 @@ app/
   static/
     css/app.css
     css/tailwind.css
+    js/editor.bundle.js
     js/editor.js
     js/ui.js
   templates/

@@ -127,6 +127,7 @@ class CacheStaticFiles(StaticFiles):
 app.mount("/static", CacheStaticFiles(directory=BASE_DIR / "app" / "static"), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "app" / "templates"))
 templates.env.filters["from_json"] = lambda s: json.loads(s or "{}")
+templates.env.filters["basename"] = lambda s: Path(s).name if s else ""
 
 def inject_locale(request: Request):
     return get_setting("locale", "zh-CN")
@@ -304,15 +305,6 @@ def init_db() -> None:
                 target TEXT,
                 created_at TEXT NOT NULL,
                 detail TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS ai_pipelines_archived (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                project TEXT NOT NULL,
-                stage TEXT NOT NULL,
-                data TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS project_meta (
@@ -832,8 +824,8 @@ def write_markdown(path: Path, frontmatter: dict[str, Any], body: str, project: 
     with get_conn() as conn:
         conn.execute(
             """
-            INSERT INTO file_index(path, project, word_count, updated_at, title, chapter, chapter_int, status, volume, mtime)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO file_index(path, project, word_count, updated_at, title, chapter, chapter_int, status, volume, mtime, synopsis)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(path) DO UPDATE SET
                 project=excluded.project,
                 word_count=excluded.word_count,
@@ -843,9 +835,22 @@ def write_markdown(path: Path, frontmatter: dict[str, Any], body: str, project: 
                 chapter_int=excluded.chapter_int,
                 status=excluded.status,
                 volume=excluded.volume,
-                mtime=excluded.mtime
+                mtime=excluded.mtime,
+                synopsis=excluded.synopsis
             """,
-            (str(p), project, words, utc_now().isoformat(), meta["title"], meta["chapter"], chapter_int, meta["status"], meta["volume"], mtime),
+            (
+                str(p),
+                project,
+                words,
+                utc_now().isoformat(),
+                meta["title"],
+                meta["chapter"],
+                chapter_int,
+                meta["status"],
+                meta["volume"],
+                mtime,
+                meta.get("synopsis", ""),
+            ),
         )
         conn.execute("DELETE FROM chapter_fts WHERE path=?", (str(p),))
         conn.execute(
@@ -1040,7 +1045,6 @@ def delete_project(request: Request, project: str) -> Response:
         shutil.rmtree(p)
         with get_conn() as conn:
             conn.execute("DELETE FROM file_index WHERE project=?", (safe_project,))
-            conn.execute("DELETE FROM ai_pipelines_archived WHERE project=?", (safe_project,))
             conn.execute("DELETE FROM chapter_fts WHERE project=?", (safe_project,))
             conn.execute("DELETE FROM project_meta WHERE project=?", (safe_project,))
         log_operation("delete_project", safe_project, project=safe_project)
@@ -1071,7 +1075,6 @@ async def rename_project(request: Request, project: str) -> Response:
                 conn.execute("UPDATE file_index SET path=?, project=? WHERE path=?", (new_path_str, new_name, old_path))
                 conn.execute("UPDATE chapter_fts SET path=?, project=? WHERE path=?", (new_path_str, new_name, old_path))
                 
-            conn.execute("UPDATE ai_pipelines_archived SET project=? WHERE project=?", (new_name, safe_project))
             conn.execute("UPDATE project_meta SET project=? WHERE project=?", (new_name, safe_project))
         log_operation("rename_project", f"{project} -> {new_name}", project=new_name)
         
@@ -1457,8 +1460,9 @@ def update_project_meta(
 
 
 @app.post("/projects/{project}/preview", response_class=HTMLResponse)
-def preview_markdown(request: Request, body: str = Form("")) -> Response:
+def preview_markdown(request: Request, project: str, body: str = Form("")) -> Response:
     require_auth(request)
+    safe_project = safe_slug(project, fallback="project")
     ext = WikiLinkExtension(project=safe_project, db_path=str(DB_PATH))
     html = markdown.markdown(body, extensions=["fenced_code", "tables", ext])
     return templates.TemplateResponse("_preview.html", {"request": request, "html": html})
@@ -1826,8 +1830,6 @@ async def run_consistency_check(project: str, chapter_path: str):
         model = get_setting("ai_model")
         if not api_key: return
 
-        # Load chapter
-        from app.main import read_markdown
         path = Path(chapter_path)
         if not path.exists(): return
         fm, body = read_markdown(path)
@@ -2536,7 +2538,11 @@ def entity_detail_page(request: Request, project: str, ent_id: str) -> Response:
                JOIN entities e ON er.target_id = e.id 
                WHERE source_id = ?""", (ent_id,)).fetchall()
         appearances = conn.execute("SELECT * FROM entity_refs WHERE entity_id = ?", (ent_id,)).fetchall()
-        
+        try:
+            entity_properties = json.loads(entity["properties"] or "{}")
+        except json.JSONDecodeError:
+            entity_properties = {}
+
         return templates.TemplateResponse(
             "entity_detail.html",
             {
@@ -2544,6 +2550,7 @@ def entity_detail_page(request: Request, project: str, ent_id: str) -> Response:
                 "project": project,
                 "entity": dict(entity),
                 "entity_aliases": json.loads(entity["aliases"] or "[]"),
+                "entity_properties": entity_properties,
                 "md_content": md_content,
                 "relations": [dict(r) for r in relations],
                 "appearances": [dict(a) for a in appearances]

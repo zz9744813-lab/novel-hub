@@ -1,0 +1,19 @@
+{% if project %}
+{% set _stages_status = project_stage_status_map(project) %}
+{% for s in WORKFLOW_STAGES %}
+  {% set sk = s[0] %}
+  {% set sl = s[1] %}
+  {% set st = _stages_status.get(sk, 'todo') %}
+  <a href="/projects/{{ project }}/stage/{{ sk }}"
+     class="flex items-center justify-between hover:text-accent">
+    <span class="flex items-center gap-2">
+      <span class="w-1.5 h-1.5 rounded-full
+                  {% if st == 'done' %}bg-emerald-500{% elif st == 'in_progress' %}bg-amber-500{% else %}bg-border_color{% endif %}"></span>
+      {{ sl }}
+    </span>
+    <span class="text-xs text-muted">
+      {% if st == 'done' %}✓{% elif st == 'in_progress' %}…{% else %}—{% endif %}
+    </span>
+  </a>
+{% endfor %}
+{% endif %}

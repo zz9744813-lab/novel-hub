@@ -1,120 +1,92 @@
 {% extends "base.html" %}
 {% block title %}Dashboard · Novel Hub{% endblock %}
 {% block content %}
-<section class="flex flex-col gap-6">
-  <div class="bg-panel border border-border_color rounded-xl p-6 shadow-sm relative overflow-hidden">
-    <div class="absolute inset-0 opacity-5 pointer-events-none" style="background-image: radial-gradient(var(--accent) 1px, transparent 1px); background-size: 20px 20px;"></div>
-    <div class="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-      <div>
-        <h2 class="text-3xl font-bold mb-2">写作仪表盘</h2>
-        <p class="text-muted">聚焦今天，稳定推进你的长篇。</p>
-      </div>
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 w-full md:w-auto">
-        <div class="bg-bg border border-border_color rounded-lg p-4 min-w-[120px]">
-          <span class="block text-sm text-muted mb-1">今日新增</span>
-          <strong class="text-2xl text-accent">{{ today_words }}</strong>
+<section class="flex flex-col gap-6 max-w-5xl mx-auto w-full">
+
+  {% if quick_project %}
+  {% set next_info = project_next_stage(quick_project) %}
+  <div class="bg-gradient-to-br from-accent/15 via-panel to-panel border border-accent/40 rounded-2xl p-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-6 shadow-sm">
+    <div>
+      <span class="text-xs font-bold text-accent uppercase tracking-widest">下一步</span>
+      <h1 class="text-3xl font-bold mt-2 mb-1">
+        {{ quick_project }}:<span class="text-accent">{{ next_info[1] }}</span>
+      </h1>
+      <p class="text-sm text-muted">
+        {% if next_info[0] == 'writing' %}章节、卷、人物都齐了。直接打开项目继续写下一章。
+        {% else %}回到工作流的「{{ next_info[1] }}」步骤,继续推进。{% endif %}
+      </p>
+    </div>
+    <a href="{% if next_info[0] == 'writing' %}/projects/{{ quick_project }}{% else %}/projects/{{ quick_project }}/stage/{{ next_info[0] }}{% endif %}"
+       class="bg-accent text-white px-5 py-3 rounded-lg text-sm font-bold hover:brightness-110 transition-all shrink-0 flex items-center gap-2">
+      继续 →
+    </a>
+  </div>
+  {% else %}
+  <div class="bg-panel border-2 border-dashed border-border_color rounded-2xl p-12 text-center">
+    <h2 class="text-2xl font-bold mb-3">还没有项目</h2>
+    <p class="text-muted text-sm mb-5">先创建一个项目,我们带你走完整个工作流。</p>
+    <a href="/projects" class="bg-accent text-white px-5 py-2.5 rounded-lg text-sm font-bold">前往项目页 →</a>
+  </div>
+  {% endif %}
+
+  {% if projects %}
+  <div>
+    <h3 class="text-xs font-bold text-muted uppercase tracking-widest mb-3">所有项目 ({{ projects|length }})</h3>
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+      {% for p in projects %}
+      {% set ssm = project_stage_status_map(p.name) %}
+      {% set done_count = ssm.values()|select('equalto', 'done')|list|length %}
+      <a href="/projects/{{ p.name }}"
+         class="bg-panel border border-border_color rounded-xl p-4 hover:border-accent/50 transition-colors flex flex-col gap-2">
+        <div class="flex items-center justify-between">
+          <strong class="text-sm">{{ p.name }}</strong>
+          <span class="text-[10px] text-muted">{{ done_count }}/6</span>
         </div>
-        <div class="bg-bg border border-border_color rounded-lg p-4 min-w-[120px]">
-          <span class="block text-sm text-muted mb-1">总字数</span>
-          <strong class="text-2xl">{{ total_words }}</strong>
+        <div class="flex items-center gap-0.5">
+          {% for s in WORKFLOW_STAGES %}
+            {% set st = ssm.get(s[0], 'todo') %}
+            <span class="flex-1 h-1.5 rounded-full
+                  {% if st == 'done' %}bg-emerald-500{% elif st == 'in_progress' %}bg-amber-500{% else %}bg-border_color{% endif %}"
+                  title="{{ s[1] }}: {{ st }}"></span>
+          {% endfor %}
         </div>
-        <div class="bg-bg border border-border_color rounded-lg p-4 min-w-[120px]">
-          <span class="block text-sm text-muted mb-1">项目数</span>
-          <strong class="text-2xl">{{ projects|length }}</strong>
+        <div class="flex justify-between text-xs text-muted">
+          <span>{{ p.chapter_count }} 章</span>
+          <span>{{ p.total_words }} 字</span>
         </div>
-        <div class="bg-bg border border-border_color rounded-lg p-4 min-w-[120px]">
-          <span class="block text-sm text-muted mb-1">日目标</span>
-          <strong class="text-2xl">{{ daily_goal }}</strong>
-        </div>
-      </div>
+      </a>
+      {% endfor %}
     </div>
   </div>
+  {% endif %}
 
-  <div class="grid lg:grid-cols-3 gap-6">
-    <!-- Main Stats Area (T3.5) -->
-    <div class="lg:col-span-2 grid md:grid-cols-2 gap-6">
-        <!-- POV Distribution -->
-        <article class="bg-panel border border-border_color rounded-xl p-6 shadow-sm">
-            <h3 class="text-sm font-bold text-muted uppercase tracking-widest mb-4">POV Distribution</h3>
-            <div class="flex flex-col gap-3">
-                {% for s in pov_stats %}
-                <div class="flex flex-col gap-1">
-                    <div class="flex justify-between text-xs">
-                        <span>{{ s.pov or 'Unknown' }}</span>
-                        <span class="text-muted">{{ s.count }} scenes</span>
-                    </div>
-                    <div class="h-2 rounded-full bg-border_color overflow-hidden">
-                        <div class="h-full bg-accent" style="width: {{ (s.count / pov_stats[0].count * 100)|round if pov_stats else 0 }}%"></div>
-                    </div>
-                </div>
-                {% endfor %}
-                {% if not pov_stats %}<p class="text-xs text-muted italic">No scene data yet.</p>{% endif %}
-            </div>
-        </article>
-
-        <!-- Top Characters -->
-        <article class="bg-panel border border-border_color rounded-xl p-6 shadow-sm">
-            <h3 class="text-sm font-bold text-muted uppercase tracking-widest mb-4">Character Heat (Top 10)</h3>
-            <div class="flex flex-wrap gap-2">
-                {% for c in top_characters %}
-                <div class="bg-accent/10 border border-accent/20 rounded-lg px-3 py-2 flex flex-col items-center">
-                    <span class="text-sm font-bold text-accent">{{ c.name }}</span>
-                    <span class="text-[10px] text-muted">{{ c.count }} refs</span>
-                </div>
-                {% endfor %}
-                {% if not top_characters %}<p class="text-xs text-muted italic">No character mentions yet.</p>{% endif %}
-            </div>
-        </article>
-
-        <!-- Thread Rate -->
-        <article class="bg-panel border border-border_color rounded-xl p-6 shadow-sm flex flex-col justify-center items-center">
-            <h3 class="text-sm font-bold text-muted uppercase tracking-widest mb-2">Thread Status</h3>
-            <div class="text-4xl font-bold text-accent mb-1">{{ thread_stats.open_count }} / {{ thread_stats.total }}</div>
-            <p class="text-xs text-muted">Open Threads</p>
-            <div class="w-full mt-4 h-2 rounded-full bg-border_color overflow-hidden">
-                <div class="h-full bg-red-500" style="width: {{ (thread_stats.open_count / thread_stats.total * 100)|round if thread_stats.total > 0 else 0 }}%"></div>
-            </div>
-        </article>
-        
-        <article class="bg-panel border border-border_color rounded-xl p-6 shadow-sm flex flex-col justify-center">
-            <h3 class="text-sm font-bold text-muted uppercase tracking-widest mb-4">Quick Actions</h3>
-            <div class="grid grid-cols-2 gap-2">
-                <a href="/projects" class="bg-bg border border-border_color rounded p-2 text-center text-xs hover:border-accent transition-all">Projects</a>
-                <a href="/export" class="bg-bg border border-border_color rounded p-2 text-center text-xs hover:border-accent transition-all">Batch Export</a>
-            </div>
-        </article>
-    </div>
-
-    <!-- Side: Recent Chapters -->
-    <article class="bg-panel border border-border_color rounded-xl p-6 shadow-sm">
-      <h3 class="text-sm font-bold text-muted uppercase tracking-widest mb-4 flex items-center gap-2">
-        <svg class="w-4 h-4 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-        Recent Chapters
-      </h3>
-      <div class="flex flex-col gap-3">
-        {% for c in recent_chapters %}
-        <a class="group flex flex-col gap-1 p-3 bg-bg border border-border_color rounded-lg hover:border-accent transition-all" href="/projects/{{ c.project }}/editor/{{ c.filename }}">
-            <span class="text-xs font-bold truncate group-hover:text-accent">{{ c.title }}</span>
-            <div class="flex justify-between text-[10px] text-muted">
-                <span>{{ c.project }}</span>
-                <span>{{ c.word_count }} words</span>
-            </div>
-        </a>
-        {% endfor %}
-      </div>
-    </article>
-  </div>
-
-  <!-- Bottom: Old Trend Chart -->
-  <article class="bg-panel border border-border_color rounded-xl p-6 shadow-sm">
-    <h3 class="text-sm font-bold text-muted uppercase tracking-widest mb-6">90-Day Writing Trend</h3>
-    <div class="flex items-end justify-between gap-1 h-32">
-        {% for t in trend %}
-        <div class="flex-1 bg-accent/20 rounded-t-sm hover:bg-accent/40 transition-colors relative group" style="height: {{ (t.words / daily_goal * 100)|round if daily_goal > 0 else 10 }}%">
-            <div class="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-panel border border-border_color text-[10px] rounded px-1 z-10 whitespace-nowrap">{{ t.words }}</div>
+  {% if recent_chapters %}
+  <div>
+    <h3 class="text-xs font-bold text-muted uppercase tracking-widest mb-3">最近编辑</h3>
+    <div class="bg-panel border border-border_color rounded-xl divide-y divide-border_color overflow-hidden">
+      {% for c in recent_chapters[:5] %}
+      <a href="/projects/{{ c.project }}/editor/{{ c.filename }}"
+         class="flex items-center justify-between p-3 hover:bg-bg/50 transition-colors">
+        <div class="flex flex-col gap-0.5 min-w-0">
+          <strong class="text-sm truncate">{{ c.title }}</strong>
+          <span class="text-xs text-muted">{{ c.project }} · {{ c.word_count }} 字 · {{ c.status }}</span>
         </div>
-        {% endfor %}
+        <span class="text-xs text-accent shrink-0">编辑 →</span>
+      </a>
+      {% endfor %}
     </div>
-  </article>
+  </div>
+  {% endif %}
+
+  {% if today_words > 0 %}
+  <div class="bg-panel border border-border_color rounded-xl p-4 flex items-center justify-between">
+    <span class="text-sm text-muted">今天写了</span>
+    <strong class="text-2xl text-accent">{{ today_words }} 字</strong>
+    {% if daily_goal %}
+    <span class="text-xs text-muted">/ {{ daily_goal }} 目标</span>
+    {% endif %}
+  </div>
+  {% endif %}
+
 </section>
 {% endblock %}

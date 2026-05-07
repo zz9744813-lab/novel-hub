@@ -5,7 +5,7 @@
 <div class="flex flex-col gap-6 max-w-6xl mx-auto w-full py-6">
     <div class="flex items-center justify-between">
         <h2 class="text-2xl font-bold">
-            {% if kind == 'character' %}Characters{% elif kind == 'thread' %}Hooks/Threads{% elif kind == 'world' %}World Building{% else %}All Entities{% endif %}
+            {% if kind == 'character' %}人物{% elif kind == 'location' %}地点{% elif kind == 'organization' %}势力{% elif kind == 'item' %}物品{% else %}全部实体{% endif %}
         </h2>
         <div class="flex gap-2">
             <button onclick="createEntity()" class="bg-accent text-white px-4 py-2 rounded-lg text-sm font-medium hover:brightness-110 transition-all">+ New Entity</button>
@@ -14,10 +14,11 @@
 
     <!-- Filter Tabs -->
     <div class="flex gap-4 border-b border-border_color">
-        <a href="/projects/{{ project }}/entities" class="px-4 py-2 text-sm {% if not kind %}border-b-2 border-accent text-accent font-medium{% else %}text-muted hover:text-text_color{% endif %}">All</a>
-        <a href="/projects/{{ project }}/entities?kind=character" class="px-4 py-2 text-sm {% if kind == 'character' %}border-b-2 border-accent text-accent font-medium{% else %}text-muted hover:text-text_color{% endif %}">Characters</a>
-        <a href="/projects/{{ project }}/entities?kind=world" class="px-4 py-2 text-sm {% if kind == 'world' %}border-b-2 border-accent text-accent font-medium{% else %}text-muted hover:text-text_color{% endif %}">World</a>
-        <a href="/projects/{{ project }}/entities?kind=thread" class="px-4 py-2 text-sm {% if kind == 'thread' %}border-b-2 border-accent text-accent font-medium{% else %}text-muted hover:text-text_color{% endif %}">Threads</a>
+        <a href="/projects/{{ project }}/entities" class="px-4 py-2 text-sm {% if not kind %}border-b-2 border-accent text-accent font-medium{% else %}text-muted hover:text-text_color{% endif %}">全部</a>
+        <a href="/projects/{{ project }}/entities?kind=character" class="px-4 py-2 text-sm {% if kind == 'character' %}border-b-2 border-accent text-accent font-medium{% else %}text-muted hover:text-text_color{% endif %}">人物</a>
+        <a href="/projects/{{ project }}/entities?kind=location" class="px-4 py-2 text-sm {% if kind == 'location' %}border-b-2 border-accent text-accent font-medium{% else %}text-muted hover:text-text_color{% endif %}">地点</a>
+        <a href="/projects/{{ project }}/entities?kind=organization" class="px-4 py-2 text-sm {% if kind == 'organization' %}border-b-2 border-accent text-accent font-medium{% else %}text-muted hover:text-text_color{% endif %}">势力</a>
+        <a href="/projects/{{ project }}/entities?kind=item" class="px-4 py-2 text-sm {% if kind == 'item' %}border-b-2 border-accent text-accent font-medium{% else %}text-muted hover:text-text_color{% endif %}">物品</a>
     </div>
 
     <!-- Entity Grid -->

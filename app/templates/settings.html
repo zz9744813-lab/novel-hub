@@ -86,6 +86,40 @@
           </div>
         </form>
       </div>
+
+      <div class="bg-panel border border-accent/40 rounded-xl p-6 shadow-sm" x-data="{
+          value: {{ global_prompt|tojson }},
+          saving: false,
+          savedAt: ''
+      }">
+        <h3 class="text-lg font-medium mb-2 flex items-center gap-2">
+          <svg class="w-5 h-5 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
+          全局 AI 提示词
+        </h3>
+        <p class="text-xs text-muted mb-3">
+          每次调用 AI 时,此处内容会作为「全局约束」自动叠加在最前面,然后是阶段约束,最后是任务本身。
+          适合放:文风偏好、固定术语、绝对禁止项。所有项目共享。
+        </p>
+        <textarea x-model="value" rows="6"
+                  class="w-full bg-bg border border-border_color rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent resize-y"
+                  placeholder="例:
+1. 中文输出,简体
+2. 不写性描写
+3. 主角姓名必须用「张明」,不要简化为「张」"></textarea>
+        <div class="flex items-center justify-between mt-3">
+          <span class="text-xs text-muted" x-text="savedAt"></span>
+          <button @click="
+              saving = true;
+              fetch('/api/prompts/global', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({content: value})})
+                .then(r => r.json())
+                .then(d => { saving = false; if (d.status==='ok') savedAt = '已保存 ' + new Date().toLocaleTimeString().slice(0,5); else alert('保存失败'); })
+                .catch(() => { saving = false; alert('网络错误'); });
+            " :disabled="saving"
+            class="bg-accent text-white px-4 py-1.5 rounded text-sm disabled:opacity-50">
+            <span x-show="!saving">保存全局提示词</span><span x-show="saving">保存中...</span>
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 </section>

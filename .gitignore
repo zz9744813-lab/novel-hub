@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 .env
 novelhub.db
+novelhub.db.before-refactor.*
 *.db
 /root/ObsidianVault/
 ObsidianVault/

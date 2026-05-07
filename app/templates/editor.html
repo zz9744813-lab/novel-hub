@@ -59,6 +59,9 @@
     <button class="p-1.5 rounded-md text-muted hover:text-text_color hover:bg-panel border border-transparent transition-all" data-action="toggle-right" title="切换右栏">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M12 12h8m-8 6h8"></path></svg>
     </button>
+    <div class="relative inline-block ml-1">
+      {% with project=project, stage='writing', prompt_value=writing_prompt %}{% include '_prompt_slot.html' %}{% endwith %}
+    </div>
   </div>
 </header>
 {% endblock %}
@@ -159,12 +162,10 @@
 
   <!-- Sidebar Right -->
   {% set ai_enabled = feature_enabled('ai') %}
-  {% set threads_enabled = feature_enabled('threads') %}
   <aside class="sidebar w-80 bg-sidebar border-l border-border_color flex flex-col shrink-0 transition-all duration-300 right" data-panel="right" x-data="{ tab: 'meta' }">
     <div class="flex border-b border-border_color">
         <button @click="tab = 'meta'" :class="tab === 'meta' ? 'border-accent text-accent' : 'border-transparent text-muted'" class="flex-1 py-3 text-xs font-bold uppercase tracking-wider border-b-2 transition-all">元信息</button>
         <button @click="tab = 'entities'" :class="tab === 'entities' ? 'border-accent text-accent' : 'border-transparent text-muted'" class="flex-1 py-3 text-xs font-bold uppercase tracking-wider border-b-2 transition-all">实体</button>
-        {% if threads_enabled %}<button @click="tab = 'threads'" :class="tab === 'threads' ? 'border-accent text-accent' : 'border-transparent text-muted'" class="flex-1 py-3 text-xs font-bold uppercase tracking-wider border-b-2 transition-all">伏笔</button>{% endif %}
         {% if ai_enabled %}<button @click="tab = 'ai'" :class="tab === 'ai' ? 'border-accent text-accent' : 'border-transparent text-muted'" class="flex-1 py-3 text-xs font-bold uppercase tracking-wider border-b-2 transition-all">AI</button>{% endif %}
     </div>
     <div class="flex-1 overflow-y-auto p-4 custom-scrollbar">
@@ -268,20 +269,6 @@
         </div>
         {% endif %}
 
-        {% if threads_enabled %}
-        <div x-show="tab === 'threads'" style="display: none;" class="flex flex-col gap-4">
-            <h4 class="text-xs font-semibold text-muted uppercase">未关闭伏笔</h4>
-            <div class="flex flex-col gap-2">
-                {% for thread in open_threads %}
-                <div class="p-3 bg-panel border border-border_color rounded-lg border-l-4 border-l-red-500/50">
-                    <div class="text-sm font-bold mb-1">{{ thread.name }}</div>
-                    <div class="text-[10px] text-muted">{{ thread.updated_at[:10] }}</div>
-                </div>
-                {% endfor %}
-                {% if not open_threads %}<div class="text-xs text-muted italic text-center py-10">暂无未关闭伏笔</div>{% endif %}
-            </div>
-        </div>
-        {% endif %}
     </div>
   </aside>
 </section>

@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}人物 · {{ project }} · Novel Hub{% endblock %}
+{% block content %}
+<section class="flex flex-col gap-4 relative" x-data="{
+    aiBusy: false,
+    aiOutput: '',
+    async ai(action) {
+      this.aiBusy = true; this.aiOutput = '';
+      const r = await fetch('/api/projects/{{ project }}/stage/characters/ai', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({action})
+      });
+      const d = await r.json();
+      this.aiBusy = false;
+      this.aiOutput = d.text || ('[错误] ' + (d.detail || ''));
+    },
+    async createEntity() {
+      const name = prompt('角色姓名:'); if (!name) return;
+      const r = await fetch('/api/entities', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({project: '{{ project }}', name, kind: 'character'})
+      });
+      if (r.ok) { const d = await r.json(); location.href = '/projects/{{ project }}/entities/' + d.id; }
+      else alert('创建失败');
+    }
+  }">
+  {% with project=project, stage='characters', prompt_value=stage_prompt %}{% include '_prompt_slot.html' %}{% endwith %}
+
+  <header class="flex items-center justify-between gap-4">
+    <div>
+      <div class="flex items-center gap-2 text-xs text-muted">
+        <a href="/projects/{{ project }}" class="hover:text-accent">{{ project }}</a>
+        <span>›</span><span>人物</span>
+      </div>
+      <h1 class="text-3xl font-bold mt-1">人物 · 谁在这个故事里?</h1>
+      <p class="text-sm text-muted mt-1">先把主角和 2-3 个关键配角立起来。年龄、动机、缺陷、关系。</p>
+    </div>
+    <label class="flex items-center gap-2 text-sm">
+      <input type="checkbox" {% if stage_done %}checked{% endif %}
+             @change="fetch('/api/stages/{{ project }}/characters/done', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({done: $event.target.checked})}).then(()=>location.reload())"
+             class="rounded border-border_color text-accent focus:ring-accent">
+      <span>标记为已完成</span>
+    </label>
+  </header>
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+    <div class="lg:col-span-2 bg-panel border border-border_color rounded-xl p-4 flex flex-col gap-3">
+      <div class="flex items-center justify-between">
+        <h2 class="text-sm font-bold">已创建人物 ({{ entities|length }})</h2>
+        <button @click="createEntity()" class="bg-accent text-white px-3 py-1.5 rounded text-xs">+ 新建人物</button>
+      </div>
+      {% if entities %}
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {% for e in entities %}
+        <a href="/projects/{{ project }}/entities/{{ e.id }}"
+           class="bg-bg border border-border_color rounded-lg p-3 hover:border-accent transition-colors flex flex-col gap-1">
+          <div class="flex items-center justify-between">
+            <strong class="text-sm">{{ e.name }}</strong>
+            {% if e.aliases %}<span class="text-[10px] text-muted">AKA {{ e.aliases }}</span>{% endif %}
+          </div>
+          <span class="text-xs text-muted">点击编辑详细档案 →</span>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="text-center text-muted py-12 text-sm border-2 border-dashed border-border_color rounded-lg">
+        还没建任何人物。点上面"+ 新建人物"开始,或让 AI 给你 3 个候选。
+      </div>
+      {% endif %}
+    </div>
+
+    <aside class="flex flex-col gap-3">
+      <div class="bg-panel border border-border_color rounded-xl p-4 flex flex-col gap-2">
+        <h3 class="text-sm font-bold mb-1">AI 协助</h3>
+        <button @click="ai('cast')" :disabled="aiBusy" class="bg-bg border border-border_color hover:border-accent rounded p-2.5 text-sm text-left disabled:opacity-50">给我 3 个候选主角</button>
+        <button @click="ai('antagonist')" :disabled="aiBusy" class="bg-bg border border-border_color hover:border-accent rounded p-2.5 text-sm text-left disabled:opacity-50">配一个对手/反派</button>
+        <button @click="ai('relations')" :disabled="aiBusy" class="bg-bg border border-border_color hover:border-accent rounded p-2.5 text-sm text-left disabled:opacity-50">推荐人物关系网</button>
+        <button @click="ai('flaw')" :disabled="aiBusy" class="bg-bg border border-border_color hover:border-accent rounded p-2.5 text-sm text-left disabled:opacity-50">给主角一个致命缺陷</button>
+      </div>
+      <div x-show="aiOutput" x-transition class="bg-panel border border-accent/30 rounded-xl p-4 flex flex-col gap-2">
+        <h4 class="text-xs font-bold text-accent">AI 输出</h4>
+        <pre x-text="aiOutput" class="text-sm whitespace-pre-wrap font-sans bg-bg p-2 rounded max-h-96 overflow-y-auto"></pre>
+        <p class="text-xs text-muted">阅读后,点上方"+ 新建人物"逐个录入。</p>
+      </div>
+      <div x-show="aiBusy" class="bg-panel border border-border_color rounded-xl p-4 text-center text-sm text-muted">AI 思考中...</div>
+    </aside>
+  </div>
+
+  <nav class="flex items-center justify-between mt-4 text-sm">
+    <a href="/projects/{{ project }}/stage/worldview" class="text-muted hover:text-accent">← 世界观</a>
+    <a href="/projects/{{ project }}/stage/outline" class="text-accent hover:underline">下一步:总纲 →</a>
+  </nav>
+</section>
+{% endblock %}

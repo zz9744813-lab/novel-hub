@@ -313,3 +313,10 @@ def test_editor_uses_local_codemirror_bundle():
     assert source_js.exists()
     assert bundle_js.exists()
     assert "EditorView" in bundle_js.read_text(encoding="utf-8")
+
+
+def test_ai_context_does_not_import_main_helpers():
+    root = Path(__file__).resolve().parent.parent
+    ai_context = (root / "app" / "services" / "ai_context.py").read_text(encoding="utf-8")
+
+    assert "from app.main import read_markdown" not in ai_context

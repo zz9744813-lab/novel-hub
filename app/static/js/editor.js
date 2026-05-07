@@ -296,7 +296,7 @@ if (textarea) {
         changes: {from: 0, to: view.state.doc.length, insert: text.trim()}
     });
     textarea.value = text.trim();
-    setSaveState('鏈繚瀛');
+    setSaveState('未保存');
     form.dataset.dirty = 'true';
     scheduleSave();
     liveWordCount(text);
@@ -315,7 +315,7 @@ if (textarea) {
         changes: {from: 0, to: view.state.doc.length, insert: fullText.trim()}
     });
     textarea.value = fullText.trim();
-    setSaveState('鏈繚瀛');
+    setSaveState('未保存');
     form.dataset.dirty = 'true';
     scheduleSave();
     liveWordCount(fullText);

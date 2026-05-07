@@ -279,3 +279,22 @@ def test_no_stale_visible_english_copy_in_outline_and_editor_js():
         assert text not in outline
     for text in stale_editor:
         assert text not in editor_js
+
+
+def test_tailwind_uses_local_compiled_css():
+    root = Path(__file__).resolve().parent.parent
+    base = (root / "app" / "templates" / "base.html").read_text(encoding="utf-8")
+    login = (root / "app" / "templates" / "login.html").read_text(encoding="utf-8")
+    input_css = (root / "app" / "static" / "css" / "tailwind.input.css").read_text(encoding="utf-8")
+    built_css = (root / "app" / "static" / "css" / "tailwind.css")
+
+    assert "cdn.tailwindcss.com" not in base
+    assert "cdn.tailwindcss.com" not in login
+    assert "/static/css/tailwind.css" in base
+    assert "/static/css/tailwind.css" in login
+    assert "@tailwind utilities" in input_css
+    assert built_css.exists()
+    assert ".bg-bg" in built_css.read_text(encoding="utf-8")
+    assert "登录 · Novel Hub" in login
+    assert "面向长篇小说创作的本地工作台" in login
+    assert "Login · Novel Hub" not in login

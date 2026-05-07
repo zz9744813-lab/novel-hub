@@ -2,6 +2,7 @@ __pycache__/
 .pytest_cache/
 *.pyc
 .venv/
+node_modules/
 .env
 novelhub.db
 novelhub.db.before-refactor.*

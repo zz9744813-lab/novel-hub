@@ -180,6 +180,10 @@ def test_entity_detail_renders_properties_and_basename_filter(tmp_path):
     assert res.status_code == 200
     assert "00001-chapter.md" in res.text
     assert "/arc" not in res.text
+    assert 'id="md_content"' in res.text
+    assert 'id="cm-container"' in res.text
+    assert "实体说明" in res.text
+    assert "Entity Description" not in res.text
 
 
 def test_export_page_uses_project_name_for_options(tmp_path):
@@ -219,3 +223,29 @@ def test_core_project_pages_render_after_ui_cleanup(tmp_path):
             res = client.get(url)
             assert res.status_code == 200
             assert expected in res.text
+
+
+def test_editor_mobile_overlay_and_entity_list_are_chinese(tmp_path):
+    configure_temp_runtime(tmp_path)
+    project = "demo"
+    chapters_dir = main.NOVELS_ROOT / project / "chapters"
+    chapters_dir.mkdir(parents=True, exist_ok=True)
+    write_markdown(
+        chapters_dir / "00001-start.md",
+        {"title": "Start", "chapter": "1", "status": "draft"},
+        "hello world",
+        project=project,
+    )
+
+    with TestClient(app) as client:
+        login(client)
+        editor_res = client.get(f"/projects/{project}/editor/00001-start.md")
+        assert editor_res.status_code == 200
+        assert "桌面端编辑" in editor_res.text
+        assert "Desktop Required" not in editor_res.text
+        assert "返回项目" in editor_res.text
+
+        entities_res = client.get(f"/projects/{project}/entities")
+        assert entities_res.status_code == 200
+        assert "新建实体" in entities_res.text
+        assert "New Entity" not in entities_res.text

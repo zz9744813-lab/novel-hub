@@ -2,20 +2,6 @@
 {% block title %}{{ project }} / {{ filename }} · Novel Hub{% endblock %}
 {% block body_class %}editor-page overflow-hidden{% endblock %}
 
-<!-- T5.6 Mobile Overlay -->
-<div class="fixed inset-0 z-50 bg-bg md:hidden flex flex-col items-center justify-center p-6 text-center">
-    <svg class="w-16 h-16 text-accent mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
-    <h2 class="text-2xl font-bold mb-2">Desktop Required</h2>
-    <p class="text-muted text-sm mb-6">The editor is optimized for desktop usage. Please access this page on a wider screen to edit your chapter.</p>
-    <div class="flex flex-col gap-3">
-        <a href="/projects/{{ project }}/chapters/{{ filename }}/read"
-           class="inline-block bg-accent text-white px-4 py-2 rounded text-sm">
-            打开只读视图
-        </a>
-        <a href="/projects/{{ project }}" class="bg-panel border border-border_color px-6 py-3 rounded-lg font-medium hover:border-accent transition-all">Return to Project</a>
-    </div>
-</div>
-
 {% block topbar %}
 <header class="h-12 border-b border-border_color flex items-center justify-between px-4 bg-bg/95 backdrop-blur shrink-0">
   <div class="flex items-center gap-2 text-sm font-medium">
@@ -66,6 +52,18 @@
 </header>
 {% endblock %}
 {% block content %}
+<div class="fixed inset-0 z-50 bg-bg md:hidden flex flex-col items-center justify-center p-6 text-center">
+    <svg class="w-16 h-16 text-accent mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
+    <h2 class="text-2xl font-bold mb-2">桌面端编辑</h2>
+    <p class="text-muted text-sm mb-6">完整编辑器针对宽屏优化。手机上可以先打开只读视图查看正文，正式编辑建议回到桌面端。</p>
+    <div class="flex flex-col gap-3">
+        <a href="/projects/{{ project }}/chapters/{{ filename }}/read"
+           class="inline-block bg-accent text-white px-4 py-2 rounded text-sm">
+            打开只读视图
+        </a>
+        <a href="/projects/{{ project }}" class="bg-panel border border-border_color px-6 py-3 rounded-lg font-medium hover:border-accent transition-all">返回项目</a>
+    </div>
+</div>
 <!-- CodeMirror 6 (ESM) -->
 <script type="importmap">
 {

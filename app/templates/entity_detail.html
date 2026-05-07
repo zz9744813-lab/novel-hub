@@ -6,7 +6,7 @@
     <nav class="flex items-center gap-2 text-sm text-muted">
         <a href="/projects/{{ project }}" class="hover:text-accent transition-colors">{{ project }}</a>
         <span>/</span>
-        <a href="/projects/{{ project }}/entities" class="hover:text-accent transition-colors">Entities</a>
+        <a href="/projects/{{ project }}/entities" class="hover:text-accent transition-colors">实体库</a>
         <span>/</span>
         <span class="text-text_color font-medium">{{ entity.name }}</span>
     </nav>
@@ -19,38 +19,38 @@
                 <form id="entity-form" class="flex flex-col gap-4">
                     <div class="flex items-center justify-between gap-4">
                         <div class="flex-1">
-                            <label class="block text-xs font-semibold text-muted uppercase mb-1">Name</label>
+                            <label class="block text-xs font-semibold text-muted uppercase mb-1">名称</label>
                             <input type="text" name="name" value="{{ entity.name }}" 
                                    class="w-full bg-bg border border-border_color rounded-lg px-4 py-2 text-xl font-bold focus:outline-none focus:border-accent transition-all">
                         </div>
                         <div class="w-32">
-                            <label class="block text-xs font-semibold text-muted uppercase mb-1">Kind</label>
+                            <label class="block text-xs font-semibold text-muted uppercase mb-1">类型</label>
                             <select name="kind" class="w-full bg-bg border border-border_color rounded-lg px-3 py-2 text-sm focus:outline-none">
-                                <option value="character" {% if entity.kind == 'character' %}selected{% endif %}>Character</option>
-                                <option value="location" {% if entity.kind == 'location' %}selected{% endif %}>Location</option>
-                                <option value="item" {% if entity.kind == 'item' %}selected{% endif %}>Item</option>
-                                <option value="organization" {% if entity.kind == 'organization' %}selected{% endif %}>Organization</option>
-                                <option value="thread" {% if entity.kind == 'thread' %}selected{% endif %}>Thread</option>
-                                <option value="concept" {% if entity.kind == 'concept' %}selected{% endif %}>Concept</option>
-                                <option value="event" {% if entity.kind == 'event' %}selected{% endif %}>Event</option>
+                                <option value="character" {% if entity.kind == 'character' %}selected{% endif %}>人物</option>
+                                <option value="location" {% if entity.kind == 'location' %}selected{% endif %}>地点</option>
+                                <option value="item" {% if entity.kind == 'item' %}selected{% endif %}>物品</option>
+                                <option value="organization" {% if entity.kind == 'organization' %}selected{% endif %}>势力</option>
+                                <option value="thread" {% if entity.kind == 'thread' %}selected{% endif %}>伏笔</option>
+                                <option value="concept" {% if entity.kind == 'concept' %}selected{% endif %}>概念</option>
+                                <option value="event" {% if entity.kind == 'event' %}selected{% endif %}>事件</option>
                             </select>
                         </div>
                     </div>
 
                     <div>
-                        <label class="block text-xs font-semibold text-muted uppercase mb-1">Aliases (comma separated)</label>
+                        <label class="block text-xs font-semibold text-muted uppercase mb-1">别名（用逗号分隔）</label>
                         <input type="text" name="aliases" value="{{ entity_aliases|join(', ') }}" 
                                class="w-full bg-bg border border-border_color rounded-lg px-3 py-2 text-sm focus:outline-none">
                     </div>
 
                     <div class="flex justify-end gap-3 mt-2">
-                        <button type="button" onclick="deleteEntity()" class="text-xs text-red-500 hover:bg-red-500/10 px-3 py-1.5 rounded transition-colors">Delete</button>
+                        <button type="button" onclick="deleteEntity()" class="text-xs text-red-500 hover:bg-red-500/10 px-3 py-1.5 rounded transition-colors">删除</button>
                         
                         <label class="flex items-center gap-2 text-xs text-muted cursor-pointer">
                             <input type="checkbox" id="cascade-rename" class="rounded border-border_color text-accent focus:ring-accent">
-                            Cascade rename in chapters
+                            同步改写章节里的显示名称
                         </label>
-                        <button type="button" onclick="saveEntity()" class="bg-accent text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:brightness-110 transition-all">Save Changes</button>
+                        <button type="button" onclick="saveEntity()" class="bg-accent text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:brightness-110 transition-all">保存修改</button>
 
                     </div>
                 </form>
@@ -60,7 +60,7 @@
             <!-- T2.5 Structured Properties -->
             <div x-data='{ props: {{ entity_properties|tojson }} }' class="flex flex-col gap-3">
                 <div class="bg-panel border border-border_color rounded-xl p-6 shadow-sm">
-                    <h3 class="text-sm font-semibold text-muted uppercase tracking-wider mb-4">Properties</h3>
+                    <h3 class="text-sm font-semibold text-muted uppercase tracking-wider mb-4">结构化属性</h3>
                     
                     <!-- character -->
                     {% if entity.kind == 'character' %}
@@ -226,11 +226,11 @@
             <!-- Description Editor (T2.5) -->
             <div class="bg-panel border border-border_color rounded-xl overflow-hidden flex flex-col h-[500px]">
                 <div class="px-4 py-2 border-b border-border_color bg-bg/50 flex items-center justify-between">
-                    <span class="text-xs font-semibold text-muted uppercase">Entity Description (Markdown)</span>
-                    <span class="text-[10px] text-muted italic">Stored in: {{ entity.md_path }}</span>
+                    <span class="text-xs font-semibold text-muted uppercase">实体说明（Markdown）</span>
+                    <span class="text-[10px] text-muted italic">存储于：{{ entity.md_path or '数据库记录' }}</span>
                 </div>
-                <textarea id="entity-md" class="hidden">{{ md_content }}</textarea>
-                <div id="cm-wrapper" class="flex-1 overflow-hidden"></div>
+                <textarea id="md_content" class="hidden">{{ md_content }}</textarea>
+                <div id="cm-container" class="flex-1 overflow-hidden"></div>
             </div>
         </div>
 
@@ -239,8 +239,7 @@
             <!-- Relations -->
             <div class="bg-panel border border-border_color rounded-xl p-4 shadow-sm">
                 <h4 class="text-xs font-semibold text-muted uppercase mb-3 flex items-center justify-between">
-                    Relations
-                    <button class="text-accent hover:underline">+ Add</button>
+                    关系
                 </h4>
                 <div class="flex flex-col gap-2">
                     {% for rel in relations %}
@@ -255,24 +254,24 @@
                     </div>
                     {% endfor %}
                     {% if not relations %}
-                    <div class="text-xs text-muted italic py-4 text-center">No relations defined</div>
+                    <div class="text-xs text-muted italic py-4 text-center">暂无关系</div>
                     {% endif %}
                 </div>
             </div>
 
             <!-- Appearances -->
             <div class="bg-panel border border-border_color rounded-xl p-4 shadow-sm">
-                <h4 class="text-xs font-semibold text-muted uppercase mb-3 flex items-center justify-between">Appearances (Entity Refs) <button onclick="bulkBind()" class="text-accent hover:underline text-[10px] normal-case">Bulk Bind All</button></h4>
+                <h4 class="text-xs font-semibold text-muted uppercase mb-3 flex items-center justify-between">出现章节 <button onclick="bulkBind()" class="text-accent hover:underline text-[10px] normal-case">批量绑定</button></h4>
                 <div class="flex flex-col gap-2 max-h-[400px] overflow-y-auto pr-1">
                     {% for ref in appearances %}
                     <a href="/projects/{{ project }}/chapters/{{ ref.chapter_path|basename }}?pos={{ ref.char_offset }}" 
                        class="p-2 bg-bg border border-border_color rounded text-xs hover:border-accent transition-colors flex flex-col gap-1">
                         <div class="font-medium text-text_color">{{ ref.chapter_path|basename }}</div>
-                        <div class="text-muted italic">Offset: {{ ref.char_offset }}</div>
+                        <div class="text-muted italic">位置：{{ ref.char_offset }}</div>
                     </a>
                     {% endfor %}
                     {% if not appearances %}
-                    <div class="text-xs text-muted italic py-4 text-center">Not referenced yet</div>
+                    <div class="text-xs text-muted italic py-4 text-center">还没有被章节引用</div>
                     {% endif %}
                 </div>
             </div>
@@ -280,7 +279,7 @@
     </div>
 </div>
 
-<!-- CodeMirror 6 for Entity Description -->
+<!-- CodeMirror 6 for entity markdown editor -->
 
 
 
@@ -346,7 +345,7 @@ if (textarea) {
 }
 
 window.deleteEntity = async () => {
-    if (!confirm('Are you sure you want to delete this entity?')) return;
+    if (!confirm('确定删除这个实体吗？相关关系和引用记录也会被删除。')) return;
     const res = await fetch(`/api/entities/{{ entity.id }}`, { method: 'DELETE' });
     if (res.ok) window.location.href = `/projects/{{ project }}/entities`;
 };
@@ -364,7 +363,7 @@ window.saveEntity = async () => {
         kind: formData.get('kind'),
         aliases: formData.get('aliases').split(',').map(s => s.trim()).filter(s => s),
         properties: properties,
-        md_content: view ? view.state.doc.toString() : "",
+        md_content: view ? view.state.doc.toString() : (document.getElementById('md_content')?.value || ""),
         cascade: cascade
     };
 
@@ -375,10 +374,10 @@ window.saveEntity = async () => {
             body: JSON.stringify(data)
         });
         if (res.ok) {
-            window.NovelHubUI?.showToast(cascade ? 'Entity saved and cascaded' : 'Entity saved');
+            window.NovelHubUI?.showToast(cascade ? '实体已保存，并已同步改写章节引用' : '实体已保存');
             setTimeout(() => window.location.reload(), 500);
         } else {
-            alert('Failed to save');
+            alert('保存失败');
         }
     } catch (err) {
         console.error(err);

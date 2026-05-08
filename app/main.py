@@ -57,6 +57,7 @@ from app.services.markdown_service import (
 from app.services.path_service import chapter_path, project_path, list_markdown_files
 from app.services.snapshot_service import backup_file
 from app.services.project_service import get_project_meta, set_project_meta, compute_trend
+from app.services.chapter_service import _infer_kind, normalize_meta, write_markdown
 
 validate_runtime_config()
 
@@ -381,50 +382,6 @@ def log_operation(action: str, target: str = "", detail: str = "", value: int = 
         )
 
 
-def _infer_kind(p: Path) -> str:
-    parts = p.parts
-    if "chapters" in parts: return "chapter"
-    if "hooks" in parts: return "hook"
-    if "characters" in parts: return "character"
-    if "world" in parts: return "world"
-    return "other"
-
-
-
-
-def normalize_meta(fm: dict[str, Any], stem: str, project: str = None) -> dict[str, Any]:
-    def resolve_entities(items, kind):
-        if not items: return []
-        if not project: return items
-        resolved = []
-        with get_conn() as conn:
-            for item in items:
-                if isinstance(item, str):
-                    # Try to bind ID by name
-                    row = conn.execute("SELECT id FROM entities WHERE project=? AND name=?", (project, item)).fetchone()
-                    if row:
-                        resolved.append({"id": row["id"], "name": item})
-                    else:
-                        resolved.append({"id": None, "name": item}) # Unbound
-                else:
-                    resolved.append(item)
-        return resolved
-
-    res = {
-        "title": fm.get("title", stem),
-        "chapter": fm.get("chapter", ""),
-        "status": fm.get("status", "draft"),
-        "volume": fm.get("volume", ""),
-        "tags": fm.get("tags", []),
-        "synopsis": fm.get("synopsis", ""),
-        "notes": fm.get("notes", ""),
-        "pov": fm.get("pov", ""),
-        "characters": resolve_entities(fm.get("characters", []), "character"),
-        "locations": resolve_entities(fm.get("locations", []), "location"),
-        "warnings": fm.get("warnings", []),
-        "draft_version": fm.get("draft_version", ""),
-    }
-    return res
 
 
 def list_chapters(project: str, sync: bool = False) -> list[dict[str, Any]]:
@@ -555,91 +512,6 @@ def scan_projects() -> list[dict[str, Any]]:
 
 
 
-def write_markdown(path: Path, frontmatter: dict[str, Any], body: str, project: str = None) -> None:
-    p = _ensure_under_root(path, VAULT_ROOT)
-    p.parent.mkdir(parents=True, exist_ok=True)
-
-    if project is None:
-        project = _project_from_path(p)
-
-    frontmatter = dict(frontmatter)
-    meta = normalize_meta(frontmatter, p.stem, project=project)
-    frontmatter["characters"] = meta["characters"]
-    frontmatter["locations"] = meta["locations"]
-
-    if p.exists():
-        backup_file(p)
-    content = dump_frontmatter(frontmatter, body)
-    write_atomic(p, content)
-
-    words = count_words(body)
-    mtime = p.stat().st_mtime
-    try:
-        chapter_int = int(meta["chapter"])
-    except ValueError:
-        chapter_int = 0
-
-    with get_conn() as conn:
-        conn.execute(
-            """
-            INSERT INTO file_index(path, project, word_count, updated_at, title, chapter, chapter_int, status, volume, mtime, synopsis)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(path) DO UPDATE SET
-                project=excluded.project,
-                word_count=excluded.word_count,
-                updated_at=excluded.updated_at,
-                title=excluded.title,
-                chapter=excluded.chapter,
-                chapter_int=excluded.chapter_int,
-                status=excluded.status,
-                volume=excluded.volume,
-                mtime=excluded.mtime,
-                synopsis=excluded.synopsis
-            """,
-            (
-                str(p),
-                project,
-                words,
-                utc_now().isoformat(),
-                meta["title"],
-                meta["chapter"],
-                chapter_int,
-                meta["status"],
-                meta["volume"],
-                mtime,
-                meta.get("synopsis", ""),
-            ),
-        )
-        conn.execute("DELETE FROM chapter_fts WHERE path=?", (str(p),))
-        conn.execute(
-            "INSERT INTO chapter_fts(path, project, kind, title, body) VALUES (?, ?, ?, ?, ?)",
-            (str(p), project, _infer_kind(p), meta["title"], body),
-        )
-
-        # T1.4: Scenes Indexing
-        conn.execute("DELETE FROM scenes WHERE chapter_path=?", (str(p),))
-        scene_matches = list(re.finditer(r"^##\s+(.*)$", body, re.MULTILINE))
-        if not scene_matches:
-            # Whole chapter as one scene
-            sc_id = f"sc_{hashlib.sha1((str(p) + '1').encode()).hexdigest()[:8]}"
-            conn.execute(
-                "INSERT INTO scenes(id, chapter_path, project, seq, title, word_count, char_offset_start, char_offset_end) VALUES (?,?,?,?,?,?,?,?)",
-                (sc_id, str(p), project, 1, meta["title"], words, 0, len(body))
-            )
-        else:
-            for i, match in enumerate(scene_matches):
-                title = match.group(1).strip()
-                start = match.end()
-                end = scene_matches[i+1].start() if i + 1 < len(scene_matches) else len(body)
-                scene_body = body[start:end]
-                sc_id = f"sc_{hashlib.sha1((str(p) + str(i+1)).encode()).hexdigest()[:8]}"
-                conn.execute(
-                    "INSERT INTO scenes(id, chapter_path, project, seq, title, word_count, char_offset_start, char_offset_end) VALUES (?,?,?,?,?,?,?,?)",
-                    (sc_id, str(p), project, i+1, title, count_words(scene_body), start, end)
-                )
-
-    # T1.2: Wiki Link Refs
-    update_entity_refs(str(p), body, project)
 
 
 

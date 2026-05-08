@@ -62,6 +62,9 @@ from app.services.library_service import (
 )
 from app.services.metrics_service import log_operation, compute_trend, get_project_stats
 from app.schema import init_db
+from app.routers import health as health_router
+from app.routers.auth import create_router as create_auth_router
+from app.routers import settings as settings_router
 
 validate_runtime_config()
 
@@ -98,6 +101,10 @@ limiter = Limiter(key_func=get_remote_address, enabled=APP_ENV == "production")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, lambda r, e: JSONResponse({"detail": "too many attempts"}, status_code=429))
 
+app.include_router(health_router.router)
+app.include_router(create_auth_router(limiter))
+app.include_router(settings_router.router)
+
 class CacheStaticFiles(StaticFiles):
     def is_not_modified(self, response_headers, request_headers) -> bool:
         response_headers["Cache-Control"] = "public, max-age=31536000"
@@ -105,6 +112,9 @@ class CacheStaticFiles(StaticFiles):
 
 app.mount("/static", CacheStaticFiles(directory=BASE_DIR / "app" / "static"), name="static")
 templates = create_templates()
+
+from app.deps import configure_runtime
+configure_runtime(templates_obj=templates, limiter_obj=limiter)
 
 # Workflow stages
 from app.services.stage_service import (
@@ -176,32 +186,6 @@ STATUS_ORDER = ["idea", "outline", "draft", "rewrite", "polish", "done", "publis
 
 
 
-@app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
-
-
-@app.get("/login", response_class=HTMLResponse)
-def login_page(request: Request) -> Response:
-    return templates.TemplateResponse("login.html", {"request": request, "error": ""})
-
-
-@app.post("/login", response_class=HTMLResponse)
-@limiter.limit("5/minute")
-def login(request: Request, password: str = Form(...)) -> Response:
-    if not ADMIN_PASSWORD:
-        return templates.TemplateResponse("login.html", {"request": request, "error": "系统未初始化 (NOVELHUB_PASSWORD 未配置)，请联系管理员。"}, status_code=200)
-    if password != ADMIN_PASSWORD:
-        return templates.TemplateResponse("login.html", {"request": request, "error": "密码错误"}, status_code=401)
-    request.session["authed"] = True
-    log_operation("login", detail="admin login")
-    return RedirectResponse(url="/", status_code=303)
-
-
-@app.get("/logout")
-def logout(request: Request) -> Response:
-    request.session.clear()
-    return RedirectResponse(url="/login", status_code=303)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1007,15 +991,6 @@ def restore_backup(request: Request, project: str, backup_name: str):
     return JSONResponse(content={"status": "ok"})
 
 
-@app.post("/settings/reindex")
-def reindex_all(request: Request) -> Response:
-    require_auth(request)
-    if NOVELS_ROOT.exists():
-        for p in NOVELS_ROOT.iterdir():
-            if p.is_dir():
-                list_chapters(p.name, sync=True)
-    log_operation("reindex_all")
-    return RedirectResponse(url="/settings", status_code=303)
 
 
 # --- C-Route (v6) API Routes ---
@@ -1857,53 +1832,6 @@ def export_project_status(request: Request, project: str) -> Response:
     return templates.TemplateResponse("_export_result.html", {"request": request, "project": safe_project, "path": str(export_file)})
 
 
-@app.get("/settings", response_class=HTMLResponse)
-def settings_page(request: Request) -> Response:
-    if not request.session.get("authed"):
-        return RedirectResponse("/login", status_code=303)
-    with get_conn() as conn:
-        log_count = conn.execute("SELECT COUNT(1) as c FROM operation_logs").fetchone()["c"]
-
-    ai_api_key_configured = bool(get_setting_decrypted("ai_api_key", ""))
-    ai_base_url = get_setting("ai_base_url", "https://api.openai.com/v1")
-    ai_model = get_setting("ai_model", "gpt-3.5-turbo")
-    from app.services.prompts_service import get_global_prompt
-    global_prompt = get_global_prompt(get_setting)
-
-    return templates.TemplateResponse(
-        "settings.html",
-        {
-            "request": request,
-            "vault_root": str(VAULT_ROOT),
-            "db_path": str(DB_PATH),
-            "backup_root": str(BACKUP_ROOT),
-            "login_state": "已登录",
-            "log_count": log_count,
-            "ai_api_key_configured": ai_api_key_configured,
-            "ai_base_url": ai_base_url,
-            "ai_model": ai_model,
-            "features": FEATURES,
-            "global_prompt": global_prompt,
-        },
-    )
-
-@app.post("/settings/ai")
-def update_ai_settings(
-    request: Request,
-    ai_api_key: str = Form(""),
-    ai_base_url: str = Form(""),
-    ai_model: str = Form(""),
-    clear_ai_api_key: str = Form(""),
-) -> Response:
-    require_auth(request)
-    if clear_ai_api_key == "1":
-        clear_setting("ai_api_key")
-    elif ai_api_key.strip():
-        set_setting_encrypted("ai_api_key", ai_api_key.strip())
-    set_setting("ai_base_url", ai_base_url)
-    set_setting("ai_model", ai_model)
-    log_operation("update_ai_settings")
-    return RedirectResponse(url="/settings", status_code=303)
 
 @app.get("/api/snapshots/{snap_id}/diff")
 def api_snapshot_diff(request: Request, snap_id: int) -> Response:

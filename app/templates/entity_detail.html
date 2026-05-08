@@ -229,8 +229,7 @@
                     <span class="text-xs font-semibold text-muted uppercase">实体说明（Markdown）</span>
                     <span class="text-[10px] text-muted italic">存储于：{{ entity.md_path or '数据库记录' }}</span>
                 </div>
-                <textarea id="md_content" class="hidden">{{ md_content }}</textarea>
-                <div id="cm-container" class="flex-1 overflow-hidden"></div>
+                <textarea id="md_content" class="flex-1 w-full bg-transparent border-0 outline-none p-4 font-mono text-sm resize-none custom-scrollbar">{{ md_content }}</textarea>
             </div>
         </div>
 
@@ -279,7 +278,7 @@
     </div>
 </div>
 
-<!-- CodeMirror 6 for entity markdown editor -->
+<!-- CodeMirror removed, using textarea -->
 
 
 
@@ -303,47 +302,7 @@
     <p class="text-xs text-muted mt-2 italic">把章节里写作 <code>[[{{ entity.name }}]]</code> 的简写引用，全部改写为带 ID 的 <code>[[{{ entity.id }}|{{ entity.name }}]]</code>。改名后建议跑一次。</p>
 </div>
 
-<script type="importmap">
-{
-  "imports": {
-    "codemirror": "https://cdn.jsdelivr.net/npm/codemirror@6.0.1/+esm",
-    "@codemirror/state": "https://cdn.jsdelivr.net/npm/@codemirror/state@6.4.1/+esm",
-    "@codemirror/view": "https://cdn.jsdelivr.net/npm/@codemirror/view@6.26.3/+esm",
-    "@codemirror/lang-markdown": "https://cdn.jsdelivr.net/npm/@codemirror/lang-markdown@6.2.5/+esm",
-    "@codemirror/commands": "https://cdn.jsdelivr.net/npm/@codemirror/commands@6.5.0/+esm"
-  }
-}
-</script>
-<script type="module">
-import { EditorView, basicSetup } from 'codemirror';
-import { EditorState } from '@codemirror/state';
-import { markdown } from '@codemirror/lang-markdown';
-import { EditorView as View } from '@codemirror/view';
-
-const textarea = document.getElementById('md_content');
-let view;
-
-if (textarea) {
-    view = new EditorView({
-        state: EditorState.create({
-            doc: textarea.value,
-            extensions: [
-                basicSetup,
-                markdown(),
-                View.lineWrapping,
-                View.theme({
-                    "&": {
-                        backgroundColor: "transparent",
-                        height: "100%",
-                        fontSize: "14px"
-                    }
-                })
-            ]
-        }),
-        parent: document.getElementById('cm-container')
-    });
-}
-
+<script>
 window.deleteEntity = async () => {
     if (!confirm('确定删除这个实体吗？相关关系和引用记录也会被删除。')) return;
     const res = await fetch(`/api/entities/{{ entity.id }}`, { method: 'DELETE' });
@@ -363,7 +322,7 @@ window.saveEntity = async () => {
         kind: formData.get('kind'),
         aliases: formData.get('aliases').split(',').map(s => s.trim()).filter(s => s),
         properties: properties,
-        md_content: view ? view.state.doc.toString() : (document.getElementById('md_content')?.value || ""),
+        md_content: document.getElementById('md_content')?.value || "",
         cascade: cascade
     };
 

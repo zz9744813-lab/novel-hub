@@ -192,7 +192,6 @@ def test_entity_detail_renders_properties_and_basename_filter(tmp_path):
     assert "00001-chapter.md" in res.text
     assert "/arc" not in res.text
     assert 'id="md_content"' in res.text
-    assert 'id="cm-container"' in res.text
     assert "实体说明" in res.text
     assert "Entity Description" not in res.text
 

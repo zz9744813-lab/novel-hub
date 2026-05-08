@@ -111,7 +111,7 @@
          class="flex items-center justify-between gap-4 p-3 hover:bg-bg/50 transition-colors">
         <div class="flex flex-col gap-0.5 min-w-0">
           <strong class="text-sm truncate">{{ c.title }}</strong>
-          <span class="text-xs text-muted">{{ c.project }} · {{ c.word_count }} 字 · {{ c.status }}</span>
+          <span class="text-xs text-muted">{{ c.project }} · {{ c.word_count }} 字 · {{ status_label(c.status) }}</span>
         </div>
         <span class="text-xs text-accent shrink-0">编辑</span>
       </a>

@@ -13,6 +13,7 @@ import app.services.markdown_service as markdown_service
 import app.services.path_service as path_service
 import app.services.snapshot_service as snapshot_service
 import app.services.chapter_service as chapter_service
+import app.services.library_service as library_service
 from app.main import (
     FEATURES,
     app,
@@ -50,6 +51,7 @@ def configure_temp_runtime(tmp_path):
     path_service.NOVELS_ROOT = main.NOVELS_ROOT
     snapshot_service.VAULT_ROOT = main.VAULT_ROOT
     chapter_service.VAULT_ROOT = main.VAULT_ROOT
+    library_service.NOVELS_ROOT = main.NOVELS_ROOT
 
     os.environ["NOVELHUB_DB_PATH"] = str(main.DB_PATH)
     main.init_db()

@@ -26,7 +26,7 @@
         {% for e in entities %}
         <a href="/projects/{{ project }}/entities/{{ e.id }}" class="bg-panel border border-border_color rounded-xl p-4 hover:border-accent transition-all shadow-sm group">
             <div class="flex justify-between items-start mb-2">
-                <span class="text-xs font-bold uppercase tracking-wider text-muted opacity-70 group-hover:text-accent group-hover:opacity-100 transition-colors">{{ e.kind }}</span>
+                <span class="text-xs font-bold uppercase tracking-wider text-muted opacity-70 group-hover:text-accent group-hover:opacity-100 transition-colors">{{ kind_label(e.kind) }}</span>
                 <span class="text-[10px] text-muted">{{ e.id }}</span>
             </div>
             <h3 class="text-lg font-bold mb-1">{{ e.name }}</h3>

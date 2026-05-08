@@ -119,7 +119,7 @@ if ENABLE_CSRF:
         exempt_urls=[r"^/api/.*", r"^/login$"],
     )
 
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(key_func=get_remote_address, enabled=APP_ENV == "production")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, lambda r, e: JSONResponse({"detail": "too many attempts"}, status_code=429))
 
@@ -151,6 +151,23 @@ def status_label(value: str) -> str:
 
 
 templates.env.globals["status_label"] = status_label
+
+KIND_LABELS = {
+    "character": "人物",
+    "location": "地点",
+    "item": "物品",
+    "organization": "势力",
+    "thread": "伏笔",
+    "concept": "概念",
+    "event": "事件",
+}
+
+
+def kind_label(value: str) -> str:
+    return KIND_LABELS.get(value or "", value or "")
+
+
+templates.env.globals["kind_label"] = kind_label
 
 # Workflow stages
 from app.services.stage_service import (

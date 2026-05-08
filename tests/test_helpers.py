@@ -7,6 +7,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from fastapi.testclient import TestClient
 
 import app.main as main
+import app.config as config
+import app.db as db
 from app.main import (
     FEATURES,
     app,
@@ -21,13 +23,24 @@ from app.main import (
 
 
 def configure_temp_runtime(tmp_path):
+    # Patch main.py re-exports
     main.DB_PATH = tmp_path / "novelhub.db"
-    os.environ["NOVELHUB_DB_PATH"] = str(main.DB_PATH)
     main.VAULT_ROOT = tmp_path / "vault"
     main.NOVELS_ROOT = main.VAULT_ROOT / "Novels"
     main.BACKUP_ROOT = main.VAULT_ROOT / ".novelhub-backups"
     main.ADMIN_PASSWORD = "pw"
     main.SECRET_KEY = "test-secret"
+
+    # Patch infrastructure modules
+    config.DB_PATH = main.DB_PATH
+    db.DB_PATH = main.DB_PATH
+    config.VAULT_ROOT = main.VAULT_ROOT
+    config.NOVELS_ROOT = main.NOVELS_ROOT
+    config.BACKUP_ROOT = main.BACKUP_ROOT
+    config.ADMIN_PASSWORD = main.ADMIN_PASSWORD
+    config.SECRET_KEY = main.SECRET_KEY
+
+    os.environ["NOVELHUB_DB_PATH"] = str(main.DB_PATH)
     main.init_db()
 
 

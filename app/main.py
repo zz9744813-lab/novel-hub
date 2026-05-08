@@ -17,7 +17,6 @@ from contextlib import asynccontextmanager
 from ebooklib import epub
 import markdown
 import yaml
-from dotenv import load_dotenv
 from fastapi import FastAPI, Form, HTTPException, Request, BackgroundTasks
 from starlette_csrf import CSRFMiddleware
 from slowapi import Limiter
@@ -30,63 +29,21 @@ from app.services.ai_client import generate_ai_content, generate_ai_content_stre
 from app.services.ai_context import build_context
 from app.services.wiki_link import update_entity_refs
 from app.services.markdown_ext import WikiLinkExtension
-from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-load_dotenv()
-
-BASE_DIR = Path(__file__).resolve().parent.parent
-VAULT_ROOT = Path(os.getenv("NOVELHUB_VAULT_ROOT", "/root/ObsidianVault")).expanduser()
-NOVELS_ROOT = VAULT_ROOT / "Novels"
-BACKUP_ROOT = Path(os.getenv("NOVELHUB_BACKUP_ROOT", str(VAULT_ROOT / ".novelhub-backups"))).expanduser()
-DB_PATH = Path(os.getenv("NOVELHUB_DB_PATH", str(BASE_DIR / "novelhub.db"))).expanduser()
-ADMIN_PASSWORD = os.getenv("NOVELHUB_PASSWORD", "")
-SECRET_KEY = os.getenv("NOVELHUB_SECRET_KEY", "change-me")
-ENCRYPTION_KEY = os.getenv("NOVELHUB_ENCRYPTION_KEY", "")
-APP_ENV = os.getenv("NOVELHUB_APP_ENV", "development").lower()
-DAILY_GOAL_WORDS = int(os.getenv("NOVELHUB_DAILY_GOAL", "2000"))
-PROJECT_GOAL_WORDS = int(os.getenv("NOVELHUB_PROJECT_GOAL", "100000"))
-
-
-def env_bool(name: str, default: bool = False) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
-FEATURES = {
-    "ai": env_bool("NOVELHUB_FEATURE_AI", False),
-    "ai_check": env_bool("NOVELHUB_FEATURE_AI_CHECK", False),
-    "graph": env_bool("NOVELHUB_FEATURE_GRAPH", False),
-    "timeline": env_bool("NOVELHUB_FEATURE_TIMELINE", False),
-    "scenes": env_bool("NOVELHUB_FEATURE_SCENES", False),
-    "threads": env_bool("NOVELHUB_FEATURE_THREADS", False),
-}
-
-
-def feature_enabled(name: str) -> bool:
-    return bool(FEATURES.get(name, False))
-
-
-def require_feature(name: str) -> None:
-    if not feature_enabled(name):
-        raise HTTPException(status_code=404, detail=f"feature disabled: {name}")
-
-
-def validate_runtime_config() -> None:
-    if APP_ENV != "production":
-        return
-    missing = []
-    if not ADMIN_PASSWORD:
-        missing.append("NOVELHUB_PASSWORD")
-    if not SECRET_KEY or SECRET_KEY == "change-me":
-        missing.append("NOVELHUB_SECRET_KEY")
-    if not ENCRYPTION_KEY:
-        missing.append("NOVELHUB_ENCRYPTION_KEY")
-    if missing:
-        raise RuntimeError("Missing required production config: " + ", ".join(missing))
-
+from app.config import (
+    BASE_DIR, VAULT_ROOT, NOVELS_ROOT, BACKUP_ROOT, DB_PATH,
+    ADMIN_PASSWORD, SECRET_KEY, ENCRYPTION_KEY, APP_ENV,
+    DAILY_GOAL_WORDS, PROJECT_GOAL_WORDS,
+    env_bool, FEATURES, feature_enabled, require_feature, validate_runtime_config,
+)
+from app.db import (
+    get_conn, get_setting, set_setting, clear_setting,
+    set_setting_encrypted, get_setting_decrypted,
+)
+from app.security import require_auth
+from app.labels import status_label, kind_label
+from app.templating import create_templates
 
 validate_runtime_config()
 
@@ -129,45 +86,7 @@ class CacheStaticFiles(StaticFiles):
         return super().is_not_modified(response_headers, request_headers)
 
 app.mount("/static", CacheStaticFiles(directory=BASE_DIR / "app" / "static"), name="static")
-templates = Jinja2Templates(directory=str(BASE_DIR / "app" / "templates"))
-templates.env.filters["from_json"] = lambda s: json.loads(s or "{}")
-templates.env.filters["basename"] = lambda s: Path(s).name if s else ""
-
-templates.env.globals["feature_enabled"] = feature_enabled
-
-STATUS_LABELS = {
-    "idea": "灵感",
-    "outline": "大纲",
-    "draft": "草稿",
-    "rewrite": "重写",
-    "polish": "润色",
-    "done": "完成",
-    "published": "已发布",
-}
-
-
-def status_label(value: str) -> str:
-    return STATUS_LABELS.get(value or "", value or "")
-
-
-templates.env.globals["status_label"] = status_label
-
-KIND_LABELS = {
-    "character": "人物",
-    "location": "地点",
-    "item": "物品",
-    "organization": "势力",
-    "thread": "伏笔",
-    "concept": "概念",
-    "event": "事件",
-}
-
-
-def kind_label(value: str) -> str:
-    return KIND_LABELS.get(value or "", value or "")
-
-
-templates.env.globals["kind_label"] = kind_label
+templates = create_templates()
 
 # Workflow stages
 from app.services.stage_service import (
@@ -237,71 +156,6 @@ def _ensure_under_root(path: Path, root: Path) -> Path:
     return resolved
 
 
-def require_auth(request: Request) -> None:
-    if not request.session.get("authed"):
-        accept = request.headers.get("accept", "")
-        if request.headers.get("hx-request") == "true":
-            raise HTTPException(status_code=401, headers={"HX-Redirect": "/login"})
-        if "text/html" in accept:
-            raise HTTPException(status_code=303, headers={"Location": "/login"})
-        raise HTTPException(status_code=401, detail="auth required")
-
-
-def get_setting(key: str, default: str = "") -> str:
-    with get_conn() as conn:
-        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-        return row["value"] if row else default
-
-
-def set_setting(key: str, value: str) -> None:
-    with get_conn() as conn:
-        conn.execute(
-            "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (key, value)
-        )
-
-
-def _settings_fernet() -> Fernet:
-    raw = ENCRYPTION_KEY or SECRET_KEY
-    try:
-        return Fernet(raw.encode("utf-8"))
-    except Exception:
-        key = base64.urlsafe_b64encode(hashlib.sha256(raw.encode("utf-8")).digest())
-        return Fernet(key)
-
-
-def set_setting_encrypted(key: str, value: str) -> None:
-    if not value:
-        return
-    token = _settings_fernet().encrypt(value.encode("utf-8")).decode("utf-8")
-    set_setting(key, f"enc::{token}")
-
-
-def clear_setting(key: str) -> None:
-    with get_conn() as conn:
-        conn.execute("DELETE FROM settings WHERE key = ?", (key,))
-
-
-def get_setting_decrypted(key: str, default: str = "") -> str:
-    value = get_setting(key, default)
-    if not value:
-        return default
-    if not value.startswith("enc::"):
-        # Backward compatibility: migrate old plaintext settings on first read.
-        set_setting_encrypted(key, value)
-        return value
-    try:
-        return _settings_fernet().decrypt(value[5:].encode("utf-8")).decode("utf-8")
-    except Exception:
-        return default
-
-
-def get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, timeout=30.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout=5000")
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
 
 
 def init_db() -> None:

@@ -161,7 +161,7 @@
             <label class="flex flex-col gap-1.5 text-xs text-muted">状态
                 <select name="status" form="editor-form" class="bg-bg border border-border_color rounded px-2.5 py-1.5 text-sm text-text_color focus:outline-none focus:border-accent appearance-none">
                     {% for s in ['idea','outline','draft','rewrite','polish','done','published'] %}
-                        <option value="{{ s }}" {% if frontmatter.status == s %}selected{% endif %}>{{ s|upper }}</option>
+                        <option value="{{ s }}" {% if frontmatter.status == s %}selected{% endif %}>{{ status_label(s) }}</option>
                     {% endfor %}
                 </select>
             </label>

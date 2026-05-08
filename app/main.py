@@ -109,12 +109,16 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Novel Hub", lifespan=lifespan)
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
-# CSRF middleware temporarily disabled — re-enable after adding tokens to all forms
-# app.add_middleware(
-#     CSRFMiddleware,
-#     secret=SECRET_KEY,
-#     exempt_urls=[r"^/api/.*", r"^/login$"],
-# )
+
+ENABLE_CSRF = env_bool("NOVELHUB_ENABLE_CSRF", APP_ENV == "production")
+
+if ENABLE_CSRF:
+    app.add_middleware(
+        CSRFMiddleware,
+        secret=SECRET_KEY,
+        exempt_urls=[r"^/api/.*", r"^/login$"],
+    )
+
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, lambda r, e: JSONResponse({"detail": "too many attempts"}, status_code=429))
@@ -129,11 +133,24 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "app" / "templates"))
 templates.env.filters["from_json"] = lambda s: json.loads(s or "{}")
 templates.env.filters["basename"] = lambda s: Path(s).name if s else ""
 
-def inject_locale(request: Request):
-    return get_setting("locale", "zh-CN")
-
-templates.env.globals["get_locale"] = inject_locale
 templates.env.globals["feature_enabled"] = feature_enabled
+
+STATUS_LABELS = {
+    "idea": "灵感",
+    "outline": "大纲",
+    "draft": "草稿",
+    "rewrite": "重写",
+    "polish": "润色",
+    "done": "完成",
+    "published": "已发布",
+}
+
+
+def status_label(value: str) -> str:
+    return STATUS_LABELS.get(value or "", value or "")
+
+
+templates.env.globals["status_label"] = status_label
 
 # Workflow stages
 from app.services.stage_service import (
@@ -2671,16 +2688,6 @@ def update_ai_settings(
     set_setting("ai_model", ai_model)
     log_operation("update_ai_settings")
     return RedirectResponse(url="/settings", status_code=303)
-
-@app.post("/settings/locale")
-def update_locale(request: Request, locale: str = Form(...)) -> Response:
-    require_auth(request)
-    if locale == "zh-CN":
-        set_setting("locale", locale)
-    log_operation("update_locale", detail=locale)
-    # Redirect back to the referrer or home
-    referer = request.headers.get("referer", "/")
-    return RedirectResponse(url=referer, status_code=303)
 
 @app.get("/api/snapshots/{snap_id}/diff")
 def api_snapshot_diff(request: Request, snap_id: int) -> Response:

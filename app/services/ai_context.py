@@ -1,4 +1,6 @@
 import json
+import os
+import sqlite3
 from pathlib import Path
 
 
@@ -12,12 +14,21 @@ def _read_markdown_body(path: Path) -> str:
     return text
 
 
+def _get_conn() -> sqlite3.Connection:
+    base_dir = Path(__file__).resolve().parents[2]
+    db_path = Path(os.getenv("NOVELHUB_DB_PATH", str(base_dir / "novelhub.db"))).expanduser()
+    conn = sqlite3.connect(db_path, timeout=30.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
+
+
 def build_context(project: str, chapter_path: str = None, mode: str = "continue") -> str:
     """
     Builds a rich context prompt for AI generation.
     """
-    from app.main import get_conn
-    with get_conn() as conn:
+    with _get_conn() as conn:
         context_parts = []
     
         # 1. Project Level

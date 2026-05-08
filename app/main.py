@@ -42,6 +42,7 @@ from app.services.markdown_service import (
     utc_now,
     safe_slug,
     _ensure_under_root,
+    FRONTMATTER_PATTERN,
     parse_frontmatter,
     dump_frontmatter,
     read_markdown,
@@ -51,7 +52,7 @@ from app.services.markdown_service import (
 )
 from app.services.path_service import chapter_path, project_path, list_markdown_files
 from app.services.snapshot_service import backup_file
-from app.services.project_service import get_project_meta, set_project_meta, compute_trend
+from app.services.project_service import get_project_meta, set_project_meta
 from app.services.chapter_service import _infer_kind, normalize_meta, write_markdown
 from app.services.library_service import (
     _reindex_notes_for_project,
@@ -59,6 +60,7 @@ from app.services.library_service import (
     list_notes,
     scan_projects,
 )
+from app.services.metrics_service import log_operation, compute_trend, get_project_stats
 from app.schema import init_db
 
 validate_runtime_config()
@@ -158,12 +160,6 @@ STATUS_ORDER = ["idea", "outline", "draft", "rewrite", "polish", "done", "publis
 
 
 
-def log_operation(action: str, target: str = "", detail: str = "", value: int = 0, project: str = "") -> None:
-    with get_conn() as conn:
-        conn.execute(
-            "INSERT INTO operation_logs(action, target, project, created_at, detail, value) VALUES (?, ?, ?, ?, ?, ?)",
-            (action, target, project, utc_now().isoformat(), detail, value),
-        )
 
 
 
@@ -826,22 +822,7 @@ def search_project(request: Request, project: str, q: str = "") -> Response:
 def project_stats(request: Request, project: str) -> Response:
     require_auth(request)
     safe_project = safe_slug(project, fallback="project")
-    with get_conn() as conn:
-        # Aggregate words_added from operation_logs
-        # Detail format: "words_added=123"
-        rows = conn.execute(
-            """
-            SELECT date(created_at) as day, sum(value) as words
-            FROM operation_logs
-            WHERE action='save' AND project=?
-            GROUP BY day
-            ORDER BY day DESC
-            LIMIT 90
-            """,
-            (safe_project,)
-        ).fetchall()
-    
-    stats = [{"day": r["day"], "words": r["words"]} for r in rows]
+    stats = get_project_stats(safe_project)
     return templates.TemplateResponse("stats.html", {"request": request, "project": safe_project, "stats": stats})
 
 

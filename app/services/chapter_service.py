@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 import sqlite3
 from pathlib import Path
@@ -14,7 +13,6 @@ from app.services.markdown_service import (
     _project_from_path,
     count_words,
     dump_frontmatter,
-    read_markdown,
     utc_now,
     write_atomic,
 )

@@ -9,6 +9,9 @@ from fastapi.testclient import TestClient
 import app.main as main
 import app.config as config
 import app.db as db
+import app.services.markdown_service as markdown_service
+import app.services.path_service as path_service
+import app.services.snapshot_service as snapshot_service
 from app.main import (
     FEATURES,
     app,
@@ -39,6 +42,12 @@ def configure_temp_runtime(tmp_path):
     config.BACKUP_ROOT = main.BACKUP_ROOT
     config.ADMIN_PASSWORD = main.ADMIN_PASSWORD
     config.SECRET_KEY = main.SECRET_KEY
+
+    # Patch services
+    markdown_service.VAULT_ROOT = main.VAULT_ROOT
+    path_service.VAULT_ROOT = main.VAULT_ROOT
+    path_service.NOVELS_ROOT = main.NOVELS_ROOT
+    snapshot_service.VAULT_ROOT = main.VAULT_ROOT
 
     os.environ["NOVELHUB_DB_PATH"] = str(main.DB_PATH)
     main.init_db()

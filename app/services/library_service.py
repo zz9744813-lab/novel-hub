@@ -137,9 +137,6 @@ def scan_projects() -> list[dict[str, Any]]:
     for p in sorted([item for item in NOVELS_ROOT.iterdir() if item.is_dir()]):
         project = p.name
         chapters = list_chapters(project)
-        # list_notes internally calls project_path
-        # chars = list_notes(project, "characters")
-        # world = list_notes(project, "world")
         meta = get_project_meta(project)
         target = meta.get("target_words", PROJECT_GOAL_WORDS) or PROJECT_GOAL_WORDS
         total_words = sum(c["word_count"] for c in chapters)

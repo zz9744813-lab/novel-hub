@@ -7,6 +7,40 @@
   const storedTheme = localStorage.getItem('theme');
   if (storedTheme) root.setAttribute('data-theme', storedTheme);
 
+  function readCookie(name) {
+    return document.cookie
+      .split(';')
+      .map((part) => part.trim())
+      .find((part) => part.startsWith(name + '='))
+      ?.slice(name.length + 1) || '';
+  }
+
+  function csrfToken() {
+    const raw = readCookie('csrftoken');
+    return raw ? decodeURIComponent(raw) : '';
+  }
+
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = (input, init = {}) => {
+    const method = (init.method || (input && input.method) || 'GET').toUpperCase();
+    if (!['GET', 'HEAD', 'OPTIONS', 'TRACE'].includes(method)) {
+      const url = typeof input === 'string' ? input : input.url;
+      const target = new URL(url, window.location.origin);
+      if (target.origin === window.location.origin) {
+        const headers = new Headers(init.headers || (input && input.headers) || {});
+        const token = csrfToken();
+        if (token && !headers.has('x-csrftoken')) headers.set('x-csrftoken', token);
+        init = { ...init, headers };
+      }
+    }
+    return nativeFetch(input, init);
+  };
+
+  document.addEventListener('htmx:configRequest', (event) => {
+    const token = csrfToken();
+    if (token) event.detail.headers['x-csrftoken'] = token;
+  });
+
   function showToast(msg) {
     if (!toast) return;
     toast.textContent = msg;

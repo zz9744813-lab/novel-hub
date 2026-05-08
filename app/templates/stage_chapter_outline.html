@@ -67,7 +67,15 @@
         <div class="grid grid-cols-12 gap-3 p-3 items-start hover:bg-bg/50">
           <div class="col-span-12 md:col-span-3 flex flex-col gap-0.5 min-w-0">
             <span class="text-xs text-muted">第 <span x-text="c.chapter || '?'"></span> 章
-              <span class="ml-1 text-[10px] uppercase border border-border_color rounded px-1" x-text="c.status || 'idea'"></span>
+              <span class="ml-1 text-[10px] uppercase border border-border_color rounded px-1" x-text="{
+                'idea': '灵感',
+                'outline': '大纲',
+                'draft': '草稿',
+                'rewrite': '重写',
+                'polish': '润色',
+                'done': '完成',
+                'published': '已发布'
+              }[c.status || 'idea'] || (c.status || 'idea')"></span>
             </span>
             <strong class="text-sm truncate" x-text="c.title"></strong>
             <span class="text-[10px] text-muted" x-text="(c.word_count || 0) + ' 字'"></span>

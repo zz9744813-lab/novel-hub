@@ -101,7 +101,15 @@
                             <a :href="`/projects/{{ project }}/editor/${c.path.split(/[\\\\/]/).pop()}`" class="font-bold text-sm hover:text-accent transition-colors" x-text="c.title"></a>
                         </div>
                         <div class="flex items-center gap-3 text-[10px] text-muted">
-                            <span class="px-1.5 py-0.5 rounded border border-border_color" x-text="c.status"></span>
+                            <span class="px-1.5 py-0.5 rounded border border-border_color" x-text="{
+                                'idea': '灵感',
+                                'outline': '大纲',
+                                'draft': '草稿',
+                                'rewrite': '重写',
+                                'polish': '润色',
+                                'done': '完成',
+                                'published': '已发布'
+                            }[c.status] || c.status"></span>
                             <span x-text="`第 ${c.chapter || '?'} 章`"></span>
                             <span x-text="`${c.word_count || 0} 字`"></span>
                         </div>
@@ -124,7 +132,15 @@
                         <div class="font-medium mb-1" x-text="s.title"></div>
                         <div class="flex items-center justify-between text-[9px] text-muted italic">
                             <span x-text="s.pov || '未设视角'"></span>
-                            <span x-text="s.status || 'draft'"></span>
+                            <span x-text="{
+                                'idea': '灵感',
+                                'outline': '大纲',
+                                'draft': '草稿',
+                                'rewrite': '重写',
+                                'polish': '润色',
+                                'done': '完成',
+                                'published': '已发布'
+                            }[s.status || 'draft'] || (s.status || 'draft')"></span>
                                                     {% if ai_enabled and scenes_enabled %}<button class="text-[9px] text-accent opacity-0 group-hover:opacity-100"
                                 @click.stop="
                                     if (!confirm('用 AI 把此场景的摘要扩写为正文？')) return;

@@ -27,10 +27,10 @@
           </button>
           <div x-show="actionsOpen" x-transition @click.outside="actionsOpen = false" style="display:none;"
                class="absolute right-0 mt-2 w-48 bg-panel border border-border_color rounded-lg shadow-xl z-30 p-2 flex flex-col gap-1">
-            <a class="px-3 py-2 rounded text-sm hover:bg-bg" href="/projects/{{ project }}/stage/premise">进入工作流</a>
+            <a class="px-3 py-2 rounded text-sm hover:bg-bg" href="/projects/{{ project }}/stage/premise">工作流</a>
             <a class="px-3 py-2 rounded text-sm hover:bg-bg" href="/projects/{{ project }}/entities">实体库</a>
-            <a class="px-3 py-2 rounded text-sm hover:bg-bg" href="/projects/{{ project }}/search">全局搜索</a>
-            <a class="px-3 py-2 rounded text-sm hover:bg-bg" href="/projects/{{ project }}/stats">写作统计</a>
+            <a class="px-3 py-2 rounded text-sm hover:bg-bg" href="/projects/{{ project }}/search">搜索</a>
+            <a class="px-3 py-2 rounded text-sm hover:bg-bg" href="/projects/{{ project }}/stats">统计</a>
             <a class="px-3 py-2 rounded text-sm hover:bg-bg" href="/projects/{{ project }}/export/all" target="_blank">导出全书</a>
             <button type="button" class="text-left px-3 py-2 rounded text-sm hover:bg-bg"
                     onclick="const newName = prompt('新项目名:', '{{ project }}'); if(newName && newName !== '{{ project }}') fetch('/projects/{{ project }}/rename', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: newName})}).then(res => res.json()).then(data => { if(data.status==='ok') window.location.href = data.new_url; else alert('失败: ' + data.detail); })">

@@ -221,7 +221,7 @@
                 {% for ent in mentioned_entities %}
                 <div class="p-3 bg-panel border border-border_color rounded-lg group hover:border-accent transition-all">
                     <div class="flex justify-between items-start mb-1">
-                        <span class="text-[10px] font-bold uppercase text-muted">{{ ent.kind }}</span>
+                        <span class="text-[10px] font-bold uppercase text-muted">{{ kind_label(ent.kind) }}</span>
                         <a href="/projects/{{ project }}/entities/{{ ent.id }}" class="text-accent opacity-0 group-hover:opacity-100 transition-all">详情</a>
                     </div>
                     <div class="text-sm font-bold">{{ ent.name }}</div>
@@ -282,4 +282,5 @@ window.deleteChapter = async () => {
 {% endblock %}
 {% block scripts %}
 <script src="/static/js/editor.bundle.js"></script>
+<script src="/static/js/snapshot-diff.js"></script>
 {% endblock %}

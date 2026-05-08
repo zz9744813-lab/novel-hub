@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
-from app.config import DAILY_GOAL_WORDS, NOVELS_ROOT, PROJECT_GOAL_WORDS
+from app.config import NOVELS_ROOT
 from app.constants import STATUS_ORDER
 from app.db import get_conn
 from app.deps import get_templates
@@ -15,7 +15,7 @@ from app.services.chapter_service import write_markdown
 from app.services.library_service import list_chapters, scan_projects
 from app.services.metrics_service import get_project_stats, log_operation
 from app.services.path_service import chapter_path, project_path
-from app.services.project_service import get_project_meta, set_project_meta
+from app.services.project_service import set_project_meta
 from app.services.markdown_service import safe_slug
 
 router = APIRouter()

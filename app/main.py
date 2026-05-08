@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import os
 import re
 import shutil
 import sqlite3
-import base64
-from cryptography.fernet import Fernet
+import gzip
 from datetime import datetime, timezone
 from pathlib import Path
 import json
-import gzip
 import hashlib
 from typing import Any, List, Dict, Tuple
 from contextlib import asynccontextmanager
@@ -44,6 +41,22 @@ from app.db import (
 from app.security import require_auth
 from app.labels import status_label, kind_label
 from app.templating import create_templates
+from app.services.markdown_service import (
+    FRONTMATTER_PATTERN,
+    utc_now,
+    safe_slug,
+    _ensure_under_root,
+    parse_frontmatter,
+    dump_frontmatter,
+    read_markdown,
+    write_atomic,
+    count_words,
+    parse_csv,
+    _project_from_path,
+)
+from app.services.path_service import chapter_path, project_path, list_markdown_files
+from app.services.snapshot_service import backup_file
+from app.services.project_service import get_project_meta, set_project_meta, compute_trend
 
 validate_runtime_config()
 
@@ -133,27 +146,7 @@ def project_next_stage(project: str) -> tuple[str, str]:
 templates.env.globals["project_stage_status_map"] = project_stage_status_map
 templates.env.globals["project_next_stage"] = project_next_stage
 
-FRONTMATTER_PATTERN = re.compile(r"^---\n(.*?)\n---\n?", re.DOTALL)
 STATUS_ORDER = ["idea", "outline", "draft", "rewrite", "polish", "done", "published"]
-
-
-def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def safe_slug(value: str, fallback: str = "untitled") -> str:
-    value = re.sub(r"[\\/\.]+", "", value.strip())
-    cleaned = re.sub(r"[^A-Za-z0-9\-_\u4e00-\u9fff]+", "-", value).lower()
-    cleaned = cleaned.strip("-")
-    return cleaned or fallback
-
-
-def _ensure_under_root(path: Path, root: Path) -> Path:
-    resolved = path.resolve()
-    root_resolved = root.resolve()
-    if not resolved.is_relative_to(root_resolved):
-        raise HTTPException(status_code=400, detail="invalid path")
-    return resolved
 
 
 
@@ -397,104 +390,6 @@ def _infer_kind(p: Path) -> str:
     return "other"
 
 
-def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
-    match = FRONTMATTER_PATTERN.match(content)
-    if not match:
-        return {}, content
-    data = yaml.safe_load(match.group(1)) or {}
-    body = content[match.end() :]
-    return data, body
-
-
-def dump_frontmatter(frontmatter: dict[str, Any], body: str) -> str:
-    frontmatter_clean = {k: v for k, v in frontmatter.items() if v not in (None, "", [])}
-    fm = yaml.safe_dump(frontmatter_clean, allow_unicode=True, sort_keys=False).strip()
-    return f"---\n{fm}\n---\n\n{body}"
-
-
-def read_markdown(path: Path) -> tuple[dict[str, Any], str]:
-    p = _ensure_under_root(path, VAULT_ROOT)
-    if not p.exists():
-        return {}, ""
-    content = p.read_text(encoding="utf-8")
-    return parse_frontmatter(content)
-
-
-def backup_file(path: Path, label: str = "auto") -> None:
-    p = _ensure_under_root(path, VAULT_ROOT)
-    if not p.exists():
-        return
-    content = p.read_text(encoding="utf-8")
-    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
-    
-    with get_conn() as conn:
-        # Deduplication: check if last snapshot for this file has same hash
-        last = conn.execute(
-            "SELECT content_hash FROM snapshots WHERE chapter_path = ? ORDER BY created_at DESC LIMIT 1",
-            (str(p),)
-        ).fetchone()
-        
-        if last and last["content_hash"] == content_hash:
-            return # No change
-            
-        compressed = gzip.compress(content.encode("utf-8"))
-        conn.execute(
-            "INSERT INTO snapshots(chapter_path, created_at, label, content_hash, content) VALUES (?, ?, ?, ?, ?)",
-            (str(p), utc_now().isoformat(), label, content_hash, compressed)
-        )
-        # Cleanup policy: Keep (Recent 50) UNION (First of each day) UNION (First of each month)
-        conn.execute(
-            """DELETE FROM snapshots 
-               WHERE chapter_path = ? 
-               AND id NOT IN (
-                   SELECT id FROM (
-                       SELECT id FROM snapshots WHERE chapter_path = ? ORDER BY created_at DESC LIMIT 50
-                   )
-                   UNION
-                   SELECT id FROM (
-                       SELECT id FROM snapshots WHERE chapter_path = ? GROUP BY strftime('%Y-%m-%d', created_at)
-                   )
-                   UNION
-                   SELECT id FROM (
-                       SELECT id FROM snapshots WHERE chapter_path = ? GROUP BY strftime('%Y-%m', created_at)
-                   )
-               )""",
-            (str(p), str(p), str(p), str(p))
-        )
-
-
-def count_words(text: str) -> int:
-    cjk = len(re.findall(r"[\u4e00-\u9fff]", text))
-    latin = len(re.findall(r"[A-Za-z0-9_]+", text))
-    return cjk + latin
-
-
-def chapter_path(project: str, filename: str, volume: str = None) -> Path:
-    safe_project = safe_slug(project, fallback="project")
-    safe_file = safe_slug(filename.replace(".md", ""), fallback="chapter") + ".md"
-    base_folder = NOVELS_ROOT / safe_project / "chapters"
-    
-    if volume is not None:
-        vol_folder = safe_slug(volume, fallback="volume-01") if volume else "volume-01"
-        return _ensure_under_root(base_folder / vol_folder / safe_file, VAULT_ROOT)
-        
-    for f in base_folder.rglob(safe_file):
-        return _ensure_under_root(f, VAULT_ROOT)
-        
-    return _ensure_under_root(base_folder / "volume-01" / safe_file, VAULT_ROOT)
-
-
-def project_path(project: str) -> Path:
-    path = NOVELS_ROOT / safe_slug(project, fallback="project")
-    return _ensure_under_root(path, VAULT_ROOT)
-
-
-def list_markdown_files(folder: Path) -> list[Path]:
-    if not folder.exists():
-        return []
-    if folder.name == "chapters":
-        return sorted(folder.rglob("*.md"))
-    return sorted(folder.glob("*.md"))
 
 
 def normalize_meta(fm: dict[str, Any], stem: str, project: str = None) -> dict[str, Any]:
@@ -613,26 +508,6 @@ def list_notes(project: str, folder_name: str) -> list[dict[str, Any]]:
     return rows
 
 
-def get_project_meta(project: str) -> dict[str, Any]:
-    with get_conn() as conn:
-        row = conn.execute("SELECT * FROM project_meta WHERE project=?", (project,)).fetchone()
-        if row:
-            return dict(row)
-        return {"project": project, "target_words": PROJECT_GOAL_WORDS, "author": "", "synopsis": "", "daily_goal": DAILY_GOAL_WORDS}
-
-
-def set_project_meta(project: str, target_words: int = 100000, author: str = "", synopsis: str = "", daily_goal: int = 2000) -> None:
-    with get_conn() as conn:
-        conn.execute(
-            """INSERT INTO project_meta(project, target_words, author, synopsis, daily_goal)
-               VALUES (?, ?, ?, ?, ?)
-               ON CONFLICT(project) DO UPDATE SET
-                   target_words=excluded.target_words,
-                   author=excluded.author,
-                   synopsis=excluded.synopsis,
-                   daily_goal=excluded.daily_goal""",
-            (project, target_words, author, synopsis, daily_goal)
-        )
 
 
 def scan_projects() -> list[dict[str, Any]]:
@@ -678,13 +553,6 @@ def scan_projects() -> list[dict[str, Any]]:
     return results
 
 
-def _project_from_path(p: Path) -> str:
-    """Walk path parts looking for the 'Novels' segment; project is whatever follows it."""
-    try:
-        idx = p.parts.index("Novels")
-        return p.parts[idx + 1] if idx + 1 < len(p.parts) else ""
-    except ValueError:
-        return ""
 
 
 def write_markdown(path: Path, frontmatter: dict[str, Any], body: str, project: str = None) -> None:
@@ -774,46 +642,6 @@ def write_markdown(path: Path, frontmatter: dict[str, Any], body: str, project: 
     update_entity_refs(str(p), body, project)
 
 
-def write_atomic(path: Path, content: str) -> None:
-    tmp = path.with_name(f".{path.name}.tmp")
-    with tmp.open("w", encoding="utf-8", newline="\n") as fh:
-        fh.write(content)
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(tmp, path)
-
-
-def parse_csv(value: str) -> list[str]:
-    return [v.strip() for v in value.split(",") if v.strip()]
-
-
-def compute_trend() -> list[dict[str, Any]]:
-    from datetime import timedelta
-    trend = []
-    now = utc_now()
-
-    with get_conn() as conn:
-        for i in range(6, -1, -1):
-            day_start = (now - timedelta(days=i)).replace(hour=0, minute=0, second=0, microsecond=0)
-            day_end = day_start + timedelta(days=1)
-
-            rows = conn.execute(
-                "SELECT detail FROM operation_logs WHERE action = 'save' AND created_at >= ? AND created_at < ?",
-                (day_start.isoformat(), day_end.isoformat())
-            ).fetchall()
-
-            words_added = 0
-            for r in rows:
-                try:
-                    words_added += int(r["detail"].replace("words_added=", ""))
-                except:
-                    pass
-
-            trend.append({
-                "day": day_start.strftime("%m-%d"),
-                "words": words_added
-            })
-    return trend
 
 
 @app.get("/health")

@@ -47,7 +47,7 @@
         </a>
       </div>
       <div x-data="{ navOpen: false }" class="md:hidden">
-        <button @click="navOpen = !navOpen" class="p-2 rounded-md text-muted hover:text-text_color hover:bg-panel border border-border_color" aria-label="Open navigation">☰</button>
+        <button @click="navOpen = !navOpen" class="p-2 rounded-md text-muted hover:text-text_color hover:bg-panel border border-border_color" aria-label="打开导航">☰</button>
         <div x-show="navOpen"
              x-transition
              @click.outside="navOpen = false"
@@ -69,6 +69,5 @@
   <div id="toast" class="toast" aria-live="polite"></div>
   <script src="/static/js/ui.js"></script>
   {% block scripts %}{% endblock %}
-  <script src="/static/js/snapshot-diff.js"></script>
 </body>
 </html>

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import shutil
-import gzip
 from datetime import datetime, timezone
 from pathlib import Path
 import json
@@ -11,7 +9,7 @@ from contextlib import asynccontextmanager
 
 from ebooklib import epub
 import markdown
-from fastapi import FastAPI, Form, HTTPException, Request, BackgroundTasks
+from fastapi import FastAPI, Form, HTTPException, Request
 from starlette_csrf import CSRFMiddleware
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -70,6 +68,7 @@ from app.routers import dashboard as dashboard_router
 from app.routers import projects as projects_router
 from app.routers import chapters as chapters_router
 from app.routers import editor as editor_router
+from app.routers import snapshots as snapshots_router
 from app.constants import STATUS_ORDER
 
 validate_runtime_config()
@@ -114,6 +113,7 @@ app.include_router(dashboard_router.router)
 app.include_router(projects_router.router)
 app.include_router(chapters_router.router)
 app.include_router(editor_router.router)
+app.include_router(snapshots_router.router)
 
 class CacheStaticFiles(StaticFiles):
     def is_not_modified(self, response_headers, request_headers) -> bool:
@@ -372,135 +372,11 @@ def export_project_combined_redirect(request: Request, project: str):
     return RedirectResponse(url=f"/api/projects/{project}/export?format=md", status_code=303)
 
 
-@app.get("/projects/{project}/backups/{filename}")
-def list_backups(request: Request, project: str, filename: str):
-    require_auth(request)
-    safe_project = safe_slug(project, fallback="project")
-    p = chapter_path(safe_project, filename)
-    rel = p.relative_to(VAULT_ROOT)
-    dest_dir = BACKUP_ROOT / rel.parent
-    
-    backups = []
-    if dest_dir.exists():
-        for b in sorted(dest_dir.glob(f"*__{filename}"), key=lambda x: x.name, reverse=True):
-            timestamp = b.name.split("__")[0]
-            backups.append({"name": b.name, "timestamp": timestamp, "size": b.stat().st_size})
-            
-    return JSONResponse(content={"backups": backups})
-
-
-@app.get("/projects/{project}/diff/{backup_name}")
-def view_diff(request: Request, project: str, backup_name: str):
-    require_auth(request)
-    # Extract original filename from backup_name (format: YYYYMMDDTHHMMSSZ__filename.md)
-    if "__" not in backup_name:
-        raise HTTPException(400)
-    
-    filename = backup_name.split("__", 1)[1]
-    safe_project = safe_slug(project, fallback="project")
-    current_p = chapter_path(safe_project, filename)
-    
-    # Locate backup file
-    rel = current_p.relative_to(VAULT_ROOT)
-    backup_p = BACKUP_ROOT / rel.parent / backup_name
-    
-    if not current_p.exists() or not backup_p.exists():
-        raise HTTPException(404)
-        
-    import difflib
-    current_text = current_p.read_text(encoding="utf-8").splitlines()
-    backup_text = backup_p.read_text(encoding="utf-8").splitlines()
-    
-    diff = list(difflib.unified_diff(backup_text, current_text, fromfile="备份", tofile="当前"))
-    return templates.TemplateResponse("_diff.html", {"request": request, "diff": diff})
-
-
-@app.post("/api/snapshots/{snap_id}/restore")
-def restore_snapshot(request: Request, snap_id: int) -> Response:
-    require_auth(request)
-    with get_conn() as conn:
-        snap = conn.execute("SELECT * FROM snapshots WHERE id = ?", (snap_id,)).fetchone()
-        if not snap: raise HTTPException(404, "Snapshot not found")
-        
-        content = gzip.decompress(snap["content"]).decode("utf-8")
-        path = Path(snap["chapter_path"])
-        
-        # Backup current state as snapshot before overwriting
-        backup_file(path, label="pre-restore")
-        
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(content)
-            
-        # Re-index
-        fm, body = read_markdown(path)
-        write_markdown(path, fm, body)
-        
-        return JSONResponse(content={"status": "ok"})
-
-
-@app.post("/projects/{project}/backups/{backup_name}/restore")
-def restore_backup(request: Request, project: str, backup_name: str):
-    require_auth(request)
-    if "__" not in backup_name:
-        raise HTTPException(400)
-    filename = backup_name.split("__", 1)[1]
-    safe_project = safe_slug(project, fallback="project")
-    current_p = chapter_path(safe_project, filename)
-    rel = current_p.relative_to(VAULT_ROOT)
-    backup_p = BACKUP_ROOT / rel.parent / backup_name
-    if not backup_p.exists():
-        raise HTTPException(404)
-    # Backup current before restoring
-    backup_file(current_p)
-    import shutil
-    shutil.copy2(backup_p, current_p)
-    # Reload and index
-    fm, body = read_markdown(current_p)
-    write_markdown(current_p, fm, body)
-    log_operation("restore_backup", str(current_p), backup_name, project=safe_project)
-    return JSONResponse(content={"status": "ok"})
 
 
 
 
 # --- C-Route (v6) API Routes ---
-@app.post("/api/chapters/snapshot")
-async def manual_snapshot(request: Request) -> Response:
-    require_auth(request)
-    data = await request.json()
-    project = data.get("project")
-    filename = data.get("filename")
-    label = data.get("label", "manual")
-    
-    safe_project = safe_slug(project)
-    path = chapter_path(safe_project, filename)
-    if not path.exists(): raise HTTPException(404)
-    
-    content = path.read_text(encoding="utf-8")
-    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
-    compressed = gzip.compress(content.encode("utf-8"))
-    
-    with get_conn() as conn:
-        conn.execute(
-            "INSERT INTO snapshots(chapter_path, created_at, label, content_hash, content, protected) VALUES (?, ?, ?, ?, ?, ?)",
-            (str(path), utc_now().isoformat(), label, content_hash, compressed, 1)
-        )
-    return JSONResponse({"status": "ok"})
-
-@app.get("/projects/{project}/snapshots/{snap_id}/diff")
-def view_snapshot_diff(request: Request, project: str, snap_id: int) -> Response:
-    require_auth(request)
-    with get_conn() as conn:
-        snap = conn.execute("SELECT * FROM snapshots WHERE id = ?", (snap_id,)).fetchone()
-        if not snap: raise HTTPException(404)
-        
-    path = Path(snap["chapter_path"])
-    current_text = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-    backup_text = gzip.decompress(snap["content"]).decode("utf-8").splitlines()
-    
-    import difflib
-    diff = list(difflib.unified_diff(backup_text, current_text, fromfile=f"Snapshot ({snap['label']})", tofile="Current"))
-    return templates.TemplateResponse("_diff.html", {"request": request, "diff": diff, "snap_id": snap_id})
 
 
 @app.post("/api/projects/{project}/ai/outline/volume")
@@ -1015,19 +891,6 @@ def api_delete_relation(request: Request, rel_id: int) -> Response:
     return JSONResponse(content={"status": "ok"})
 
 
-@app.post("/api/projects/{project}/snapshots")
-async def api_create_snapshot(request: Request, project: str) -> Response:
-    require_auth(request)
-    data = await request.json()
-    path_str = data.get("path")
-    label = data.get("label", "manual")
-    if not path_str: raise HTTPException(400, "path required")
-    
-    path = Path(path_str)
-    if not path.exists(): raise HTTPException(404, "file not found")
-    
-    backup_file(path, label=label)
-    return JSONResponse(content={"status": "ok"})
 
 
 @app.get("/api/projects/{project}/scenes")
@@ -1255,50 +1118,6 @@ def export_project_status(request: Request, project: str) -> Response:
 
 
 
-@app.get("/api/snapshots/{snap_id}/diff")
-def api_snapshot_diff(request: Request, snap_id: int) -> Response:
-    require_auth(request)
-    import difflib
-    with get_conn() as conn:
-        snap = conn.execute("SELECT * FROM snapshots WHERE id=?", (snap_id,)).fetchone()
-        if not snap: raise HTTPException(404)
-        old_content = gzip.decompress(snap["content"]).decode("utf-8")
-    path = Path(snap["chapter_path"])
-    if not path.exists(): raise HTTPException(404, "current file gone")
-    new_content = path.read_text(encoding="utf-8")
-    
-    diff = list(difflib.unified_diff(
-        old_content.splitlines(keepends=True),
-        new_content.splitlines(keepends=True),
-        fromfile=f"snapshot {snap['created_at']}",
-        tofile="current",
-        n=3
-    ))
-    return JSONResponse({
-        "status": "ok",
-        "diff": "".join(diff),
-        "old_lines": len(old_content.splitlines()),
-        "new_lines": len(new_content.splitlines()),
-    })
-
-@app.put("/api/snapshots/{snap_id}")
-async def api_update_snapshot(request: Request, snap_id: int) -> Response:
-    """Set label or protected flag on a snapshot."""
-    require_auth(request)
-    data = await request.json()
-    fields = []
-    params = []
-    if "label" in data:
-        fields.append("label=?")
-        params.append(data["label"])
-    if "protected" in data:
-        fields.append("protected=?")
-        params.append(1 if data["protected"] else 0)
-    if not fields: return JSONResponse({"status": "ok"})
-    params.append(snap_id)
-    with get_conn() as conn:
-        conn.execute(f"UPDATE snapshots SET {','.join(fields)} WHERE id=?", params)
-    return JSONResponse({"status": "ok"})
 
 
 # ===== Workflow prompt slots =====

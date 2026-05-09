@@ -1,7 +1,9 @@
 import gzip
 import hashlib
+import shutil
+from datetime import datetime, timezone
 from pathlib import Path
-from app.config import VAULT_ROOT
+from app.config import VAULT_ROOT, BACKUP_ROOT
 from app.db import get_conn
 from app.services.markdown_service import _ensure_under_root, utc_now
 
@@ -10,6 +12,18 @@ def backup_file(path: Path, label: str = "auto") -> None:
     p = _ensure_under_root(path, VAULT_ROOT)
     if not p.exists():
         return
+
+    # Phase 1: Physical File Backup (into BACKUP_ROOT)
+    try:
+        rel = p.relative_to(VAULT_ROOT)
+        dest = BACKUP_ROOT / rel.parent
+        dest.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        shutil.copy2(p, dest / f"{ts}__{p.name}")
+    except Exception as e:
+        print(f"Physical backup failed: {e}")
+
+    # Phase 2: Database Snapshot
     content = p.read_text(encoding="utf-8")
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
 

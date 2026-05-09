@@ -36,7 +36,6 @@ def world_page_legacy(request: Request, project: str) -> Response:
 def note_preview(
     request: Request, project: str, folder: str, filename: str
 ) -> Response:
-    safe_project = safe_slug(project, fallback="project")
     if not request.session.get("authed"):
         return RedirectResponse("/login", status_code=303)
     if folder not in {"characters", "world"}:

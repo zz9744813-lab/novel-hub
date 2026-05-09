@@ -62,12 +62,14 @@ from app.services.library_service import (
 )
 from app.services.metrics_service import log_operation, compute_trend, get_project_stats
 from app.schema import init_db
+from app.services.consistency_service import run_consistency_check
 from app.routers import health as health_router
 from app.routers.auth import create_router as create_auth_router
 from app.routers import settings as settings_router
 from app.routers import dashboard as dashboard_router
 from app.routers import projects as projects_router
 from app.routers import chapters as chapters_router
+from app.routers import editor as editor_router
 from app.constants import STATUS_ORDER
 
 validate_runtime_config()
@@ -111,6 +113,7 @@ app.include_router(settings_router.router)
 app.include_router(dashboard_router.router)
 app.include_router(projects_router.router)
 app.include_router(chapters_router.router)
+app.include_router(editor_router.router)
 
 class CacheStaticFiles(StaticFiles):
     def is_not_modified(self, response_headers, request_headers) -> bool:
@@ -197,159 +200,6 @@ templates.env.globals["project_next_stage"] = project_next_stage
 
 
 
-@app.get("/projects/{project}/editor/{filename}", response_class=HTMLResponse)
-def editor_page(request: Request, project: str, filename: str) -> Response:
-    if not request.session.get("authed"):
-        return RedirectResponse("/login", status_code=303)
-    safe_project = safe_slug(project, fallback="project")
-    path = chapter_path(safe_project, filename)
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="chapter not found")
-    fm, body = read_markdown(path)
-    meta = normalize_meta(fm, path.stem, project=safe_project)
-    # Editor uses DB index directly without scanning
-    chapters = list_chapters(safe_project, sync=False)
-    active = next((c for c in chapters if c["filename"] == path.name), None)
-    
-    active_idx = next((i for i, c in enumerate(chapters) if c["filename"] == path.name), 0)
-    start_idx = max(0, active_idx - 20)
-    end_idx = min(len(chapters), active_idx + 21)
-    visible_chapters = chapters[start_idx:end_idx]
-
-    proj_meta = get_project_meta(safe_project)
-    
-    # T2.7 Sidebar Data
-    with get_conn() as conn:
-        mentioned = conn.execute(
-            """SELECT DISTINCT e.* FROM entities e 
-               JOIN entity_refs er ON e.id = er.entity_id 
-               WHERE er.chapter_path = ?""", (str(path),)).fetchall()
-        
-        snapshots = conn.execute(
-            "SELECT id, created_at, label FROM snapshots WHERE chapter_path = ? ORDER BY created_at DESC LIMIT 50",
-            (str(path),)).fetchall()
-
-    from app.services.prompts_service import get_stage_prompt
-    return templates.TemplateResponse(
-        "editor.html",
-        {
-            "request": request,
-            "project": safe_project,
-            "filename": path.name,
-            "frontmatter": meta,
-            "body": body,
-            "chapters": visible_chapters,
-            "active": active,
-            "project_words": sum(c["word_count"] for c in chapters),
-            "goal": proj_meta.get("target_words", PROJECT_GOAL_WORDS),
-            "mtime": path.stat().st_mtime,
-            "mentioned_entities": [dict(e) for e in mentioned],
-            "snapshots": [dict(s) for s in snapshots],
-            "writing_prompt": get_stage_prompt(get_setting, safe_project, "writing"),
-        },
-    )
-
-
-
-
-@app.post("/projects/{project}/editor/{filename}", response_class=HTMLResponse)
-def save_chapter(
-    request: Request,
-    project: str,
-    filename: str,
-    background_tasks: BackgroundTasks,
-    title: str = Form(""),
-    chapter: str = Form(""),
-    status: str = Form("draft"),
-    volume: str = Form(""),
-    tags: str = Form(""),
-    synopsis: str = Form(""),
-    notes: str = Form(""),
-    pov: str = Form(""),
-    characters: str = Form(""),
-    locations: str = Form(""),
-    warnings: str = Form(""),
-    draft_version: str = Form(""),
-    body: str = Form(""),
-    loaded_mtime: str = Form(""),
-    force: bool = Form(False),
-) -> Response:
-    require_auth(request)
-    safe_project = safe_slug(project, fallback="project")
-    path = chapter_path(safe_project, filename)
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="chapter not found")
-
-    # M11: Conflict detection
-    if loaded_mtime:
-        try:
-            loaded_mtime = float(loaded_mtime)
-            current_mtime = path.stat().st_mtime
-            if abs(current_mtime - loaded_mtime) > 0.5 and not force:
-                current_content = path.read_text(encoding="utf-8") if path.exists() else ""
-                return templates.TemplateResponse(
-                    "_save_result.html",
-                    {
-                        "request": request,
-                        "error": "文件已被其他来源修改，请先查看冲突再决定是否覆盖。",
-                        "error_code": "chapter_conflict",
-                        "current_mtime": current_mtime,
-                        "loaded_mtime": loaded_mtime,
-                        "current_hash": hashlib.sha256(current_content.encode("utf-8")).hexdigest(),
-                        "loaded_hash": "",
-                    },
-                )
-        except (ValueError, OSError):
-            pass
-
-    expected_path = chapter_path(safe_project, filename, volume)
-    if path != expected_path:
-        expected_path.parent.mkdir(parents=True, exist_ok=True)
-        path.rename(expected_path)
-        with get_conn() as conn:
-            conn.execute("UPDATE file_index SET path=? WHERE path=?", (str(expected_path), str(path)))
-            conn.execute("UPDATE chapter_fts SET path=? WHERE path=?", (str(expected_path), str(path)))
-        path = expected_path
-
-    old_words = 0
-    try:
-        _, old_body = read_markdown(path)
-        old_words = count_words(old_body)
-    except Exception:
-        pass
-
-    frontmatter = {
-        "title": title,
-        "chapter": chapter,
-        "status": status,
-        "volume": volume,
-        "tags": parse_csv(tags),
-        "synopsis": synopsis,
-        "notes": notes,
-        "pov": pov,
-        "characters": parse_csv(characters),
-        "locations": parse_csv(locations),
-        "warnings": parse_csv(warnings),
-        "draft_version": draft_version,
-    }
-
-    new_words = count_words(body)
-    words_added = new_words - old_words
-    if words_added < 0:
-        words_added = 0 # Don't record negative progress in trend
-
-    if force and path.exists():
-        backup_file(path, label="pre_overwrite")
-    write_markdown(path, frontmatter, body)
-    log_operation("save", str(path), f"words_added={words_added}", value=words_added, project=safe_project)
-    new_mtime = path.stat().st_mtime
-    if feature_enabled("ai_check"):
-        background_tasks.add_task(run_consistency_check, safe_project, str(path))
-
-    return templates.TemplateResponse(
-        "_save_result.html",
-        {"request": request, "saved_at": utc_now().strftime("%Y-%m-%d %H:%M:%S UTC"), "word_count": new_words, "new_mtime": new_mtime},
-    )
 
 
 
@@ -652,54 +502,6 @@ def view_snapshot_diff(request: Request, project: str, snap_id: int) -> Response
     diff = list(difflib.unified_diff(backup_text, current_text, fromfile=f"Snapshot ({snap['label']})", tofile="Current"))
     return templates.TemplateResponse("_diff.html", {"request": request, "diff": diff, "snap_id": snap_id})
 
-async def run_consistency_check(project: str, chapter_path: str):
-    """Background task to check consistency for a chapter."""
-    try:
-        api_key = get_setting_decrypted("ai_api_key")
-        base_url = get_setting("ai_base_url")
-        model = get_setting("ai_model")
-        if not api_key: return
-
-        path = Path(chapter_path)
-        if not path.exists(): return
-        fm, body = read_markdown(path)
-
-        # Get context
-        from app.services.ai_context import build_context
-        context = build_context(project, chapter_path, "check")
-
-        prompt = f"""Context:
-{context}
-
-Chapter text to check:
-{body}
-
-Please list any plot inconsistencies, out-of-character behaviors, or timeline errors you find. Return as a JSON list of strings. If none, return [].
-"""
-        from app.services.ai_client import generate_ai_content
-        response = await generate_ai_content(api_key, base_url, model, "You are a consistency checker. Return ONLY valid JSON array.", prompt)
-        
-        if response:
-            # Try to parse JSON
-            import json
-            try:
-                # Basic cleanup
-                clean = response.strip()
-                if clean.startswith("```json"): clean = clean[7:]
-                if clean.endswith("```"): clean = clean[:-3]
-                issues = json.loads(clean.strip())
-                if isinstance(issues, list):
-                    with get_conn() as conn:
-                        conn.execute(
-                            """INSERT INTO consistency_reports (chapter_path, created_at, issues)
-                               VALUES (?, ?, ?)
-                               ON CONFLICT(chapter_path) DO UPDATE SET created_at=excluded.created_at, issues=excluded.issues""",
-                            (chapter_path, utc_now().isoformat(), json.dumps(issues))
-                        )
-            except Exception as e:
-                print(f"Failed to parse consistency JSON: {e}")
-    except Exception as e:
-        print(f"Consistency check error: {e}")
 
 @app.post("/api/projects/{project}/ai/outline/volume")
 async def ai_outline_volume(request: Request, project: str) -> Response:

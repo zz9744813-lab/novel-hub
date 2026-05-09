@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import io
-import re
 from pathlib import Path
 
 import markdown
@@ -12,8 +10,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from app.db import get_conn
 from app.deps import get_templates
 from app.security import require_auth
-from app.services.library_service import list_chapters, scan_projects
-from app.services.markdown_service import count_words, read_markdown, safe_slug, utc_now
+from app.services.library_service import scan_projects
+from app.services.markdown_service import read_markdown, safe_slug, utc_now
 from app.services.metrics_service import log_operation
 from app.services.path_service import list_markdown_files, project_path
 

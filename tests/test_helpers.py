@@ -17,6 +17,7 @@ import app.services.library_service as library_service
 import app.schema as schema
 import app.routers.snapshots as snapshots_router
 import app.routers.notes as notes_router
+import app.routers.volumes as volumes_router
 from app.main import (
     FEATURES,
     app,
@@ -60,6 +61,7 @@ def configure_temp_runtime(tmp_path):
     snapshots_router.VAULT_ROOT = main.VAULT_ROOT
     snapshots_router.BACKUP_ROOT = main.BACKUP_ROOT
     notes_router.VAULT_ROOT = main.VAULT_ROOT
+    volumes_router.NOVELS_ROOT = main.NOVELS_ROOT
 
     os.environ["NOVELHUB_DB_PATH"] = str(main.DB_PATH)
     main.init_db()

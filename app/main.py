@@ -17,8 +17,6 @@ from fastapi.staticfiles import StaticFiles
 
 from app.services.ai_client import generate_ai_content, generate_ai_content_stream
 from app.services.ai_context import build_context
-from app.services.wiki_link import update_entity_refs
-from app.services.markdown_ext import WikiLinkExtension
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import (
@@ -45,6 +43,7 @@ from app.services.markdown_service import (
     write_atomic,
     count_words,
     parse_csv,
+    _project_from_path,
 )
 from app.services.path_service import chapter_path, project_path, list_markdown_files
 from app.services.snapshot_service import backup_file
@@ -58,7 +57,6 @@ from app.services.library_service import (
 )
 from app.services.metrics_service import log_operation, compute_trend, get_project_stats
 from app.schema import init_db
-from app.services.consistency_service import run_consistency_check
 from app.routers import health as health_router
 from app.routers.auth import create_router as create_auth_router
 from app.routers import settings as settings_router
@@ -69,6 +67,7 @@ from app.routers import editor as editor_router
 from app.routers import snapshots as snapshots_router
 from app.routers import export as export_router
 from app.routers import notes as notes_router
+from app.routers import volumes as volumes_router
 from app.constants import STATUS_ORDER
 
 validate_runtime_config()
@@ -116,6 +115,7 @@ app.include_router(editor_router.router)
 app.include_router(snapshots_router.router)
 app.include_router(export_router.router)
 app.include_router(notes_router.router)
+app.include_router(volumes_router.router)
 
 class CacheStaticFiles(StaticFiles):
     def is_not_modified(self, response_headers, request_headers) -> bool:
@@ -489,77 +489,6 @@ async def api_ai_generate(
     from fastapi.responses import StreamingResponse
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-@app.get("/projects/{project}/outline", response_class=HTMLResponse)
-def project_outline_page_legacy(request: Request, project: str) -> Response:
-    """Legacy redirect; new flow uses /projects/{project}/stage/outline."""
-    return RedirectResponse(url=f"/projects/{project}/stage/outline", status_code=301)
-
-@app.put("/api/projects/{project}/volumes/{slug}")
-async def api_update_volume(request: Request, project: str, slug: str) -> Response:
-    require_auth(request)
-    safe_project = safe_slug(project, fallback="project")
-    data = await request.json()
-    with get_conn() as conn:
-        existing = conn.execute(
-            "SELECT 1 FROM volumes WHERE project=? AND slug=?",
-            (safe_project, slug)
-        ).fetchone()
-        if existing:
-            conn.execute(
-                """UPDATE volumes SET title=?, synopsis=?, target_words=?, seq=?
-                   WHERE project=? AND slug=?""",
-                (data.get("title", slug), data.get("synopsis", ""),
-                 int(data.get("target_words") or 0), int(data.get("seq") or 0),
-                 safe_project, slug)
-            )
-        else:
-            conn.execute(
-                """INSERT INTO volumes(project, slug, title, synopsis, target_words, seq)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (safe_project, slug, data.get("title", slug), data.get("synopsis", ""),
-                 int(data.get("target_words") or 0), int(data.get("seq") or 0))
-            )
-    return JSONResponse({"status": "ok"})
-
-@app.post("/api/projects/{project}/volumes/reorder")
-async def api_reorder_volumes(request: Request, project: str) -> Response:
-    require_auth(request)
-    safe_project = safe_slug(project, fallback="project")
-    data = await request.json()
-    slugs = data.get("order", [])
-    with get_conn() as conn:
-        for i, slug in enumerate(slugs, 1):
-            conn.execute(
-                "UPDATE volumes SET seq=? WHERE project=? AND slug=?",
-                (i, safe_project, slug)
-            )
-    return JSONResponse({"status": "ok"})
-
-@app.get("/api/projects/{project}/volumes")
-def api_list_volumes(request: Request, project: str) -> Response:
-    require_auth(request)
-    safe_project = safe_slug(project, fallback="project")
-    chapters_dir = NOVELS_ROOT / safe_project / "chapters"
-    if chapters_dir.exists():
-        with get_conn() as conn:
-            existing = {r["slug"] for r in conn.execute(
-                "SELECT slug FROM volumes WHERE project=?", (safe_project,)).fetchall()}
-            for d in sorted(chapters_dir.iterdir()):
-                if d.is_dir() and d.name not in existing:
-                    conn.execute(
-                        "INSERT INTO volumes(project, slug, title, seq) VALUES (?, ?, ?, ?)",
-                        (safe_project, d.name, d.name, len(existing) + 1)
-                    )
-                    existing.add(d.name)
-    with get_conn() as conn:
-        rows = conn.execute(
-            """SELECT v.*, 
-               (SELECT COUNT(*) FROM file_index WHERE project=v.project AND volume=v.slug) as chapter_count,
-               (SELECT COALESCE(SUM(word_count),0) FROM file_index WHERE project=v.project AND volume=v.slug) as word_count
-               FROM volumes v WHERE v.project=? ORDER BY v.seq""",
-            (safe_project,)
-        ).fetchall()
-    return JSONResponse({"status": "ok", "volumes": [dict(r) for r in rows]})
 
 @app.get("/api/entities/{ent_id}/appearances")
 def api_get_entity_appearances(request: Request, ent_id: str) -> Response:

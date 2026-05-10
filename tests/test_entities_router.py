@@ -178,3 +178,20 @@ def test_no_duplicate_entity_routes():
                     duplicates.append(key)
                 seen.add(key)
     assert duplicates == [], f"Duplicate routes: {duplicates}"
+
+
+def test_entity_relations_list(tmp_path):
+    configure_temp_runtime(tmp_path)
+    with main.get_conn() as conn:
+        conn.execute(
+            "INSERT INTO entity_relations(project, source_id, target_id, relation_type, notes, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            ("demo", "ent_a", "ent_b", "friend", "note", "now"),
+        )
+
+    with TestClient(app) as client:
+        login(client)
+        res = client.get("/api/entity-relations?project=demo")
+
+    assert res.status_code == 200
+    assert res.json()["status"] == "ok"
+    assert len(res.json()["relations"]) == 1

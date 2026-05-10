@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 import json
-import hashlib
 from typing import Any, List, Dict, Tuple
 from contextlib import asynccontextmanager
 
@@ -69,6 +68,7 @@ from app.routers import export as export_router
 from app.routers import notes as notes_router
 from app.routers import volumes as volumes_router
 from app.routers import entities as entities_router
+from app.routers import scenes as scenes_router
 from app.constants import STATUS_ORDER
 
 validate_runtime_config()
@@ -118,6 +118,7 @@ app.include_router(export_router.router)
 app.include_router(notes_router.router)
 app.include_router(volumes_router.router)
 app.include_router(entities_router.router)
+app.include_router(scenes_router.router)
 
 class CacheStaticFiles(StaticFiles):
     def is_not_modified(self, response_headers, request_headers) -> bool:
@@ -492,80 +493,7 @@ async def api_ai_generate(
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-@app.get("/api/projects/{project}/scenes")
-def api_list_scenes(request: Request, project: str, chapter: str = None) -> Response:
-    require_feature("scenes")
-    require_auth(request)
-    with get_conn() as conn:
-        query = "SELECT * FROM scenes WHERE project = ?"
-        params = [project]
-        if chapter:
-            query += " AND chapter_path LIKE ?"
-            params.append(f"%{chapter}")
-        query += " ORDER BY chapter_path, seq"
-        rows = conn.execute(query, params).fetchall()
-        return JSONResponse(content={"status": "ok", "scenes": [dict(r) for r in rows]})
-
-
-@app.post("/api/projects/{project}/scenes")
-async def api_create_scene(request: Request, project: str) -> Response:
-    require_feature("scenes")
-    require_auth(request)
-    data = await request.json()
-    # Logic to insert H2 into file or just record in DB? 
-    # Usually we want it in DB for the outline
-    sc_id = f"sc_{hashlib.sha1((project + data['chapter_path'] + str(utc_now())).encode()).hexdigest()[:8]}"
-    with get_conn() as conn:
-        conn.execute(
-            """INSERT INTO scenes (id, chapter_path, project, seq, title, status)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (sc_id, data["chapter_path"], project, data.get("seq", 0), data.get("title", "New Scene"), "draft")
-        )
-    return JSONResponse(content={"status": "ok", "id": sc_id})
-
-
-@app.put("/api/scenes/{sc_id}")
-async def api_update_scene(request: Request, sc_id: str) -> Response:
-    require_feature("scenes")
-    require_auth(request)
-    data = await request.json()
-    with get_conn() as conn:
-        conn.execute(
-            """UPDATE scenes SET 
-               title=?, pov=?, location_id=?, summary=?, status=?
-               WHERE id=?""",
-            (data.get("title"), data.get("pov"), data.get("location_id"), data.get("summary"), data.get("status"), sc_id)
-        )
-    return JSONResponse(content={"status": "ok"})
-
-@app.delete("/api/scenes/{sc_id}")
-def api_delete_scene(request: Request, sc_id: str) -> Response:
-    require_feature("scenes")
-    require_auth(request)
-    with get_conn() as conn:
-        conn.execute("DELETE FROM scenes WHERE id=?", (sc_id,))
-    return JSONResponse(content={"status": "ok"})
-
-@app.get("/api/projects/{project}/outline")
-def api_get_outline(request: Request, project: str) -> Response:
-    require_auth(request)
-    with get_conn() as conn:
-        # Simple tree: Volumes -> Chapters -> Scenes
-        volumes = conn.execute("SELECT * FROM volumes WHERE project = ? ORDER BY seq", (project,)).fetchall()
-        chapters = conn.execute("SELECT * FROM file_index WHERE project = ? ORDER BY volume, chapter_int", (project,)).fetchall()
-        scenes = conn.execute("SELECT * FROM scenes WHERE project = ? ORDER BY chapter_path, seq", (project,)).fetchall()
-        
-        return JSONResponse(content={
-            "status": "ok",
-            "volumes": [dict(v) for v in volumes],
-            "chapters": [dict(c) for c in chapters],
-            "scenes": [dict(s) for s in scenes]
-        })
-
-
-
-
-
+# ===== Workflow prompt slots =====
 
 # ===== Workflow prompt slots =====
 

@@ -20,6 +20,7 @@ import app.routers.notes as notes_router
 import app.routers.volumes as volumes_router
 import app.routers.entities as entities_router
 import app.routers.workflow as workflow_router
+import app.routers.ai as ai_router
 from app.main import (
     FEATURES,
     app,
@@ -66,6 +67,7 @@ def configure_temp_runtime(tmp_path):
     volumes_router.NOVELS_ROOT = main.NOVELS_ROOT
     entities_router.NOVELS_ROOT = main.NOVELS_ROOT
     workflow_router.NOVELS_ROOT = main.NOVELS_ROOT
+    ai_router.NOVELS_ROOT = main.NOVELS_ROOT
 
     os.environ["NOVELHUB_DB_PATH"] = str(main.DB_PATH)
     main.init_db()

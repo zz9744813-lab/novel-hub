@@ -34,6 +34,8 @@
 |---|---|---|
 | `GET` | `/projects/{project}/entities` | Entity list |
 | `GET` | `/projects/{project}/entities/{ent_id}` | Entity detail |
+| `GET` | `/projects/{project}/graph` | Entity graph page |
+| `GET` | `/api/projects/{project}/graph` | Entity graph API |
 | `GET` | `/api/entities` | List/search entities |
 | `POST` | `/api/entities` | Create entity |
 | `GET` | `/api/entities/{ent_id}` | Entity JSON |

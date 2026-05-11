@@ -36,6 +36,21 @@ def test_settings_requires_auth_and_renders(tmp_path):
         assert res.status_code == 200
         assert "设置" in res.text
 
+def test_no_duplicate_routes_global():
+    from fastapi.routing import APIRoute
+    seen = set()
+    duplicates = []
+    for route in app.routes:
+        if isinstance(route, APIRoute):
+            for method in route.methods:
+                if method in {"HEAD", "OPTIONS"}:
+                    continue
+                key = (method, route.path)
+                if key in seen:
+                    duplicates.append(key)
+                seen.add(key)
+    assert duplicates == []
+
 def test_no_duplicate_basic_routes():
     # Helper to check for duplicate routes
     routes = []

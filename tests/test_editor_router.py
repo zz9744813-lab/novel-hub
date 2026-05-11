@@ -1,3 +1,4 @@
+from pathlib import Path
 from fastapi.testclient import TestClient
 from tests.test_helpers import configure_temp_runtime, login
 import app.main as main
@@ -30,7 +31,7 @@ def test_save_chapter_route_updates_file_and_logs_words(tmp_path):
 
     chapters = main.list_chapters(project, sync=True)
     filename = chapters[0]["filename"]
-    actual_path = main.Path(chapters[0]["path"])
+    actual_path = Path(chapters[0]["path"])
     mtime = actual_path.stat().st_mtime
 
     with TestClient(app) as client:
@@ -58,7 +59,7 @@ def test_save_chapter_route_updates_file_and_logs_words(tmp_path):
     assert res.status_code == 200
     # Refresh index and get actual path (it might have moved to volume directory)
     chapters = main.list_chapters(project, sync=True)
-    actual_path = main.Path(chapters[0]["path"])
+    actual_path = Path(chapters[0]["path"])
     fm, body = main.read_markdown(actual_path)
     assert fm.get("title") == "Start Updated"
     assert fm.get("synopsis") == "Updated synopsis"
@@ -77,7 +78,7 @@ def test_save_chapter_conflict_returns_conflict_markup(tmp_path):
 
     chapters = main.list_chapters(project, sync=True)
     filename = chapters[0]["filename"]
-    actual_path = main.Path(chapters[0]["path"])
+    actual_path = Path(chapters[0]["path"])
     stale_mtime = actual_path.stat().st_mtime
 
     # Simulate external edit (updates mtime)
@@ -119,7 +120,7 @@ def test_save_chapter_force_allows_overwrite(tmp_path):
 
     chapters = main.list_chapters(project, sync=True)
     filename = chapters[0]["filename"]
-    actual_path = main.Path(chapters[0]["path"])
+    actual_path = Path(chapters[0]["path"])
     stale_mtime = actual_path.stat().st_mtime
 
     import time
@@ -151,7 +152,7 @@ def test_save_chapter_force_allows_overwrite(tmp_path):
 
     assert res.status_code == 200
     chapters = main.list_chapters(project, sync=True)
-    actual_path = main.Path(chapters[0]["path"])
+    actual_path = Path(chapters[0]["path"])
     fm, body = main.read_markdown(actual_path)
     assert fm.get("title") == "Forced"
     assert body.strip() == "forced body"

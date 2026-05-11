@@ -65,6 +65,28 @@ def test_reorder_chapters_route_updates_chapter_numbers(tmp_path):
     assert "second" in chapters[0]["filename"]
     assert chapters[0]["chapter"] == "1"
 
+def test_update_chapter_synopsis_route_after_main_cleanup(tmp_path):
+    configure_temp_runtime(tmp_path)
+    project = "demo"
+    path = main.NOVELS_ROOT / project / "chapters" / "00001-start.md"
+    main.write_markdown(
+        path,
+        {"title": "Start", "chapter": "1", "status": "draft", "synopsis": ""},
+        "hello",
+        project=project,
+    )
+
+    with TestClient(app) as client:
+        login(client)
+        res = client.put(
+            f"/api/projects/{project}/chapters/00001-start.md/synopsis",
+            json={"synopsis": "新的梗概"},
+        )
+
+    assert res.status_code == 200
+    fm, body = main.read_markdown(path)
+    assert fm["synopsis"] == "新的梗概"
+
 def test_no_duplicate_chapter_routes():
     routes = []
     for route in app.routes:

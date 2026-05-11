@@ -47,6 +47,7 @@ from app.routers import ai as ai_router
 from app.routers import timeline as timeline_router
 from app.routers import graph as graph_router
 from app.routers import threads as threads_router
+from app.routers import arc as arc_router
 from app.deps import configure_runtime
 from app.workflow_globals import (
     register_workflow_globals,
@@ -108,6 +109,7 @@ app.include_router(ai_router.router)
 app.include_router(timeline_router.router)
 app.include_router(graph_router.router)
 app.include_router(threads_router.router)
+app.include_router(arc_router.router)
 
 class CacheStaticFiles(StaticFiles):
     def is_not_modified(self, response_headers, request_headers) -> bool:

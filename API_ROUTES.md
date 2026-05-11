@@ -23,6 +23,9 @@
 | `GET` | `/projects/{project}/chapters/{filename}/read` | Mobile/read-only view |
 | `POST` | `/projects/{project}/chapters/{filename}` | Save chapter |
 | `GET` | `/projects/{project}/search` | Project search |
+| `GET` | `/projects/{project}/consistency` | Consistency check page |
+| `GET` | `/api/projects/{project}/consistency` | Consistency check API |
+| `POST` | `/api/projects/{project}/consistency/run` | Queue consistency check |
 | `GET` | `/projects/{project}/timeline` | Project timeline page |
 | `GET` | `/api/projects/{project}/timeline` | Project timeline API |
 | `GET` | `/projects/{project}/export` | Export page |

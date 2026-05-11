@@ -34,6 +34,8 @@
 |---|---|---|
 | `GET` | `/projects/{project}/entities` | Entity list |
 | `GET` | `/projects/{project}/entities/{ent_id}` | Entity detail |
+| `GET` | `/projects/{project}/entities/{ent_id}/arc` | Entity arc page |
+| `GET` | `/api/entities/{ent_id}/arc` | Entity arc API |
 | `GET` | `/projects/{project}/graph` | Entity graph page |
 | `GET` | `/api/projects/{project}/graph` | Entity graph API |
 | `GET` | `/projects/{project}/threads-board` | Threads board page |

@@ -229,3 +229,19 @@ def preview_markdown(request: Request, project: str, body: str = Form("")) -> Re
     return templates.TemplateResponse(
         "_preview.html", {"request": request, "html": html}
     )
+
+
+@router.put("/api/projects/{project}/chapters/{filename}/synopsis")
+async def api_update_chapter_synopsis(request: Request, project: str, filename: str) -> Response:
+    """Lightweight synopsis update that only touches chapter frontmatter."""
+    require_auth(request)
+    safe_project = safe_slug(project, fallback="project")
+    path = chapter_path(safe_project, filename)
+    if not path.exists():
+        raise HTTPException(404, "chapter not found")
+    data = await request.json()
+    fm, body = read_markdown(path)
+    fm["synopsis"] = data.get("synopsis", "")
+    write_markdown(path, fm, body, project=safe_project)
+    log_operation("update_synopsis", target=str(path))
+    return JSONResponse({"status": "ok"})

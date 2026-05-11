@@ -44,6 +44,7 @@ from app.routers import entities as entities_router
 from app.routers import scenes as scenes_router
 from app.routers import workflow as workflow_router
 from app.routers import ai as ai_router
+from app.routers import timeline as timeline_router
 from app.deps import configure_runtime
 from app.workflow_globals import (
     register_workflow_globals,
@@ -101,6 +102,7 @@ app.include_router(entities_router.router)
 app.include_router(scenes_router.router)
 app.include_router(workflow_router.router)
 app.include_router(ai_router.router)
+app.include_router(timeline_router.router)
 
 class CacheStaticFiles(StaticFiles):
     def is_not_modified(self, response_headers, request_headers) -> bool:

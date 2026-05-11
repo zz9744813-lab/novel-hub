@@ -36,6 +36,11 @@
 | `GET` | `/projects/{project}/entities/{ent_id}` | Entity detail |
 | `GET` | `/projects/{project}/graph` | Entity graph page |
 | `GET` | `/api/projects/{project}/graph` | Entity graph API |
+| `GET` | `/projects/{project}/threads-board` | Threads board page |
+| `GET` | `/api/projects/{project}/threads-board` | Threads board API |
+| `POST` | `/api/projects/{project}/threads` | Create thread |
+| `PUT` | `/api/projects/{project}/threads/{filename}` | Update thread |
+| `DELETE` | `/api/projects/{project}/threads/{filename}` | Delete thread |
 | `GET` | `/api/entities` | List/search entities |
 | `POST` | `/api/entities` | Create entity |
 | `GET` | `/api/entities/{ent_id}` | Entity JSON |

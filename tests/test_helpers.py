@@ -21,17 +21,16 @@ import app.routers.volumes as volumes_router
 import app.routers.entities as entities_router
 import app.routers.workflow as workflow_router
 import app.routers.ai as ai_router
-from app.main import (
-    FEATURES,
-    app,
-    count_words,
-    feature_enabled,
+from app.main import app
+from app.services.markdown_service import (
     parse_frontmatter,
-    read_markdown,
-    safe_slug,
     write_atomic,
-    write_markdown,
+    count_words,
+    safe_slug,
+    read_markdown,
 )
+from app.config import FEATURES, feature_enabled
+from app.services.chapter_service import write_markdown
 
 
 def configure_temp_runtime(tmp_path):

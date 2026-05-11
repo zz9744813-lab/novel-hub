@@ -33,6 +33,7 @@
             <a class="px-3 py-2 rounded text-sm hover:bg-bg" href="/projects/{{ project }}/search">搜索</a>
             <a class="px-3 py-2 rounded text-sm hover:bg-bg" href="/projects/{{ project }}/stats">统计</a>
             <a class="px-3 py-2 rounded text-sm hover:bg-bg" href="/projects/{{ project }}/timeline">时间线</a>
+            <a class="px-3 py-2 rounded text-sm hover:bg-bg" href="/projects/{{ project }}/threads-board">伏笔板</a>
             <a class="px-3 py-2 rounded text-sm hover:bg-bg" href="/projects/{{ project }}/export/all" target="_blank">导出全书</a>
             <button type="button" class="text-left px-3 py-2 rounded text-sm hover:bg-bg"
                     onclick="const newName = prompt('新项目名:', '{{ project }}'); if(newName && newName !== '{{ project }}') fetch('/projects/{{ project }}/rename', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: newName})}).then(res => res.json()).then(data => { if(data.status==='ok') window.location.href = data.new_url; else alert('失败: ' + data.detail); })">

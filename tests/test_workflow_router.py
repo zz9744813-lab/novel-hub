@@ -83,6 +83,15 @@ def test_invalid_stage_rejected(tmp_path):
     assert res.status_code == 400
 
 
+def test_workflow_template_globals_registered_after_cleanup(tmp_path):
+    configure_temp_runtime(tmp_path)
+    from app.deps import get_templates
+    templates = get_templates()
+    assert "WORKFLOW_STAGES" in templates.env.globals
+    assert "stage_label" in templates.env.globals
+    assert "project_stage_status_map" in templates.env.globals
+    assert "project_next_stage" in templates.env.globals
+
 def test_no_duplicate_workflow_routes():
     """Ensure no duplicate (method, path) for workflow routes after split."""
     from fastapi.routing import APIRoute

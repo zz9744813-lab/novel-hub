@@ -46,3 +46,31 @@ def test_required_built_assets_exist():
         p = Path(filename)
         assert p.exists()
         assert p.stat().st_size > 0
+
+
+def test_ci_workflow_exists():
+    from pathlib import Path
+    workflow = Path(".github/workflows/ci.yml")
+    assert workflow.exists()
+    text = workflow.read_text(encoding="utf-8")
+    assert "pytest -q" in text
+    assert "npm run build" in text
+    assert "python -m compileall app tests" in text
+
+
+def test_deployment_checklist_exists():
+    from pathlib import Path
+    doc = Path("docs/deployment-checklist.md")
+    assert doc.exists()
+    text = doc.read_text(encoding="utf-8")
+    assert "NOVELHUB_APP_ENV=production" in text
+    assert "CSRF" in text
+    assert "pytest -q" in text
+
+
+def test_makefile_verify_exists():
+    from pathlib import Path
+    text = Path("Makefile").read_text(encoding="utf-8")
+    assert "verify" in text
+    assert "npm run build" in text
+    assert "pytest -q" in text

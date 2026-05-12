@@ -85,7 +85,7 @@ if ENABLE_CSRF:
     app.add_middleware(
         CSRFMiddleware,
         secret=SECRET_KEY,
-        exempt_urls=[re.compile(r"^/api/.*"), re.compile(r"^/login$")],
+        exempt_urls=[re.compile(r"^/login$")],
     )
 
 limiter = Limiter(key_func=get_remote_address, enabled=APP_ENV == "production")

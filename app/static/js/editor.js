@@ -12,7 +12,7 @@ const filename = document.body.dataset.filename || '';
   let entityCache = {};
   async function refreshEntityCache() {
     try {
-      const res = await fetch(`/api/entities?project=${project}`);
+      const res = await csrfFetch(`/api/entities?project=${project}`);
       const data = await res.json();
       if (data.status === 'ok') {
         data.entities.forEach(e => {
@@ -52,7 +52,7 @@ if (textarea) {
       options: async () => {
         const query = word.text.slice(2);
         try {
-          const res = await fetch(`/api/entities?project=${project}&q=${encodeURIComponent(query)}`);
+          const res = await csrfFetch(`/api/entities?project=${project}&q=${encodeURIComponent(query)}`);
           const data = await res.json();
           return data.entities.map(e => ({
             label: e.name,
@@ -119,7 +119,7 @@ if (textarea) {
             // Extract ID or Name
             const match = /\[\[(ent_[^|\]]+)/.exec(raw);
             if (match) {
-                fetch(`/api/entities/${match[1]}`)
+                csrfFetch(`/api/entities/${match[1]}`)
                     .then(res => res.json())
                     .then(data => {
                         if (data.status === 'ok') {

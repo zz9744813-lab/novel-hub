@@ -13,4 +13,9 @@ def create_templates() -> Jinja2Templates:
     templates.env.globals["feature_enabled"] = feature_enabled
     templates.env.globals["status_label"] = status_label
     templates.env.globals["kind_label"] = kind_label
+
+    def csrf_token(request):
+        return getattr(request.state, "csrf_token", None) or request.cookies.get("csrftoken", "")
+    templates.env.globals["csrf_token"] = csrf_token
+
     return templates

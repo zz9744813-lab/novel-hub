@@ -131,7 +131,7 @@
 async function runCheck(filename = null) {
   try {
     const payload = filename ? { filename } : {};
-    const response = await fetch(`/api/projects/{{ project }}/consistency/run`, {
+    const response = await csrfFetch(`/api/projects/{{ project }}/consistency/run`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

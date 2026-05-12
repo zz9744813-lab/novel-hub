@@ -15,30 +15,33 @@
       ?.slice(name.length + 1) || '';
   }
 
-  function csrfToken() {
-    const raw = readCookie('csrftoken');
-    return raw ? decodeURIComponent(raw) : '';
-  }
-
-  const nativeFetch = window.fetch.bind(window);
-  window.fetch = (input, init = {}) => {
-    const method = (init.method || (input && input.method) || 'GET').toUpperCase();
-    if (!['GET', 'HEAD', 'OPTIONS', 'TRACE'].includes(method)) {
-      const url = typeof input === 'string' ? input : input.url;
-      const target = new URL(url, window.location.origin);
-      if (target.origin === window.location.origin) {
-        const headers = new Headers(init.headers || (input && input.headers) || {});
-        const token = csrfToken();
-        if (token && !headers.has('x-csrftoken')) headers.set('x-csrftoken', token);
-        init = { ...init, headers };
-      }
-    }
-    return nativeFetch(input, init);
+  window.getCSRFToken = function () {
+    const row = document.cookie
+      .split('; ')
+      .find((row) => row.startsWith('csrftoken='));
+    return row ? decodeURIComponent(row.split('=').slice(1).join('=')) : '';
   };
 
-  document.addEventListener('htmx:configRequest', (event) => {
-    const token = csrfToken();
-    if (token) event.detail.headers['x-csrftoken'] = token;
+  window.csrfHeaders = function (extra = {}) {
+    const token = window.getCSRFToken();
+    return token ? { ...extra, 'X-CSRFToken': token } : { ...extra };
+  };
+
+  window.csrfFetch = function (url, options = {}) {
+    const method = (options.method || 'GET').toUpperCase();
+    const headers = new Headers(options.headers || {});
+    if (!['GET', 'HEAD', 'OPTIONS', 'TRACE'].includes(method)) {
+      const token = window.getCSRFToken();
+      if (token && !headers.has('X-CSRFToken') && !headers.has('x-csrftoken')) {
+        headers.set('X-CSRFToken', token);
+      }
+    }
+    return fetch(url, { ...options, headers });
+  };
+
+  document.addEventListener('htmx:configRequest', function (event) {
+    const token = window.getCSRFToken();
+    if (token) event.detail.headers['X-CSRFToken'] = token;
   });
 
   function showToast(msg) {

@@ -100,7 +100,7 @@ sudo systemctl status novelhub
 
 - 不提交 `.env`、数据库、备份、Vault、真实小说正文
 - AI API Key 只存加密值，设置页不会回显完整密钥
-- CSRF 中间件目前明确停用，等所有表单和 fetch 调用补齐 token 后再重新启用
+- 生产环境默认启用 CSRF；前端通过本地 helper 为 HTMX/fetch 请求自动附带 token。
 - 登录失败会触发速率限制
 
 ## 验证

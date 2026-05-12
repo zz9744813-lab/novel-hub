@@ -9,7 +9,7 @@
     selectedChapter: null,
     loading: true,
     async init() {
-        const res = await fetch(`/api/projects/{{ project }}/outline`);
+        const res = await csrfFetch(`/api/projects/{{ project }}/outline`);
         this.data = await res.json();
         this.loading = false;
     },
@@ -46,7 +46,7 @@
                         {% if ai_enabled %}<button class="absolute top-2 right-2 text-[10px] bg-accent/10 text-accent px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity"
                                 @click.stop="
                                     $el.textContent='...';
-                                    fetch(`/api/projects/{{ project }}/ai/outline/volume`, {
+                                    csrfFetch(`/api/projects/{{ project }}/ai/outline/volume`, {
                                         method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({slug: v.slug})
                                     }).then(r=>r.json()).then(d=>{if(d.status==='ok'){v.synopsis=d.synopsis; $el.textContent='AI';}else{alert('生成失败');$el.textContent='AI';}})
                                 ">AI</button>{% endif %}
@@ -56,7 +56,7 @@
                                     const n = prompt('生成多少章？', '10');
                                     if (!n) return;
                                     $el.textContent = '...';
-                                    fetch(`/api/projects/{{ project }}/ai/outline/chapter`, {
+                                    csrfFetch(`/api/projects/{{ project }}/ai/outline/chapter`, {
                                         method: 'POST',
                                         headers: {'Content-Type': 'application/json'},
                                         body: JSON.stringify({slug: v.slug, count: parseInt(n)})
@@ -88,7 +88,7 @@
                                     if (!n) return;
                                     const fname = c.path.split(/[/\\]/).pop();
                                     $el.textContent = '...';
-                                    fetch(`/api/projects/{{ project }}/ai/outline/scene`, {
+                                    csrfFetch(`/api/projects/{{ project }}/ai/outline/scene`, {
                                         method: 'POST', headers: {'Content-Type':'application/json'},
                                         body: JSON.stringify({chapter: fname, count: parseInt(n)})
                                     }).then(r => r.json()).then(d => {
@@ -146,7 +146,7 @@
                                     if (!confirm('用 AI 把此场景的摘要扩写为正文？')) return;
                                     const fname = (data.chapters.find(c => c.path === selectedChapter) || {}).path?.split(/[/\\]/).pop();
                                     $el.textContent = '...';
-                                    fetch(`/api/projects/{{ project }}/ai/outline/draft`, {
+                                    csrfFetch(`/api/projects/{{ project }}/ai/outline/draft`, {
                                         method: 'POST', headers: {'Content-Type':'application/json'},
                                         body: JSON.stringify({chapter: fname, scene_id: s.id})
                                     }).then(r => r.json()).then(d => {

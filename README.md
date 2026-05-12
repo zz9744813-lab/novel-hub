@@ -8,10 +8,9 @@ Novel Hub 是一个面向长篇小说创作的本地优先工作台。正文以 
 
 - FastAPI + Jinja2 + HTMX
 - SQLite / FTS
-- CodeMirror 6（ESM importmap）
+- CodeMirror 6（esbuild 本地打包）
 - Alpine.js
 - Tailwind CSS CLI（本地预编译，不使用 CDN）
-- esbuild 本地打包 CodeMirror 编辑器
 - slowapi 登录限流
 - cryptography/Fernet 加密本地 AI 设置
 - systemd 部署

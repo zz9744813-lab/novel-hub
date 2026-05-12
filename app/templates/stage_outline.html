@@ -8,21 +8,21 @@
       const title = prompt('卷标题:'); if (!title) return;
       const slug = title.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g,'-').replace(/^-+|-+$/g,'') || 'volume';
       const seq = (this.volumes[this.volumes.length-1]?.seq || 0) + 1;
-      const r = await fetch(`/api/projects/{{ project }}/volumes/${slug}`, {
+      const r = await csrfFetch(`/api/projects/{{ project }}/volumes/${slug}`, {
         method:'PUT', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({title, seq, synopsis: '', target_words: 100000})
       });
       if (r.ok) location.reload(); else alert('新建失败');
     },
     async saveVolume(v) {
-      await fetch(`/api/projects/{{ project }}/volumes/${v.slug}`, {
+      await csrfFetch(`/api/projects/{{ project }}/volumes/${v.slug}`, {
         method:'PUT', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({title: v.title, synopsis: v.synopsis || '', target_words: v.target_words || 100000, seq: v.seq || 1})
       });
     },
     async aiSynopsis(slug) {
       this.aiBusy = true;
-      const r = await fetch('/api/projects/{{ project }}/ai/outline/volume', {
+      const r = await csrfFetch('/api/projects/{{ project }}/ai/outline/volume', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({slug})
       });
@@ -33,7 +33,7 @@
     async aiChapters(slug) {
       const n = parseInt(prompt('要拆几章?', '10')); if (!n || n < 1) return;
       this.aiBusy = true;
-      const r = await fetch('/api/projects/{{ project }}/ai/outline/chapter', {
+      const r = await csrfFetch('/api/projects/{{ project }}/ai/outline/chapter', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({slug, count: n})
       });
@@ -55,7 +55,7 @@
     </div>
     <label class="flex items-center gap-2 text-sm">
       <input type="checkbox" {% if stage_done %}checked{% endif %}
-             @change="fetch('/api/stages/{{ project }}/outline/done', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({done: $event.target.checked})}).then(()=>location.reload())"
+             @change="csrfFetch('/api/stages/{{ project }}/outline/done', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({done: $event.target.checked})}).then(()=>location.reload())"
              class="rounded border-border_color text-accent focus:ring-accent">
       <span>标记为已完成</span>
     </label>

@@ -51,7 +51,7 @@ async function createEntity() {
     const name = prompt('实体名称:');
     if (!name) return;
     const kind = '{{ kind or "character" }}';
-    const res = await fetch('/api/entities', {
+    const res = await csrfFetch('/api/entities', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({ project: '{{ project }}', name, kind })

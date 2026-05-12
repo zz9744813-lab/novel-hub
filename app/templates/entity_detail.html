@@ -290,7 +290,7 @@
                 if (!confirm('扫描所有章节，把 [[{{ entity.name }}]] 这种简写引用绑定到本实体？')) return;
                 this.textContent = '处理中...';
                 this.disabled = true;
-                fetch(`/api/projects/{{ project }}/bulk-bind-entities`, {
+                csrfFetch(`/api/projects/{{ project }}/bulk-bind-entities`, {
                     method: 'POST', headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({entity_id: '{{ entity.id }}'})
                 }).then(r => r.json()).then(d => {
@@ -305,7 +305,7 @@
 <script>
 window.deleteEntity = async () => {
     if (!confirm('确定删除这个实体吗？相关关系和引用记录也会被删除。')) return;
-    const res = await fetch(`/api/entities/{{ entity.id }}`, { method: 'DELETE' });
+    const res = await csrfFetch(`/api/entities/{{ entity.id }}`, { method: 'DELETE' });
     if (res.ok) window.location.href = `/projects/{{ project }}/entities`;
 };
 
@@ -327,7 +327,7 @@ window.saveEntity = async () => {
     };
 
     try {
-        const res = await fetch(`/api/entities/{{ entity.id }}`, {
+        const res = await csrfFetch(`/api/entities/{{ entity.id }}`, {
             method: 'PUT',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(data)
@@ -346,7 +346,7 @@ window.saveEntity = async () => {
 window.bulkBind = async () => {
     if (!confirm('扫描所有章节，把 [[{{ entity.name }}]] 这种简写引用绑定到本实体？')) return;
     try {
-        const res = await fetch(`/api/projects/{{ project }}/bulk-bind-entities`, { 
+        const res = await csrfFetch(`/api/projects/{{ project }}/bulk-bind-entities`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({entity_id: '{{ entity.id }}'})

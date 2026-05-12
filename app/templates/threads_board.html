@@ -210,13 +210,13 @@ function threadsBoard(project) {
       try {
         let res;
         if (this.isEdit) {
-          res = await fetch(`/api/projects/${project}/threads/${this.editFilename}`, {
+          res = await csrfFetch(`/api/projects/${project}/threads/${this.editFilename}`, {
             method: 'PUT',
             headers: this.headers,
             body: JSON.stringify(payload)
           });
         } else {
-          res = await fetch(`/api/projects/${project}/threads`, {
+          res = await csrfFetch(`/api/projects/${project}/threads`, {
             method: 'POST',
             headers: this.headers,
             body: JSON.stringify(payload)
@@ -239,7 +239,7 @@ function threadsBoard(project) {
       if (!confirm('确定删除此伏笔吗？')) return;
 
       try {
-        const res = await fetch(`/api/projects/${project}/threads/${filename}`, {
+        const res = await csrfFetch(`/api/projects/${project}/threads/${filename}`, {
           method: 'DELETE',
           headers: this.headers
         });

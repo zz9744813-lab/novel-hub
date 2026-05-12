@@ -9,7 +9,7 @@
     aiOutput: '',
     async save() {
       this.saving = true;
-      const r = await fetch('/api/projects/{{ project }}/workflow/premise/content', {
+      const r = await csrfFetch('/api/projects/{{ project }}/workflow/premise/content', {
         method: 'PUT', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({content: this.content})
       });
@@ -19,7 +19,7 @@
     },
     async ai(action) {
       this.aiBusy = true; this.aiOutput = '';
-      const r = await fetch('/api/projects/{{ project }}/stage/premise/ai', {
+      const r = await csrfFetch('/api/projects/{{ project }}/stage/premise/ai', {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({action, current: this.content})
       });
@@ -42,7 +42,7 @@
     </div>
     <label class="flex items-center gap-2 text-sm">
       <input type="checkbox" {% if stage_done %}checked{% endif %}
-             @change="fetch('/api/stages/{{ project }}/premise/done', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({done: $event.target.checked})}).then(()=>location.reload())"
+             @change="csrfFetch('/api/stages/{{ project }}/premise/done', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({done: $event.target.checked})}).then(()=>location.reload())"
              class="rounded border-border_color text-accent focus:ring-accent">
       <span>标记为已完成</span>
     </label>

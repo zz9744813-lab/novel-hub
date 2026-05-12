@@ -59,7 +59,7 @@
     panel.classList.remove('hidden');
     content.textContent = '正在加载差异...';
     try {
-      const res = await fetch('/api/snapshots/' + id + '/diff');
+      const res = await csrfFetch('/api/snapshots/' + id + '/diff');
       const data = await res.json();
       if (!res.ok || data.status !== 'ok') throw new Error(data.detail || '加载失败');
       content.textContent = data.diff || '该快照与当前内容没有差异。';

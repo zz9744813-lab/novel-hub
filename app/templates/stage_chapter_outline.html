@@ -8,7 +8,7 @@
     aiBusy: {},
     async saveSynopsis(filename, val) {
       this.saving[filename] = true;
-      const r = await fetch(`/api/projects/{{ project }}/chapters/${encodeURIComponent(filename)}/synopsis`, {
+      const r = await csrfFetch(`/api/projects/{{ project }}/chapters/${encodeURIComponent(filename)}/synopsis`, {
         method:'PUT', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({synopsis: val})
       });
@@ -17,7 +17,7 @@
     },
     async aiSynopsis(c) {
       this.aiBusy[c.filename] = true;
-      const r = await fetch('/api/projects/{{ project }}/stage/chapter_outline/ai', {
+      const r = await csrfFetch('/api/projects/{{ project }}/stage/chapter_outline/ai', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({filename: c.filename})
       });
@@ -44,7 +44,7 @@
     </div>
     <label class="flex items-center gap-2 text-sm">
       <input type="checkbox" {% if stage_done %}checked{% endif %}
-             @change="fetch('/api/stages/{{ project }}/chapter_outline/done', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({done: $event.target.checked})}).then(()=>location.reload())"
+             @change="csrfFetch('/api/stages/{{ project }}/chapter_outline/done', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({done: $event.target.checked})}).then(()=>location.reload())"
              class="rounded border-border_color text-accent focus:ring-accent">
       <span>标记为已完成</span>
     </label>

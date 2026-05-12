@@ -32,7 +32,7 @@
       <button @click="open = false" class="px-3 py-1.5 text-xs border border-border_color rounded hover:bg-bg">关闭</button>
       <button @click="
           saving = true;
-          fetch('/api/prompts/{{ project }}/{{ stage }}', {
+          csrfFetch('/api/prompts/{{ project }}/{{ stage }}', {
             method: 'PUT',
             headers: {'Content-Type':'application/json'},
             body: JSON.stringify({content: value})

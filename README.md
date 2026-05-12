@@ -15,7 +15,16 @@ Novel Hub 是一个面向长篇小说创作的本地优先工作台。正文以 
 - cryptography/Fernet 加密本地 AI 设置
 - systemd 部署
 
-## 核心能力
+## 已完成功能 (核心能力)
+
+- 时间线 (Timeline)
+- 关系图 (Graph)
+- 伏笔板 (Threads board)
+- 角色弧光 (Role Arc)
+- AI 一致性检查报告页 (Consistency check)
+- Tailwind CSS 本地预编译
+- CodeMirror 本地 bundle
+- 生产环境 CSRF
 
 - 项目、章节、实体、搜索、导出、统计与设置页
 - 三栏编辑器：章节树 / CodeMirror 6 编辑区 / 元信息侧栏

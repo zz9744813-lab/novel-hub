@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -80,7 +81,6 @@ app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 
 ENABLE_CSRF = env_bool("NOVELHUB_ENABLE_CSRF", APP_ENV == "production")
 
-import re
 if ENABLE_CSRF:
     app.add_middleware(
         CSRFMiddleware,

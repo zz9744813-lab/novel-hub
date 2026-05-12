@@ -16,7 +16,7 @@
           ">
         <label class="flex flex-col gap-1 text-sm">项目
             <select x-model="project" required 
-                    @change="if (project) fetch(`/api/projects/${project}/volumes`).then(r=>r.json()).then(d=>volumes=d.volumes)"
+                    @change="if (project) csrfFetch(`/api/projects/${project}/volumes`).then(r=>r.json()).then(d=>volumes=d.volumes)"
                     class="bg-bg border border-border_color rounded px-3 py-2 focus:outline-none focus:border-accent transition-colors">
                 <option value="">--</option>
                 {% for p in projects %}

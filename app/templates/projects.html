@@ -7,7 +7,7 @@
       <h2 class="text-2xl font-semibold">项目</h2>
       <p class="text-sm text-muted mt-1">管理你的小说工程，从立意到写作逐步推进。</p>
     </div>
-    <form class="flex flex-col sm:flex-row gap-3" action="/projects/new" method="post">
+    <form class="flex flex-col sm:flex-row gap-3" action="/projects/new" method="post" hx-boost="true">
       <input name="name" placeholder="新项目名称" required class="bg-bg border border-border_color rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" />
       <button class="bg-accent text-white hover:bg-accent/90 border border-accent rounded-lg px-4 py-2 text-sm font-medium transition-colors" type="submit">新建项目</button>
     </form>

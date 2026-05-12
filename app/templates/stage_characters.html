@@ -6,7 +6,7 @@
     aiOutput: '',
     async ai(action) {
       this.aiBusy = true; this.aiOutput = '';
-      const r = await fetch('/api/projects/{{ project }}/stage/characters/ai', {
+      const r = await csrfFetch('/api/projects/{{ project }}/stage/characters/ai', {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({action})
       });
@@ -16,7 +16,7 @@
     },
     async createEntity() {
       const name = prompt('角色姓名:'); if (!name) return;
-      const r = await fetch('/api/entities', {
+      const r = await csrfFetch('/api/entities', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({project: '{{ project }}', name, kind: 'character'})
       });
@@ -37,7 +37,7 @@
     </div>
     <label class="flex items-center gap-2 text-sm">
       <input type="checkbox" {% if stage_done %}checked{% endif %}
-             @change="fetch('/api/stages/{{ project }}/characters/done', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({done: $event.target.checked})}).then(()=>location.reload())"
+             @change="csrfFetch('/api/stages/{{ project }}/characters/done', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({done: $event.target.checked})}).then(()=>location.reload())"
              class="rounded border-border_color text-accent focus:ring-accent">
       <span>标记为已完成</span>
     </label>

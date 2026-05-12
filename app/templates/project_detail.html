@@ -15,7 +15,7 @@
       </div>
 
       <div class="flex flex-col sm:flex-row gap-3 lg:justify-end">
-        <form action="/projects/{{ project }}/chapters/new" method="post" class="flex items-center gap-2">
+        <form action="/projects/{{ project }}/chapters/new" method="post" class="flex items-center gap-2" hx-boost="true">
           <input name="title" placeholder="新章节标题" required class="bg-bg border border-border_color rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent w-44">
           <button class="bg-accent text-white hover:bg-accent/90 border border-accent rounded-lg px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap">新建章节</button>
         </form>
@@ -37,11 +37,11 @@
             <a class="px-3 py-2 rounded text-sm hover:bg-bg" href="/projects/{{ project }}/threads-board">伏笔板</a>
             <a class="px-3 py-2 rounded text-sm hover:bg-bg" href="/projects/{{ project }}/export/all" target="_blank">导出全书</a>
             <button type="button" class="text-left px-3 py-2 rounded text-sm hover:bg-bg"
-                    onclick="const newName = prompt('新项目名:', '{{ project }}'); if(newName && newName !== '{{ project }}') fetch('/projects/{{ project }}/rename', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: newName})}).then(res => res.json()).then(data => { if(data.status==='ok') window.location.href = data.new_url; else alert('失败: ' + data.detail); })">
+                    onclick="const newName = prompt('新项目名:', '{{ project }}'); if(newName && newName !== '{{ project }}') csrfFetch('/projects/{{ project }}/rename', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: newName})}).then(res => res.json()).then(data => { if(data.status==='ok') window.location.href = data.new_url; else alert('失败: ' + data.detail); })">
               重命名
             </button>
             <button type="button" class="text-left px-3 py-2 rounded text-sm text-danger hover:bg-danger/10"
-                    onclick="if(confirm('确定永久删除项目「{{ project }}」及所有内容吗？此操作不可恢复。')) fetch('/projects/{{ project }}', {method: 'DELETE'}).then(res => res.json()).then(data => { if(data.status==='ok') window.location.href = '/'; else alert('失败: ' + data.detail); })">
+                    onclick="if(confirm('确定永久删除项目「{{ project }}」及所有内容吗？此操作不可恢复。')) csrfFetch('/projects/{{ project }}', {method: 'DELETE'}).then(res => res.json()).then(data => { if(data.status==='ok') window.location.href = '/'; else alert('失败: ' + data.detail); })">
               删除项目
             </button>
           </div>
@@ -87,7 +87,7 @@
           项目设置
           <svg class="w-4 h-4 transition-transform" :class="open && 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
         </button>
-        <form x-show="open" x-transition action="/projects/{{ project }}/meta" method="post" class="flex flex-col gap-3 mt-3 pt-3 border-t border-border_color">
+        <form x-show="open" x-transition action="/projects/{{ project }}/meta" method="post" class="flex flex-col gap-3 mt-3 pt-3 border-t border-border_color" hx-boost="true">
           <label class="flex flex-col gap-1 text-xs text-muted">
             目标字数
             <input type="number" name="target_words" value="{{ project_info.target_words }}" class="bg-bg border border-border_color rounded px-2.5 py-1.5 text-sm text-text_color focus:outline-none focus:border-accent">
@@ -113,7 +113,7 @@
                  volumes: [],
                  loading: true,
                  async load() {
-                   const r = await fetch(`/api/projects/{{ project }}/volumes`);
+                   const r = await csrfFetch(`/api/projects/{{ project }}/volumes`);
                    const d = await r.json();
                    this.volumes = d.volumes || [];
                    this.loading = false;
@@ -123,7 +123,7 @@
                        animation: 150,
                        onEnd: async () => {
                          const order = [...el.querySelectorAll('[data-slug]')].map(n => n.dataset.slug);
-                         await fetch(`/api/projects/{{ project }}/volumes/reorder`, {
+                         await csrfFetch(`/api/projects/{{ project }}/volumes/reorder`, {
                            method: 'POST',
                            headers: {'Content-Type':'application/json'},
                            body: JSON.stringify({order})
@@ -133,7 +133,7 @@
                    });
                  },
                  async save(v) {
-                   await fetch(`/api/projects/{{ project }}/volumes/${v.slug}`, {
+                   await csrfFetch(`/api/projects/{{ project }}/volumes/${v.slug}`, {
                      method: 'PUT',
                      headers: {'Content-Type':'application/json'},
                      body: JSON.stringify({title: v.title, synopsis: v.synopsis, target_words: v.target_words, seq: v.seq})
@@ -204,7 +204,7 @@
                       onclick="event.preventDefault(); event.stopPropagation();
                                const n = prompt('新文件名（含 .md）:', '{{ c.filename }}');
                                if(n && n !== '{{ c.filename }}')
-                                 fetch('/projects/{{ project }}/chapters/{{ c.filename }}/rename',
+                                 csrfFetch('/projects/{{ project }}/chapters/{{ c.filename }}/rename',
                                    {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name: n})})
                                  .then(r=>r.json()).then(d=>{ if(d.status==='ok') location.reload(); else alert(d.detail||'失败'); });">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
@@ -212,7 +212,7 @@
               <button type="button" class="text-muted hover:text-red-500 p-1 transition-colors" title="删除章节"
                       onclick="event.preventDefault(); event.stopPropagation();
                                if(confirm('确定删除章节「{{ c.title }}」吗？此操作不可撤销。'))
-                                 fetch('/projects/{{ project }}/chapters/{{ c.filename }}', {method:'DELETE'})
+                                 csrfFetch('/projects/{{ project }}/chapters/{{ c.filename }}', {method:'DELETE'})
                                  .then(r=>r.json()).then(()=> location.reload());">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
               </button>
@@ -240,7 +240,7 @@
       handle: '.cursor-grab',
       onEnd: async () => {
         const order = [...el.querySelectorAll('[data-filename]')].map(n => n.dataset.filename);
-        await fetch('/projects/{{ project }}/chapters/reorder', {
+        await csrfFetch('/projects/{{ project }}/chapters/reorder', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({order})

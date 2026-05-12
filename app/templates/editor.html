@@ -75,7 +75,7 @@
       <div class="h-1.5 rounded-full bg-border_color overflow-hidden">
         <div class="h-full bg-accent transition-all duration-500" style="width:{% if goal %}{{ (project_words / goal * 100)|round|int }}{% else %}0{% endif %}%"></div>
       </div>
-      <form action="/projects/{{ project }}/chapters/new" method="post" class="flex gap-2">
+      <form action="/projects/{{ project }}/chapters/new" method="post" class="flex gap-2" hx-boost="true">
         <input name="title" placeholder="新章节..." required class="flex-1 bg-bg border border-border_color rounded px-2.5 py-1.5 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all">
         <button class="bg-panel border border-border_color hover:border-accent hover:text-accent rounded px-2.5 py-1.5 text-sm transition-colors">+</button>
       </form>
@@ -263,7 +263,7 @@
 window.restoreSnapshot = async (id) => {
     if (!confirm('确定要还原到此快照吗？当前未保存的修改将会丢失。')) return;
     try {
-        const res = await fetch(`/api/snapshots/${id}/restore`, { method: 'POST' });
+        const res = await csrfFetch(`/api/snapshots/${id}/restore`, { method: 'POST' });
         if (res.ok) window.location.reload();
         else alert('还原失败');
     } catch (err) { console.error(err); }
@@ -272,7 +272,7 @@ window.restoreSnapshot = async (id) => {
 window.deleteChapter = async () => {
     if (!confirm('确定要永久删除本章节吗？')) return;
     try {
-        const res = await fetch(`/projects/{{ project }}/chapters/{{ filename }}`, { method: 'DELETE' });
+        const res = await csrfFetch(`/projects/{{ project }}/chapters/{{ filename }}`, { method: 'DELETE' });
         const data = await res.json();
         if (data.status === 'ok') window.location.href = data.new_url;
         else alert('删除失败');

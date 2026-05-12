@@ -112,6 +112,12 @@ sudo systemctl status novelhub
 - 生产环境默认启用 CSRF；前端通过本地 helper 为 HTMX/fetch 请求自动附带 token。
 - 登录失败会触发速率限制
 
+## CI 与部署
+
+- GitHub Actions 会在 push / PR 时运行 pytest 和 npm build。
+- 部署前请按 `docs/deployment-checklist.md` 检查。
+- 如果使用了 Makefile，可以使用 `make verify` 来在本地执行全量构建和测试验证。
+
 ## 验证
 
 ```bash

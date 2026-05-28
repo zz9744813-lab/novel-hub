@@ -1,8 +1,59 @@
+```
+# Dependencies
 node_modules/
-.next/
-out/
-*.db
-*.db-journal
+
+# Build outputs
+dist/
+build/
+target/
+
+# Logs
+*.log
+
+# Environment variables
 .env
 .env.local
-.env.production
+*.env.*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+.ENV
+.python-version
+
+# Compiled JavaScript
+*.js.map
+*.jsx.map
+*.ts.map
+*.tsx.map
+
+# Coverage reports
+coverage/
+*.lcov
+*.coverage
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Testing
+.nyc_output/
+coverage/
+junit.xml
+
+# Temporary files
+*.tmp
+*.temp
+```

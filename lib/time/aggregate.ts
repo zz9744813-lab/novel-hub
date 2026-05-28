@@ -1,16 +1,18 @@
+import type { WeeklyAgg } from "@/lib/types";
 import { prisma } from "@/lib/db";
 
-export type WeeklyAgg = {
-  weekKey: string;
-  rawHours: number;
-  effectiveHours: number;
-  conversionRate: number;
-  bySkill: { skillId: string; name: string; raw: number; effective: number }[];
-  byCategory: Record<string, number>;
-  driftHours: number;
-};
-
-export async function getWeeklyAggregation(userId: string, weekStart: Date, weekEnd: Date): Promise<WeeklyAgg> {
+/**
+ * Get aggregated statistics for a given week.
+ * @param userId - User ID
+ * @param weekStart - Start of the week (inclusive)
+ * @param weekEnd - End of the week (exclusive)
+ * @returns Weekly aggregation data
+ */
+export async function getWeeklyAggregation(
+  userId: string,
+  weekStart: Date,
+  weekEnd: Date
+): Promise<WeeklyAgg> {
   const logs = await prisma.timeLog.findMany({
     where: {
       userId,
@@ -26,16 +28,27 @@ export async function getWeeklyAggregation(userId: string, weekStart: Date, week
   const bySkillMap = new Map<string, { name: string; raw: number; effective: number }>();
   const byCategory: Record<string, number> = {};
 
+  // Aggregate data from all logs
   for (const log of logs) {
     for (const entry of log.entries) {
       rawHours += entry.rawHours;
       effectiveHours += entry.effectiveHours;
 
-      if (entry.category === "drift") driftHours += entry.rawHours;
+      // Track drift hours
+      if (entry.category === "drift") {
+        driftHours += entry.rawHours;
+      }
+
+      // Aggregate by category
       byCategory[entry.category] = (byCategory[entry.category] ?? 0) + entry.rawHours;
 
+      // Aggregate by skill
       if (entry.skillId && entry.skill) {
-        const existing = bySkillMap.get(entry.skillId) ?? { name: entry.skill.name, raw: 0, effective: 0 };
+        const existing = bySkillMap.get(entry.skillId) ?? {
+          name: entry.skill.name,
+          raw: 0,
+          effective: 0,
+        };
         existing.raw += entry.rawHours;
         existing.effective += entry.effectiveHours;
         bySkillMap.set(entry.skillId, existing);
@@ -43,12 +56,15 @@ export async function getWeeklyAggregation(userId: string, weekStart: Date, week
     }
   }
 
+  // Convert skill map to array
   const bySkill = Array.from(bySkillMap.entries()).map(([skillId, data]) => ({
     skillId,
     ...data,
   }));
 
-  const weekKey = `${weekStart.getFullYear()}-W${String(Math.ceil((weekStart.getDate()) / 7)).padStart(2, "0")}`;
+  // Generate week key (e.g., "2024-W01")
+  const weekNumber = Math.ceil(weekStart.getDate() / 7);
+  const weekKey = `${weekStart.getFullYear()}-W${String(weekNumber).padStart(2, "0")}`;
 
   return {
     weekKey,

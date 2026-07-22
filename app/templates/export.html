@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}导出 · Novel Hub{% endblock %}
+{% block content %}
+<section class="flex flex-col gap-6 max-w-2xl mx-auto">
+    <h2 class="text-2xl font-bold">导出项目</h2>
+    
+    <form class="bg-panel border border-border_color rounded-xl p-6 flex flex-col gap-4" 
+          x-data="{ project: '', volume: '', format: 'epub', from_ch: 0, to_ch: 999999, status: '', volumes: [] }"
+          @submit.prevent="
+            const params = new URLSearchParams({
+                format: format, from_chapter: from_ch, to_chapter: to_ch
+            });
+            if (volume) params.set('volume', volume);
+            if (status) params.set('status', status);
+            window.location.href = `/api/projects/${project}/export?${params}`;
+          ">
+        <label class="flex flex-col gap-1 text-sm">项目
+            <select x-model="project" required 
+                    @change="if (project) csrfFetch(`/api/projects/${project}/volumes`).then(r=>r.json()).then(d=>volumes=d.volumes)"
+                    class="bg-bg border border-border_color rounded px-3 py-2 focus:outline-none focus:border-accent transition-colors">
+                <option value="">--</option>
+                {% for p in projects %}
+                <option value="{{ p.name }}">{{ p.name }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label class="flex flex-col gap-1 text-sm">卷（留空=全书）
+            <select x-model="volume" class="bg-bg border border-border_color rounded px-3 py-2 focus:outline-none focus:border-accent transition-colors">
+                <option value="">全部</option>
+                <template x-for="v in volumes" :key="v.slug">
+                    <option :value="v.slug" x-text="v.title"></option>
+                </template>
+            </select>
+        </label>
+        <div class="grid grid-cols-2 gap-3">
+            <label class="flex flex-col gap-1 text-sm">起始章
+                <input type="number" x-model.number="from_ch" min="0" class="bg-bg border border-border_color rounded px-3 py-2 focus:outline-none focus:border-accent transition-colors">
+            </label>
+            <label class="flex flex-col gap-1 text-sm">结束章
+                <input type="number" x-model.number="to_ch" class="bg-bg border border-border_color rounded px-3 py-2 focus:outline-none focus:border-accent transition-colors">
+            </label>
+        </div>
+        <label class="flex flex-col gap-1 text-sm">状态过滤
+            <select x-model="status" class="bg-bg border border-border_color rounded px-3 py-2 focus:outline-none focus:border-accent transition-colors">
+                <option value="">不过滤</option>
+                <option value="idea">灵感</option>
+                <option value="outline">大纲</option>
+                <option value="draft">草稿</option>
+                <option value="rewrite">重写</option>
+                <option value="polish">润色</option>
+                <option value="done">完成</option>
+                <option value="published">已发布</option>
+            </select>
+        </label>
+        <label class="flex flex-col gap-1 text-sm">格式
+            <select x-model="format" class="bg-bg border border-border_color rounded px-3 py-2 focus:outline-none focus:border-accent transition-colors">
+                <option value="epub">EPUB</option>
+                <option value="md">Markdown 单文件</option>
+                <option value="txt">纯文本</option>
+            </select>
+        </label>
+        <button type="submit" class="bg-accent text-white py-2 rounded-lg font-bold hover:bg-accent/90 transition-colors mt-2">导出</button>
+    </form>
+</section>
+{% endblock %}

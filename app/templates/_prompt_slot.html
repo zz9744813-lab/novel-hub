@@ -1,0 +1,53 @@
+{#
+  Stage prompt slot floating panel.
+  Usage:
+    {% with project=project, stage='premise', prompt_value=stage_prompt %}
+      {% include '_prompt_slot.html' %}
+    {% endwith %}
+#}
+<div x-data="{ open: false, value: {{ (prompt_value or '')|tojson }}, saving: false, savedAt: '' }"
+     class="absolute top-4 right-4 z-30">
+  <button @click="open = !open"
+          class="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border_color text-xs hover:bg-panel transition-colors"
+          :class="value && value.length ? 'border-accent text-accent' : 'text-muted'"
+          :title="value && value.length ? '已设提示词,点击修改' : '设置 AI 提示词'">
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
+    <span x-text="value && value.length ? 'AI 提示词 ✓' : 'AI 提示词'"></span>
+  </button>
+
+  <div x-show="open" x-transition @click.outside="open = false" style="display:none;"
+       class="mt-2 w-96 bg-panel border border-border_color rounded-lg shadow-xl p-4 flex flex-col gap-3">
+    <div class="flex items-center justify-between">
+      <h4 class="text-sm font-bold">本阶段 AI 提示词</h4>
+      <span class="text-[10px] text-muted" x-text="savedAt"></span>
+    </div>
+    <p class="text-xs text-muted leading-relaxed">
+      在此处写的内容会作为「本阶段约束」自动注入到所有调用 AI 的请求里。例:
+      <code class="bg-bg px-1 rounded">"必须保留张明的身份秘密"</code>。留空表示无阶段约束。
+    </p>
+    <textarea x-model="value" rows="6"
+              class="bg-bg border border-border_color rounded px-2 py-1.5 text-sm focus:outline-none focus:border-accent resize-y"
+              placeholder="例如:第一人称视角,不要剧透结局,角色对话用粤语口语..."></textarea>
+    <div class="flex justify-end gap-2">
+      <button @click="open = false" class="px-3 py-1.5 text-xs border border-border_color rounded hover:bg-bg">关闭</button>
+      <button @click="
+          saving = true;
+          csrfFetch('/api/prompts/{{ project }}/{{ stage }}', {
+            method: 'PUT',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({content: value})
+          })
+          .then(r => r.json())
+          .then(d => {
+            saving = false;
+            if (d.status === 'ok') { savedAt = '已保存 ' + new Date().toLocaleTimeString().slice(0,5); }
+            else { alert('保存失败: ' + (d.detail || '')); }
+          })
+          .catch(() => { saving = false; alert('网络错误'); });
+      " :disabled="saving"
+        class="px-3 py-1.5 text-xs bg-accent text-white rounded hover:brightness-110 disabled:opacity-50">
+        <span x-show="!saving">保存</span><span x-show="saving">保存中...</span>
+      </button>
+    </div>
+  </div>
+</div>

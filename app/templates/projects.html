@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}项目 · Novel Hub{% endblock %}
+{% block content %}
+<section class="flex flex-col gap-6">
+  <div class="bg-panel border border-border_color rounded-xl p-6 shadow-sm flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+    <div>
+      <h2 class="text-2xl font-semibold">项目</h2>
+      <p class="text-sm text-muted mt-1">管理你的小说工程，从立意到写作逐步推进。</p>
+    </div>
+    <form class="flex flex-col sm:flex-row gap-3" action="/projects/new" method="post" hx-boost="true">
+      <input name="name" placeholder="新项目名称" required class="bg-bg border border-border_color rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all" />
+      <button class="bg-accent text-white hover:bg-accent/90 border border-accent rounded-lg px-4 py-2 text-sm font-medium transition-colors" type="submit">新建项目</button>
+    </form>
+  </div>
+
+  {% if projects %}
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+    {% for p in projects %}
+    <article class="bg-panel border border-border_color rounded-xl p-5 hover:border-accent/50 transition-colors shadow-sm flex flex-col group">
+      <div class="flex items-start justify-between gap-3 mb-4">
+        <h3 class="text-lg font-semibold group-hover:text-accent transition-colors truncate">{{ p.name }}</h3>
+        <span class="text-[11px] font-medium px-2 py-0.5 rounded-full border border-border_color text-muted uppercase">
+          {% if p.status == 'active' %}写作中{% else %}规划中{% endif %}
+        </span>
+      </div>
+
+      {% if p.synopsis %}
+      <p class="text-sm text-muted line-clamp-2 mb-4">{{ p.synopsis }}</p>
+      {% endif %}
+
+      <div class="grid grid-cols-2 gap-4 mb-5 text-sm">
+        <div>
+          <span class="block text-muted text-xs mb-1">正文</span>
+          <p class="font-medium">{{ p.chapter_count }} 章 / {{ p.total_words }} 字</p>
+        </div>
+        <div>
+          <span class="block text-muted text-xs mb-1">资料库</span>
+          <p class="font-medium">{{ p.character_count }} 人物 / {{ p.world_count }} 设定</p>
+        </div>
+      </div>
+
+      <div class="mt-auto pt-4 border-t border-border_color/50">
+        <div class="flex justify-between text-xs text-muted mb-2">
+          <span>目标进度</span>
+          <span>{{ p.progress }}%</span>
+        </div>
+        <div class="h-2 rounded-full bg-border_color overflow-hidden mb-3">
+          <div class="h-full bg-accent transition-all duration-500" style="width: {{ p.progress }}%"></div>
+        </div>
+        <div class="flex items-center justify-between mt-4">
+          <span class="text-xs text-muted">{% if p.latest %}{{ p.latest.strftime('%Y-%m-%d %H:%M') }}{% else %}还没有章节{% endif %}</span>
+          <a class="text-sm font-medium text-accent hover:text-accent/80 transition-colors flex items-center gap-1" href="/projects/{{ p.name }}">
+            进入项目
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+          </a>
+        </div>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="bg-panel border border-dashed border-border_color rounded-xl p-12 text-center text-muted">
+    <svg class="w-12 h-12 mx-auto mb-4 text-border_color" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
+    <p>还没有项目。创建一个项目后，就可以从立意、世界观、人物、总纲、细纲一路推进到写作。</p>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

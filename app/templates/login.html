@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>登录 · Novel Hub</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/tailwind.css" />
+  <link rel="stylesheet" href="/static/css/app.css" />
+  <style>
+    body { font-family: Inter, system-ui, sans-serif; }
+  </style>
+</head>
+<body class="min-h-screen bg-bg text-text_color flex items-center justify-center p-4 selection:bg-accent/30" style="background: radial-gradient(circle at top, #232323, #171717 60%);">
+  <main class="w-full max-w-[340px] bg-panel border border-border_color rounded-2xl p-8 shadow-xl">
+    <div class="text-center mb-8">
+      <div class="w-12 h-12 bg-accent/10 text-accent rounded-xl flex items-center justify-center mx-auto mb-4 border border-accent/20">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path></svg>
+      </div>
+      <h1 class="text-2xl font-bold mb-1">Novel Hub</h1>
+      <p class="text-sm text-muted">面向长篇小说创作的本地工作台</p>
+    </div>
+
+    <form method="post" class="flex flex-col gap-4">
+      <div class="flex flex-col gap-2">
+        <label class="text-sm font-medium text-muted ml-1">管理员密码</label>
+        <div class="relative">
+          <input type="password" name="password" required autocomplete="current-password"
+                 class="w-full bg-bg border border-border_color rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all placeholder:text-border_color"
+                 placeholder="输入密码进入工作台" />
+        </div>
+      </div>
+
+      {% if error %}
+      <div class="text-danger text-sm text-center bg-danger/10 border border-danger/20 rounded-lg py-2 px-3 mt-1">
+        {{ error }}
+      </div>
+      {% endif %}
+
+      <button class="w-full bg-accent text-white hover:bg-accent/90 border border-accent rounded-xl px-4 py-3 text-sm font-medium transition-colors mt-2 flex items-center justify-center gap-2" type="submit">
+        登录
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+      </button>
+    </form>
+  </main>
+</body>
+</html>

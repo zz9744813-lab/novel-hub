@@ -1,0 +1,27 @@
+<div class="flex flex-col gap-4">
+  <div class="flex items-center justify-between border-b border-border_color pb-2 mb-2">
+    <h4 class="font-bold">版本差异对比</h4>
+    <span class="text-[10px] text-muted">红色 = 备份版 | 绿色 = 当前版</span>
+  </div>
+  <div class="bg-bg rounded p-4 font-mono text-xs overflow-x-auto whitespace-pre leading-relaxed custom-scrollbar max-h-[500px]">
+    {% for line in diff %}
+      {% if line.startswith('+') and not line.startswith('+++') %}
+        <div class="text-green-500 bg-green-500/10">{{ line }}</div>
+      {% elif line.startswith('-') and not line.startswith('---') %}
+        <div class="text-red-500 bg-red-500/10">{{ line }}</div>
+      {% elif line.startswith('@@') %}
+        <div class="text-accent/50 italic py-1">{{ line }}</div>
+      {% else %}
+        <div class="opacity-70">{{ line }}</div>
+      {% endif %}
+    {% endfor %}
+    {% if not diff %}
+      <div class="text-muted italic text-center py-4">两个版本完全一致</div>
+    {% endif %}
+  </div>
+  <button type="button" 
+          class="bg-accent text-white hover:bg-accent/90 rounded-lg px-4 py-2 text-xs font-medium transition-colors w-full"
+          onclick="if(confirm('确定要还原到此历史版本吗？当前内容将被覆盖（会生成新备份）。')) csrfFetch(window.location.pathname.replace('/diff/', '/backups/') + '/restore', {method: 'POST'}).then(r=>r.json()).then(d=>{ if(d.status==='ok') window.location.reload(); else alert('还原失败'); })">
+    还原此版本
+  </button>
+</div>

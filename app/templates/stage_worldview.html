@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}世界观 · {{ project }} · Novel Hub{% endblock %}
+{% block content %}
+<section class="flex flex-col gap-4 relative" x-data="{
+    content: {{ content|tojson }},
+    saving: false,
+    savedAt: '',
+    aiBusy: false,
+    aiOutput: '',
+    async save() {
+      this.saving = true;
+      const r = await csrfFetch('/api/projects/{{ project }}/workflow/worldview/content', {
+        method: 'PUT', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({content: this.content})
+      });
+      const d = await r.json();
+      this.saving = false;
+      if (d.status === 'ok') this.savedAt = '已保存 ' + new Date().toLocaleTimeString().slice(0,5);
+    },
+    async ai(action) {
+      this.aiBusy = true; this.aiOutput = '';
+      const r = await csrfFetch('/api/projects/{{ project }}/stage/worldview/ai', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({action, current: this.content})
+      });
+      const d = await r.json();
+      this.aiBusy = false;
+      this.aiOutput = d.text || ('[错误] ' + (d.detail || ''));
+    },
+    appendToContent() { this.content = (this.content + '\n\n' + this.aiOutput).trim(); this.aiOutput = ''; }
+  }">
+  {% with project=project, stage='worldview', prompt_value=stage_prompt %}{% include '_prompt_slot.html' %}{% endwith %}
+
+  <header class="flex items-center justify-between gap-4">
+    <div>
+      <div class="flex items-center gap-2 text-xs text-muted">
+        <a href="/projects/{{ project }}" class="hover:text-accent">{{ project }}</a>
+        <span>›</span><span>世界观</span>
+      </div>
+      <h1 class="text-3xl font-bold mt-1">世界观 · 故事在哪儿发生?</h1>
+      <p class="text-sm text-muted mt-1">规则、地理、势力、时代背景、核心冲突的土壤。</p>
+    </div>
+    <label class="flex items-center gap-2 text-sm">
+      <input type="checkbox" {% if stage_done %}checked{% endif %}
+             @change="csrfFetch('/api/stages/{{ project }}/worldview/done', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({done: $event.target.checked})}).then(()=>location.reload())"
+             class="rounded border-border_color text-accent focus:ring-accent">
+      <span>标记为已完成</span>
+    </label>
+  </header>
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+    <div class="lg:col-span-2 bg-panel border border-border_color rounded-xl p-4 flex flex-col gap-3">
+      <div class="flex items-center justify-between">
+        <h2 class="text-sm font-bold">世界观稿</h2>
+        <div class="flex items-center gap-3">
+          <span class="text-xs text-muted" x-text="savedAt"></span>
+          <button @click="save()" :disabled="saving" class="bg-accent text-white px-3 py-1.5 rounded text-xs disabled:opacity-50">
+            <span x-show="!saving">保存</span><span x-show="saving">保存中...</span>
+          </button>
+        </div>
+      </div>
+      <textarea x-model="content" rows="22"
+                class="bg-bg border border-border_color rounded p-3 text-base leading-relaxed font-serif resize-y focus:outline-none focus:border-accent"
+                placeholder="建议小标题:
+# 时代与地理
+# 核心规则
+# 主要势力
+# 视觉氛围"></textarea>
+    </div>
+
+    <aside class="flex flex-col gap-3">
+      <div class="bg-panel border border-border_color rounded-xl p-4 flex flex-col gap-2">
+        <h3 class="text-sm font-bold mb-1">AI 协助</h3>
+        <button @click="ai('extend')" :disabled="aiBusy" class="bg-bg border border-border_color hover:border-accent rounded p-2.5 text-sm text-left disabled:opacity-50">帮我把骨架填满</button>
+        <button @click="ai('inconsistency')" :disabled="aiBusy" class="bg-bg border border-border_color hover:border-accent rounded p-2.5 text-sm text-left disabled:opacity-50">找出设定漏洞</button>
+        <button @click="ai('names')" :disabled="aiBusy" class="bg-bg border border-border_color hover:border-accent rounded p-2.5 text-sm text-left disabled:opacity-50">起 8 个地名/势力名</button>
+        <button @click="ai('timeline')" :disabled="aiBusy" class="bg-bg border border-border_color hover:border-accent rounded p-2.5 text-sm text-left disabled:opacity-50">列出关键时间节点</button>
+      </div>
+
+      <div x-show="aiOutput" x-transition class="bg-panel border border-accent/30 rounded-xl p-4 flex flex-col gap-2">
+        <h4 class="text-xs font-bold text-accent">AI 输出</h4>
+        <pre x-text="aiOutput" class="text-sm whitespace-pre-wrap font-sans bg-bg p-2 rounded max-h-96 overflow-y-auto"></pre>
+        <div class="flex gap-2">
+          <button @click="appendToContent()" class="bg-accent text-white px-3 py-1.5 rounded text-xs">追加到稿件</button>
+          <button @click="aiOutput = ''" class="bg-bg border border-border_color px-3 py-1.5 rounded text-xs">丢弃</button>
+        </div>
+      </div>
+      <div x-show="aiBusy" class="bg-panel border border-border_color rounded-xl p-4 text-center text-sm text-muted">AI 思考中...</div>
+    </aside>
+  </div>
+
+  <nav class="flex items-center justify-between mt-4 text-sm">
+    <a href="/projects/{{ project }}/stage/premise" class="text-muted hover:text-accent">← 立意</a>
+    <a href="/projects/{{ project }}/stage/characters" class="text-accent hover:underline">下一步:人物 →</a>
+  </nav>
+</section>
+{% endblock %}

@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}细纲 · {{ project }} · Novel Hub{% endblock %}
+{% block content %}
+<section class="flex flex-col gap-4 relative" x-data="{
+    chapters: {{ chapters|tojson }},
+    filterStatus: 'all',
+    saving: {},
+    aiBusy: {},
+    async saveSynopsis(filename, val) {
+      this.saving[filename] = true;
+      const r = await csrfFetch(`/api/projects/{{ project }}/chapters/${encodeURIComponent(filename)}/synopsis`, {
+        method:'PUT', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({synopsis: val})
+      });
+      this.saving[filename] = false;
+      if (!r.ok) alert('保存失败');
+    },
+    async aiSynopsis(c) {
+      this.aiBusy[c.filename] = true;
+      const r = await csrfFetch('/api/projects/{{ project }}/stage/chapter_outline/ai', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({filename: c.filename})
+      });
+      this.aiBusy[c.filename] = false;
+      const d = await r.json();
+      if (d.status === 'ok') { c.synopsis = d.text; await this.saveSynopsis(c.filename, d.text); }
+      else alert('失败:' + (d.detail || ''));
+    },
+    get filtered() {
+      if (this.filterStatus === 'all') return this.chapters;
+      return this.chapters.filter(c => (c.status || 'idea') === this.filterStatus);
+    }
+  }">
+  {% with project=project, stage='chapter_outline', prompt_value=stage_prompt %}{% include '_prompt_slot.html' %}{% endwith %}
+
+  <header class="flex items-center justify-between gap-4">
+    <div>
+      <div class="flex items-center gap-2 text-xs text-muted">
+        <a href="/projects/{{ project }}" class="hover:text-accent">{{ project }}</a>
+        <span>›</span><span>细纲</span>
+      </div>
+      <h1 class="text-3xl font-bold mt-1">细纲 · 每章一句话写什么?</h1>
+      <p class="text-sm text-muted mt-1">每章 1-3 句梗概。这一步过了再开写正文。</p>
+    </div>
+    <label class="flex items-center gap-2 text-sm">
+      <input type="checkbox" {% if stage_done %}checked{% endif %}
+             @change="csrfFetch('/api/stages/{{ project }}/chapter_outline/done', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({done: $event.target.checked})}).then(()=>location.reload())"
+             class="rounded border-border_color text-accent focus:ring-accent">
+      <span>标记为已完成</span>
+    </label>
+  </header>
+
+  <div class="flex items-center gap-3 text-xs">
+    <span class="text-muted">筛选:</span>
+    <template x-for="s in ['all','idea','outline','draft','done']" :key="s">
+      <button @click="filterStatus = s"
+              :class="filterStatus === s ? 'bg-accent text-white' : 'bg-bg border border-border_color text-muted'"
+              class="px-2.5 py-1 rounded transition-colors"
+              x-text="{all:'全部', idea:'构想', outline:'已纲', draft:'初稿', done:'已完'}[s]"></button>
+    </template>
+    <span class="text-muted ml-auto" x-text="`共 ${filtered.length} 章`"></span>
+  </div>
+
+  <template x-if="chapters.length">
+    <div class="bg-panel border border-border_color rounded-xl divide-y divide-border_color overflow-hidden">
+      <template x-for="c in filtered" :key="c.filename">
+        <div class="grid grid-cols-12 gap-3 p-3 items-start hover:bg-bg/50">
+          <div class="col-span-12 md:col-span-3 flex flex-col gap-0.5 min-w-0">
+            <span class="text-xs text-muted">第 <span x-text="c.chapter || '?'"></span> 章
+              <span class="ml-1 text-[10px] uppercase border border-border_color rounded px-1" x-text="{
+                'idea': '灵感',
+                'outline': '大纲',
+                'draft': '草稿',
+                'rewrite': '重写',
+                'polish': '润色',
+                'done': '完成',
+                'published': '已发布'
+              }[c.status || 'idea'] || (c.status || 'idea')"></span>
+            </span>
+            <strong class="text-sm truncate" x-text="c.title"></strong>
+            <span class="text-[10px] text-muted" x-text="(c.word_count || 0) + ' 字'"></span>
+          </div>
+          <div class="col-span-12 md:col-span-7">
+            <textarea rows="2" x-model="c.synopsis"
+                      class="w-full bg-bg border border-border_color rounded p-2 text-sm focus:outline-none focus:border-accent resize-y"
+                      @change="saveSynopsis(c.filename, c.synopsis)"
+                      placeholder="本章 1-3 句梗概..."></textarea>
+          </div>
+          <div class="col-span-12 md:col-span-2 flex md:flex-col gap-1.5">
+            <a :href="'/projects/{{ project }}/editor/' + c.filename"
+               class="text-center text-xs bg-accent text-white px-2 py-1.5 rounded hover:brightness-110">写正文 →</a>
+            <button @click="aiSynopsis(c)"
+                    class="text-center text-xs bg-bg border border-border_color hover:border-accent px-2 py-1.5 rounded">AI 写梗概</button>
+            <span class="text-[10px] text-muted text-center" x-show="saving[c.filename] || aiBusy[c.filename]">处理中...</span>
+          </div>
+        </div>
+      </template>
+    </div>
+  </template>
+  <template x-if="!chapters.length">
+    <div class="text-center text-muted py-12 text-sm border-2 border-dashed border-border_color rounded-lg">
+      还没有章节。回到 <a class="text-accent" href="/projects/{{ project }}/stage/outline">总纲页</a> 用 AI 批量拆出来。
+    </div>
+  </template>
+
+  <nav class="flex items-center justify-between mt-4 text-sm">
+    <a href="/projects/{{ project }}/stage/outline" class="text-muted hover:text-accent">← 总纲</a>
+    <a href="/projects/{{ project }}" class="text-accent hover:underline">下一步:写作 →</a>
+  </nav>
+</section>
+{% endblock %}

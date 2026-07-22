@@ -1,142 +1,145 @@
-# Personal Evolution OS
+# Novel Hub
 
-一个以"小时×质量"为底层度量、以"技能等级"为坐标系、以"承诺信用"为约束、由 AI 持续判断的个人成长操作系统。
+Novel Hub 是一个面向长篇小说创作的本地优先工作台。正文以 Markdown 文件为真实来源，SQLite 负责索引、搜索、统计、实体关系、快照和运行设置。
 
-## 核心理念
-
-- **不做打卡** — 打卡奖励"出现"，但出现 ≠ 成长
-- **不做任务管理** — 任务奖励"完成"，但完成琐事 ≠ 成长
-- **不做日记** — 日记奖励"记录情绪"，但情绪 ≠ 成长
-- **只奖励一件事：可被验证的有效小时**
+当前版本按 `NovelHub_refactor_task_list.docx` 的 P0 要求收敛为 v14：默认关闭高风险实验模块，核心编辑链路优先保证稳定、可恢复、可审计。
 
 ## 技术栈
 
-| 层级 | 选型 |
-|---|---|
-| Framework | Next.js 15 (App Router) |
-| Language | TypeScript (strict) |
-| DB | SQLite + Prisma |
-| UI | Tailwind CSS + Radix UI |
-| AI | Anthropic SDK (Claude) |
-| Validation | Zod |
-| Charts | Recharts |
+- FastAPI + Jinja2 + HTMX
+- SQLite / FTS
+- CodeMirror 6（esbuild 本地打包）
+- Alpine.js
+- Tailwind CSS CLI（本地预编译，不使用 CDN）
+- slowapi 登录限流
+- cryptography/Fernet 加密本地 AI 设置
+- systemd 部署
 
-## 快速开始
+## 已完成功能 (核心能力)
+
+- 时间线 (Timeline)
+- 关系图 (Graph)
+- 伏笔板 (Threads board)
+- 角色弧光 (Role Arc)
+- AI 一致性检查报告页 (Consistency check)
+- Tailwind CSS 本地预编译
+- CodeMirror 本地 bundle
+- 生产环境 CSRF
+
+- 项目、章节、实体、搜索、导出、统计与设置页
+- 三栏编辑器：章节树 / CodeMirror 6 编辑区 / 元信息侧栏
+- Markdown frontmatter 字段：`title`, `chapter`, `status`, `volume`, `tags`, `synopsis`, `notes`, `pov`, `characters`, `locations`, `warnings`, `draft_version`
+- 保存前自动快照，强制覆盖会额外创建 `pre_overwrite` 快照
+- 保存冲突检测：若外部修改导致 `loaded_mtime` 过期，前端会提示确认后再覆盖
+- 单次原子写入：`write_markdown()` 只通过临时文件 + `os.replace()` 落盘
+- 移动端编辑器提供只读视图入口
+- 登录接口 `5/minute` 限流
+
+## Feature Flags
+
+高级模块默认关闭，避免未配置 AI 或实验视图影响核心写作流程。
+
+```env
+NOVELHUB_FEATURE_AI=0
+NOVELHUB_FEATURE_AI_CHECK=0
+NOVELHUB_FEATURE_GRAPH=0
+NOVELHUB_FEATURE_TIMELINE=0
+NOVELHUB_FEATURE_SCENES=0
+NOVELHUB_FEATURE_THREADS=0
+```
+
+开启后对应 UI 与 API 才会暴露。默认关闭时，相关路由返回 `404`。
+
+## 配置
+
+复制 `.env.example` 为 `.env`，至少设置：
+
+```env
+NOVELHUB_PASSWORD=<login-password>
+NOVELHUB_SECRET_KEY=<random-secret>
+NOVELHUB_ENCRYPTION_KEY=<fernet-key-or-random-secret>
+NOVELHUB_VAULT_ROOT=/root/ObsidianVault
+NOVELHUB_BACKUP_ROOT=/root/ObsidianVault/.novelhub-backups
+NOVELHUB_DB_PATH=/opt/novel-hub/data/novelhub.db
+NOVELHUB_APP_ENV=development
+```
+
+生产环境建议：
+
+```env
+NOVELHUB_APP_ENV=production
+```
+
+生产模式会拒绝默认密码、默认 secret 和空加密密钥。
+
+## 本地运行
 
 ```bash
-# 1. 安装依赖
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 npm install
-
-# 2. 初始化数据库
-npx prisma migrate dev --name init
-npm run db:seed
-
-# 3. 配置环境变量
-# 编辑 .env，填入你的 ANTHROPIC_API_KEY
-
-# 4. 启动
-npm run dev
+npm run build
+cp .env.example .env
+uvicorn app.main:app --host 0.0.0.0 --port 8787 --reload
 ```
 
-打开 http://localhost:3000 即可。
+访问：
 
-## 功能模块
-
-### Dashboard (`/`)
-每日首屏，包含自然语言录入、今日记录、信用仪表盘、技能卡片、AI 诊断、承诺概览。
-
-### Ledger (`/log`)
-所有历史时间记录的查询与编辑。支持按日期查看、单条编辑、补录。
-
-### Skills (`/skills`)
-技能档案管理。每个技能有 L0-L8 等级体系，AI 评估升级路径。
-
-### Ladder (`/ladder`)
-全局 L0-L8 参照系，技能矩阵一览。
-
-### Commitments (`/commitments`)
-承诺创建与结算。AI 现实性审查防止过度承诺，到期自动结算信用分。
-
-### Reports (`/reports`)
-AI 生成的每日诊断（判/险/令）和周报。
-
-### Settings (`/settings`)
-个人资料、信用流水查询、数据导出。
-
-## AI 端点
-
-| 端点 | 功能 |
-|---|---|
-| `POST /api/ai/parse-log` | 自然语言日记 → 结构化时间记录 |
-| `POST /api/ai/reality-check` | 承诺现实性审查 |
-| `POST /api/ai/daily-analysis` | 每日成长诊断 |
-| `POST /api/ai/weekly-analysis` | 周报生成 |
-| `POST /api/ai/skill-assessment` | 技能等级评估 |
-
-## 核心算法
-
-### 有效小时
+```text
+http://127.0.0.1:8787/login
 ```
-effective = raw × (category_base + output_bonus + deliberate_bonus + commitment_alignment - context_switch_penalty)
+
+## systemd 部署
+
+```bash
+python -m venv /opt/novel-hub/.venv
+/opt/novel-hub/.venv/bin/pip install -r /opt/novel-hub/requirements.txt
+npm --prefix /opt/novel-hub install
+npm --prefix /opt/novel-hub run build
+cp /opt/novel-hub/.env.example /opt/novel-hub/.env
+
+sudo cp /opt/novel-hub/deploy/novelhub.service /etc/systemd/system/novelhub.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now novelhub
+sudo systemctl status novelhub
 ```
-AI 给出的 effective_hours 会与公式复算值取较低者，防止 AI 给高分。
 
-### 信用分
-- 初始 100 分，EMA 平滑（α=0.25）
-- 范围 40-150，S/A/B/C/D 五级
-- 承诺完成加分，失败/放弃扣分
-- D 级自动进入"信用重建模式"
+## 安全说明
 
-### 技能等级
-- 小时是必要条件，deliverables 是充分条件
-- 两者都满足才能升级
-- AI 每周扫描并触发晋升通知
+- 不提交 `.env`、数据库、备份、Vault、真实小说正文
+- AI API Key 只存加密值，设置页不会回显完整密钥
+- 生产环境默认启用 CSRF；前端通过本地 helper 为 HTMX/fetch 请求自动附带 token。
+- 登录失败会触发速率限制
 
-## 项目结构
+## CI 与部署
 
+- GitHub Actions 会在 push / PR 时运行 pytest 和 npm build。
+- 部署前请按 `docs/deployment-checklist.md` 检查。
+- 如果使用了 Makefile，可以使用 `make verify` 来在本地执行全量构建和测试验证。
+
+## 验证
+
+```bash
+python -m compileall app tests
+python -m pytest tests -v
+npm run build
 ```
+
+## 目录
+
+```text
 app/
-├── (dashboard)/          # 仪表盘页面组
-│   ├── page.tsx          # Dashboard
-│   ├── log/              # 时间台账
-│   ├── skills/           # 技能管理
-│   ├── ladder/           # L0-L8 参照
-│   ├── commitments/      # 承诺管理
-│   ├── reports/          # AI 报告
-│   └── settings/         # 设置
-├── api/                  # REST API
-│   ├── ai/               # AI 端点
-│   ├── logs/             # 时间记录
-│   ├── skills/           # 技能
-│   ├── commitments/      # 承诺
-│   ├── reports/          # 报告
-│   ├── dashboard/        # 仪表盘数据
-│   └── credit/           # 信用流水
-└── onboarding/           # 新手引导
-
-lib/
-├── ai/                   # AI SDK 封装、Prompt 模板、Zod Schema
-├── credit/               # 信用分算法
-├── skill/                # 技能等级判定
-├── time/                 # 有效小时计算、聚合
-└── db.ts                 # Prisma Client
-
-components/
-├── ui/                   # 基础 UI 组件
-├── viz/                  # 数据可视化组件
-└── sidebar.tsx           # 侧边栏导航
-
-prisma/
-├── schema.prisma         # 数据模型
-└── seed.ts               # 默认用户 + L0-L8 标准
+  main.py
+  static/
+    css/app.css
+    css/tailwind.css
+    js/editor.bundle.js
+    js/editor.js
+    js/ui.js
+  templates/
+tests/
+deploy/
+requirements.txt
+.env.example
 ```
-
-## 三个关键决策时刻
-
-1. **早晨 · 30 秒**：打开 Dashboard，决定今天主攻哪个技能
-2. **晚上 · 90 秒**：自然语言录入今日，AI 拆解 + 判断 + 反馈
-3. **周日 · 10 分钟**：复盘上周，设下周承诺（AI 做现实性审查）
-
-## License
-
-MIT

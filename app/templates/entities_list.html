@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}实体库 · {{ project }} · Novel Hub{% endblock %}
+
+{% block content %}
+<div class="flex flex-col gap-6 max-w-6xl mx-auto w-full py-6">
+    <div class="flex items-center justify-between">
+        <h2 class="text-2xl font-bold">
+            {% if kind == 'character' %}人物{% elif kind == 'location' %}地点{% elif kind == 'organization' %}势力{% elif kind == 'item' %}物品{% else %}全部实体{% endif %}
+        </h2>
+        <div class="flex gap-2">
+            <button onclick="createEntity()" class="bg-accent text-white px-4 py-2 rounded-lg text-sm font-medium hover:brightness-110 transition-all">+ 新建实体</button>
+        </div>
+    </div>
+
+    <!-- Filter Tabs -->
+    <div class="flex gap-4 border-b border-border_color">
+        <a href="/projects/{{ project }}/entities" class="px-4 py-2 text-sm {% if not kind %}border-b-2 border-accent text-accent font-medium{% else %}text-muted hover:text-text_color{% endif %}">全部</a>
+        <a href="/projects/{{ project }}/entities?kind=character" class="px-4 py-2 text-sm {% if kind == 'character' %}border-b-2 border-accent text-accent font-medium{% else %}text-muted hover:text-text_color{% endif %}">人物</a>
+        <a href="/projects/{{ project }}/entities?kind=location" class="px-4 py-2 text-sm {% if kind == 'location' %}border-b-2 border-accent text-accent font-medium{% else %}text-muted hover:text-text_color{% endif %}">地点</a>
+        <a href="/projects/{{ project }}/entities?kind=organization" class="px-4 py-2 text-sm {% if kind == 'organization' %}border-b-2 border-accent text-accent font-medium{% else %}text-muted hover:text-text_color{% endif %}">势力</a>
+        <a href="/projects/{{ project }}/entities?kind=item" class="px-4 py-2 text-sm {% if kind == 'item' %}border-b-2 border-accent text-accent font-medium{% else %}text-muted hover:text-text_color{% endif %}">物品</a>
+    </div>
+
+    <!-- Entity Grid -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {% for e in entities %}
+        <a href="/projects/{{ project }}/entities/{{ e.id }}" class="bg-panel border border-border_color rounded-xl p-4 hover:border-accent transition-all shadow-sm group">
+            <div class="flex justify-between items-start mb-2">
+                <span class="text-xs font-bold uppercase tracking-wider text-muted opacity-70 group-hover:text-accent group-hover:opacity-100 transition-colors">{{ kind_label(e.kind) }}</span>
+                <span class="text-[10px] text-muted">{{ e.id }}</span>
+            </div>
+            <h3 class="text-lg font-bold mb-1">{{ e.name }}</h3>
+            {% if e.aliases %}
+            <div class="text-xs text-muted mb-2 truncate">别名：{{ e.aliases }}</div>
+            {% endif %}
+            <div class="mt-4 flex justify-between items-center text-[10px] text-muted">
+                <span>更新于 {{ e.updated_at[:10] }}</span>
+            </div>
+        </a>
+        {% endfor %}
+        {% if not entities %}
+        <div class="col-span-full py-20 text-center text-muted italic">
+            当前分类还没有实体。
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+async function createEntity() {
+    const name = prompt('实体名称:');
+    if (!name) return;
+    const kind = '{{ kind or "character" }}';
+    const res = await csrfFetch('/api/entities', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ project: '{{ project }}', name, kind })
+    });
+    if (res.ok) {
+        const data = await res.json();
+        window.location.href = `/projects/{{ project }}/entities/${data.id}`;
+    } else {
+        alert('创建实体失败');
+    }
+}
+</script>
+{% endblock %}

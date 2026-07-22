@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% block title %}大纲 · {{ project }} · Novel Hub{% endblock %}
+{% block content %}
+{% set ai_enabled = feature_enabled('ai') %}
+{% set scenes_enabled = feature_enabled('scenes') %}
+<section class="flex flex-col gap-6" x-data="{
+    data: {volumes: [], chapters: [], scenes: []},
+    selectedVolume: null,
+    selectedChapter: null,
+    loading: true,
+    async init() {
+        const res = await csrfFetch(`/api/projects/{{ project }}/outline`);
+        this.data = await res.json();
+        this.loading = false;
+    },
+    get filteredChapters() {
+        if (!this.selectedVolume) return this.data.chapters;
+        return this.data.chapters.filter(c => c.volume === this.selectedVolume);
+    },
+    get filteredScenes() {
+        if (!this.selectedChapter) return [];
+        return this.data.scenes.filter(s => s.chapter_path === this.selectedChapter);
+    }
+}">
+    <div class="flex items-center justify-between">
+        <h2 class="text-2xl font-bold flex items-center gap-2">
+            <svg class="w-6 h-6 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h7"></path></svg>
+            {{ project }} · 大纲
+        </h2>
+        <a href="/projects/{{ project }}" class="bg-panel border border-border_color rounded px-4 py-2 text-sm font-medium hover:text-accent transition-colors">返回项目</a>
+    </div>
+
+    <div x-show="loading" class="flex items-center justify-center py-20 text-muted italic">正在加载大纲...</div>
+
+    <div x-show="!loading" class="grid grid-cols-1 md:grid-cols-4 gap-4 bg-panel border border-border_color rounded-xl p-4 min-h-[600px] overflow-x-auto">
+        <!-- Project/Volumes -->
+        <div class="flex flex-col gap-2">
+            <h3 class="text-xs font-bold text-muted uppercase tracking-widest px-2 mb-2">卷</h3>
+            <div class="flex flex-col gap-1">
+                <template x-for="v in data.volumes" :key="v.slug">
+                    <div class="p-3 bg-bg border border-border_color rounded hover:border-accent transition-all group relative cursor-pointer" @click="selectedVolume = (selectedVolume === v.slug ? null : v.slug); selectedChapter = null" :class="selectedVolume === v.slug ? 'border-accent' : ''">
+                        <div class="font-bold text-sm" x-text="v.title"></div>
+                        <div class="text-[10px] text-muted uppercase" x-text="v.slug"></div>
+                        <div class="mt-2 text-xs italic text-muted max-h-16 overflow-y-auto custom-scrollbar" x-text="v.synopsis || '暂无卷大纲'"></div>
+
+                        {% if ai_enabled %}<button class="absolute top-2 right-2 text-[10px] bg-accent/10 text-accent px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                                @click.stop="
+                                    $el.textContent='...';
+                                    csrfFetch(`/api/projects/{{ project }}/ai/outline/volume`, {
+                                        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({slug: v.slug})
+                                    }).then(r=>r.json()).then(d=>{if(d.status==='ok'){v.synopsis=d.synopsis; $el.textContent='AI';}else{alert('生成失败');$el.textContent='AI';}})
+                                ">AI</button>{% endif %}
+
+                        {% if ai_enabled %}<button class="absolute top-2 right-12 text-[10px] bg-accent/10 text-accent px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                                @click.stop="
+                                    const n = prompt('生成多少章？', '10');
+                                    if (!n) return;
+                                    $el.textContent = '...';
+                                    csrfFetch(`/api/projects/{{ project }}/ai/outline/chapter`, {
+                                        method: 'POST',
+                                        headers: {'Content-Type': 'application/json'},
+                                        body: JSON.stringify({slug: v.slug, count: parseInt(n)})
+                                    }).then(r => r.json()).then(d => {
+                                        if (d.status === 'ok') {
+                                            alert(`已创建 ${d.created.length} 章`);
+                                            location.reload();
+                                        } else {
+                                            alert('生成失败：' + (d.detail || ''));
+                                        }
+                                        $el.textContent = 'AI 拆章';
+                                    });
+                                ">AI 拆章</button>{% endif %}
+                    </div>
+                </template>
+                <div class="p-3 bg-bg/50 border border-dashed border-border_color rounded text-xs text-muted text-center italic cursor-pointer" @click="selectedVolume = ''; selectedChapter = null" :class="selectedVolume === '' ? 'border-accent' : ''">未分卷章节</div>
+            </div>
+        </div>
+
+        <!-- Chapters -->
+        <div class="flex flex-col gap-2 md:col-span-2" :class="(!selectedVolume && 'hidden md:flex')">
+            <h3 class="text-xs font-bold text-muted uppercase tracking-widest px-2 mb-2">章节</h3>
+            <div class="grid grid-cols-1 gap-2">
+                <template x-for="c in filteredChapters" :key="c.path">
+                    <div class="p-3 bg-bg border border-border_color rounded hover:border-accent transition-all group flex flex-col gap-2 relative cursor-pointer" @click="selectedChapter = c.path" :class="selectedChapter === c.path ? 'border-accent' : ''">
+                                                {% if ai_enabled and scenes_enabled %}<button class="absolute top-2 right-2 text-[10px] bg-accent/10 text-accent px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                                @click.stop="
+                                    const n = prompt('拆成多少场景？', '4');
+                                    if (!n) return;
+                                    const fname = c.path.split(/[/\\]/).pop();
+                                    $el.textContent = '...';
+                                    csrfFetch(`/api/projects/{{ project }}/ai/outline/scene`, {
+                                        method: 'POST', headers: {'Content-Type':'application/json'},
+                                        body: JSON.stringify({chapter: fname, count: parseInt(n)})
+                                    }).then(r => r.json()).then(d => {
+                                        if (d.status === 'ok') { alert('已拆为 ' + d.scenes.length + ' 场景'); location.reload(); }
+                                        else alert('失败：' + (d.detail || ''));
+                                        $el.textContent = '✂';
+                                    });
+                                ">✂</button>{% endif %}
+                        <div class="flex items-center justify-between pr-12">
+                            <a :href="`/projects/{{ project }}/editor/${c.path.split(/[\\\\/]/).pop()}`" class="font-bold text-sm hover:text-accent transition-colors" x-text="c.title"></a>
+                        </div>
+                        <div class="flex items-center gap-3 text-[10px] text-muted">
+                            <span class="px-1.5 py-0.5 rounded border border-border_color" x-text="{
+                                'idea': '灵感',
+                                'outline': '大纲',
+                                'draft': '草稿',
+                                'rewrite': '重写',
+                                'polish': '润色',
+                                'done': '完成',
+                                'published': '已发布'
+                            }[c.status] || c.status"></span>
+                            <span x-text="`第 ${c.chapter || '?'} 章`"></span>
+                            <span x-text="`${c.word_count || 0} 字`"></span>
+                        </div>
+                        <div class="h-1 rounded-full bg-border_color overflow-hidden">
+                            <div class="h-full bg-accent" :style="`width: ${Math.min((c.word_count || 0) / 5000 * 100, 100)}%`"></div>
+                        </div>
+                    </div>
+                </template>
+                <div x-show="!selectedVolume && data.volumes.length > 0 && selectedVolume !== ''" class="p-4 text-center text-xs text-muted italic border border-dashed border-border_color rounded">选择一个卷来筛选章节</div>
+            </div>
+        </div>
+
+{% if scenes_enabled %}
+        <!-- Scenes -->
+        <div class="flex flex-col gap-2" :class="(!selectedChapter && 'hidden md:flex')">
+            <h3 class="text-xs font-bold text-muted uppercase tracking-widest px-2 mb-2">场景</h3>
+            <div class="flex flex-col gap-1">
+                <template x-show="selectedChapter" x-for="s in filteredScenes" :key="s.id">
+                    <div class="p-2 bg-bg border border-border_color rounded text-[11px] hover:border-accent transition-all cursor-pointer">
+                        <div class="font-medium mb-1" x-text="s.title"></div>
+                        <div class="flex items-center justify-between text-[9px] text-muted italic">
+                            <span x-text="s.pov || '未设视角'"></span>
+                            <span x-text="{
+                                'idea': '灵感',
+                                'outline': '大纲',
+                                'draft': '草稿',
+                                'rewrite': '重写',
+                                'polish': '润色',
+                                'done': '完成',
+                                'published': '已发布'
+                            }[s.status || 'draft'] || (s.status || 'draft')"></span>
+                                                    {% if ai_enabled and scenes_enabled %}<button class="text-[9px] text-accent opacity-0 group-hover:opacity-100"
+                                @click.stop="
+                                    if (!confirm('用 AI 把此场景的摘要扩写为正文？')) return;
+                                    const fname = (data.chapters.find(c => c.path === selectedChapter) || {}).path?.split(/[/\\]/).pop();
+                                    $el.textContent = '...';
+                                    csrfFetch(`/api/projects/{{ project }}/ai/outline/draft`, {
+                                        method: 'POST', headers: {'Content-Type':'application/json'},
+                                        body: JSON.stringify({chapter: fname, scene_id: s.id})
+                                    }).then(r => r.json()).then(d => {
+                                        if (d.status === 'ok') { alert('扩写完成'); location.reload(); }
+                                        else alert('失败');
+                                        $el.textContent = '扩写';
+                                    });
+                                ">扩写</button>{% endif %}
+                        </div>
+                    </div>
+                </template>
+                <div x-show="!selectedChapter" class="p-4 text-center text-xs text-muted italic border border-dashed border-border_color rounded">选择章节后查看场景</div>
+            </div>
+        </div>
+{% endif %}
+    </div>
+</section>
+{% endblock %}

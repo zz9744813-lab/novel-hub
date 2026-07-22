@@ -1,0 +1,12 @@
+{% for c in chapters %}
+<a class="flex flex-col p-2 rounded-lg border border-transparent hover:bg-panel transition-colors {% if c.filename == filename %}bg-accent/10 border-accent/30 text-accent{% else %}text-muted hover:text-text_color{% endif %}" href="/projects/{{ project }}/editor/{{ c.filename }}">
+  <div class="flex items-center justify-between gap-2 mb-1">
+    <strong class="text-sm font-medium truncate {% if c.filename == filename %}text-accent{% endif %}">{{ c.title }}</strong>
+    <span class="text-[10px] uppercase border border-current px-1 py-0.5 rounded-sm opacity-60 shrink-0">{{ status_label(c.status) }}</span>
+  </div>
+  <small class="text-xs opacity-70">{{ c.word_count }} 字</small>
+</a>
+{% endfor %}
+{% if not chapters %}
+<div class="text-center text-xs text-muted py-4">无匹配章节</div>
+{% endif %}

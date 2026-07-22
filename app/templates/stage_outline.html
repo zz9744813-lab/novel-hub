@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}总纲 · {{ project }} · Novel Hub{% endblock %}
+{% block content %}
+<section class="flex flex-col gap-4 relative" x-data="{
+    volumes: {{ volumes|tojson }},
+    aiBusy: false,
+    async addVolume() {
+      const title = prompt('卷标题:'); if (!title) return;
+      const slug = title.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g,'-').replace(/^-+|-+$/g,'') || 'volume';
+      const seq = (this.volumes[this.volumes.length-1]?.seq || 0) + 1;
+      const r = await csrfFetch(`/api/projects/{{ project }}/volumes/${slug}`, {
+        method:'PUT', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({title, seq, synopsis: '', target_words: 100000})
+      });
+      if (r.ok) location.reload(); else alert('新建失败');
+    },
+    async saveVolume(v) {
+      await csrfFetch(`/api/projects/{{ project }}/volumes/${v.slug}`, {
+        method:'PUT', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({title: v.title, synopsis: v.synopsis || '', target_words: v.target_words || 100000, seq: v.seq || 1})
+      });
+    },
+    async aiSynopsis(slug) {
+      this.aiBusy = true;
+      const r = await csrfFetch('/api/projects/{{ project }}/ai/outline/volume', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({slug})
+      });
+      this.aiBusy = false;
+      const d = await r.json();
+      if (d.status === 'ok') location.reload(); else alert('生成失败:' + (d.detail || '可能未配置 AI'));
+    },
+    async aiChapters(slug) {
+      const n = parseInt(prompt('要拆几章?', '10')); if (!n || n < 1) return;
+      this.aiBusy = true;
+      const r = await csrfFetch('/api/projects/{{ project }}/ai/outline/chapter', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({slug, count: n})
+      });
+      this.aiBusy = false;
+      const d = await r.json();
+      if (d.status === 'ok') alert(`已创建 ${d.created.length} 章,去细纲页查看。`); else alert('失败:' + (d.detail || ''));
+    }
+  }">
+  {% with project=project, stage='outline', prompt_value=stage_prompt %}{% include '_prompt_slot.html' %}{% endwith %}
+
+  <header class="flex items-center justify-between gap-4">
+    <div>
+      <div class="flex items-center gap-2 text-xs text-muted">
+        <a href="/projects/{{ project }}" class="hover:text-accent">{{ project }}</a>
+        <span>›</span><span>总纲</span>
+      </div>
+      <h1 class="text-3xl font-bold mt-1">总纲 · 整本书的骨架</h1>
+      <p class="text-sm text-muted mt-1">把整本书拆成卷,每卷写 3-5 段简介。短篇小说可以只用一卷。</p>
+    </div>
+    <label class="flex items-center gap-2 text-sm">
+      <input type="checkbox" {% if stage_done %}checked{% endif %}
+             @change="csrfFetch('/api/stages/{{ project }}/outline/done', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({done: $event.target.checked})}).then(()=>location.reload())"
+             class="rounded border-border_color text-accent focus:ring-accent">
+      <span>标记为已完成</span>
+    </label>
+  </header>
+
+  <div class="flex items-center gap-3">
+    <button @click="addVolume()" class="bg-accent text-white px-3 py-1.5 rounded text-sm">+ 新建卷</button>
+    <span x-show="aiBusy" class="text-xs text-muted">AI 处理中...</span>
+  </div>
+
+  <template x-if="volumes.length">
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <template x-for="v in volumes" :key="v.slug">
+        <article class="bg-panel border border-border_color rounded-xl p-5 flex flex-col gap-3">
+          <header class="flex items-center justify-between gap-3">
+            <input x-model="v.title" @change="saveVolume(v)" class="bg-transparent text-lg font-bold focus:outline-none focus:text-accent min-w-0" />
+            <span class="text-xs text-muted shrink-0" x-text="`第 ${v.seq || '?'} 卷 · 目标 ${v.target_words || 0} 字`"></span>
+          </header>
+          <textarea x-model="v.synopsis" @change="saveVolume(v)" rows="6"
+                    class="bg-bg border border-border_color rounded p-2.5 text-sm leading-relaxed font-serif resize-y focus:outline-none focus:border-accent"
+                    placeholder="本卷大纲(3-5 段):..."></textarea>
+          <div class="flex gap-2 flex-wrap">
+            <button @click="aiSynopsis(v.slug)" :disabled="aiBusy" class="bg-bg border border-border_color hover:border-accent text-xs px-3 py-1.5 rounded disabled:opacity-50">AI 写本卷大纲</button>
+            <button @click="aiChapters(v.slug)" :disabled="aiBusy" class="bg-bg border border-border_color hover:border-accent text-xs px-3 py-1.5 rounded disabled:opacity-50">AI 拆 N 章细纲</button>
+          </div>
+        </article>
+      </template>
+    </div>
+  </template>
+  <template x-if="!volumes.length">
+    <div class="text-center text-muted py-12 text-sm border-2 border-dashed border-border_color rounded-lg">
+      还没有任何卷。点上方 "+ 新建卷" 开始。短篇直接建一个就行。
+    </div>
+  </template>
+
+  <nav class="flex items-center justify-between mt-4 text-sm">
+    <a href="/projects/{{ project }}/stage/characters" class="text-muted hover:text-accent">← 人物</a>
+    <a href="/projects/{{ project }}/stage/chapter_outline" class="text-accent hover:underline">下一步:细纲 →</a>
+  </nav>
+</section>
+{% endblock %}

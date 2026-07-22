@@ -1,5 +1,5 @@
 """Model Gateway Provider Adapter - Canonical Event types and stream parsing.
-Per §11 v7.3 spec: reasoning/final whitelist separation, cross-chunk <think> state machine.
+Per §11 v7.3 spec: reasoning/final whitelist separation, cross-chunk state machine.
 """
 from enum import Enum
 from pydantic import BaseModel
@@ -29,9 +29,18 @@ class InlineMode(str, Enum):
     REASONING = "reasoning"
 
 
+# Inline reasoning tag pairs — must not have empty strings
+INLINE_TAGS = [
+    (""),
+    ("<thinking>", "</thinking>"),
+    ("<reasoning>", "</reasoning>"),
+    ("<analysis>", "</analysis>"),
+]
+
+
 class InlineReasoningParser:
-    """Cross-chunk  state machine.
-    Per §11.4: preserve 32-char carry buffer, detect  across chunks.
+    """Cross-chunk state machine for inline reasoning tags.
+    Per §11.4: preserve 32-char carry buffer, detect tags across chunks.
     """
     def __init__(self):
         self.mode = InlineMode.FINAL
@@ -42,44 +51,54 @@ class InlineReasoningParser:
         results = []
         self.carry += chunk
 
-        while len(self.carry) > 32 or (len(self.carry) <= 32 and "<" not in self.carry and self.mode == InlineMode.FINAL):
+        while True:
             if self.mode == InlineMode.FINAL:
-                think_pos = self.carry.find("<think>")
-                if think_pos == -1:
-                    if "<" in self.carry:
-                        safe_end = max(0, len(self.carry) - 32)
+                # Search for any opening reasoning tag
+                earliest = -1
+                matched_tag = None
+                for open_tag, close_tag in INLINE_TAGS:
+                    pos = self.carry.find(open_tag)
+                    if pos != -1 and (earliest == -1 or pos < earliest):
+                        earliest = pos
+                        matched_tag = (open_tag, close_tag)
+
+                if earliest == -1:
+                    # No tag found — emit as final, keeping carry buffer
+                    if len(self.carry) > 32:
+                        safe_end = len(self.carry) - 32
                         text = self.carry[:safe_end]
                         self.carry = self.carry[safe_end:]
-                        results.append((CanonicalEventType.FINAL, text))
-                        break
-                    else:
-                        text = self.carry
-                        self.carry = ""
-                        results.append((CanonicalEventType.FINAL, text))
-                        break
-                elif think_pos < len(self.carry) - 7:
-                    if think_pos > 0:
-                        results.append((CanonicalEventType.FINAL, self.carry[:think_pos]))
-                    self.carry = self.carry[think_pos + 7:]
-                    self.mode = InlineMode.REASONING
-                else:
+                        if text:
+                            results.append((CanonicalEventType.FINAL, text))
                     break
-
-            if self.mode == InlineMode.REASONING:
-                end_pos = self.carry.find("")
+                elif earliest > 0:
+                    # Emit text before the tag as final
+                    results.append((CanonicalEventType.FINAL, self.carry[:earliest]))
+                    self.carry = self.carry[earliest:]
+                # Skip the opening tag
+                self.carry = self.carry[len(matched_tag[0]):]
+                self.mode = InlineMode.REASONING
+                self._close_tag = matched_tag[1]
+            else:
+                # In reasoning mode — look for the closing tag
+                close_tag = getattr(self, "_close_tag", "")
+                end_pos = self.carry.find(close_tag)
                 if end_pos == -1:
-                    safe_end = max(0, len(self.carry) - 32)
-                    text = self.carry[:safe_end]
-                    self.carry = self.carry[safe_end:]
-                    results.append((CanonicalEventType.REASONING, text))
+                    # Still in reasoning — emit but keep carry buffer
+                    if len(self.carry) > 32:
+                        safe_end = len(self.carry) - 32
+                        text = self.carry[:safe_end]
+                        self.carry = self.carry[safe_end:]
+                        if text:
+                            results.append((CanonicalEventType.REASONING, text))
                     break
-                elif end_pos < len(self.carry) - 8:
+                else:
+                    # Found closing tag
                     if end_pos > 0:
                         results.append((CanonicalEventType.REASONING, self.carry[:end_pos]))
-                    self.carry = self.carry[end_pos + 8:]
+                    self.carry = self.carry[end_pos + len(close_tag):]
                     self.mode = InlineMode.FINAL
-                else:
-                    break
+                    self._close_tag = None
 
         return results
 
@@ -87,6 +106,7 @@ class InlineReasoningParser:
         """Call at end of stream."""
         results = []
         if self.mode == InlineMode.REASONING:
+            # Unterminated reasoning — quarantine as UNKNOWN
             results.append((CanonicalEventType.UNKNOWN, self.carry))
             self.carry = ""
         elif self.carry:
@@ -103,9 +123,10 @@ class InlineReasoningParser:
 PROVIDER_PROFILE = {
     "provider": "openai-compatible-relay",
     "content_paths": ["choices[].delta.content", "choices[].message.content"],
-    "reasoning_paths": ["choices[].delta.reasoning_content", "choices[].message.reasoning_content"],
+    "reasoning_paths": ["choices[].delta.reasoning_content", "choices[].delta.reasoning",
+                        "choices[].message.reasoning_content"],
     "tool_paths": ["choices[].delta.tool_calls"],
-    "inline_reasoning_tags": [[""], ["<analysis>", "</analysis>"]],
+    "inline_reasoning_tags": INLINE_TAGS,
     "unknown_field_policy": "quarantine",
 }
 
@@ -114,12 +135,43 @@ def classify_delta(delta: dict) -> tuple[CanonicalEventType, str]:
     """Classify a streaming delta into a canonical event.
     Per §11.2: only FINAL goes into prose buffer. reasoning, tool, unknown = quarantine.
     """
-    if delta.get("reasoning_content"):
-        return CanonicalEventType.REASONING, delta["reasoning_content"]
-    if delta.get("reasoning"):
-        return CanonicalEventType.REASONING, delta["reasoning"]
+    # Check reasoning fields first
+    for field in ("reasoning_content", "reasoning", "thinking", "thought"):
+        val = delta.get(field)
+        if val:
+            return CanonicalEventType.REASONING, val
+    # Check content field
     if delta.get("content"):
         return CanonicalEventType.FINAL, delta["content"]
     if delta.get("tool_calls"):
         return CanonicalEventType.TOOL, ""
     return CanonicalEventType.UNKNOWN, ""
+
+
+def parse_stream_chunk(data: dict, parser: InlineReasoningParser) -> list[tuple[CanonicalEventType, str]]:
+    """Parse a stream chunk using the provider adapter.
+    
+    First classify via delta fields, then run inline parser on content
+    to catch any inline reasoning tags.
+    """
+    results = []
+    choices = data.get("choices", [])
+    if not choices:
+        return results
+
+    delta = choices[0].get("delta", {})
+
+    # Classify the delta fields
+    event_type, text = classify_delta(delta)
+    
+    if event_type == CanonicalEventType.REASONING and text:
+        results.append((CanonicalEventType.REASONING, text))
+    elif event_type == CanonicalEventType.FINAL and text:
+        # Run through inline parser to catch embedded reasoning tags
+        results.extend(parser.feed(text))
+    elif event_type == CanonicalEventType.TOOL:
+        results.append((CanonicalEventType.TOOL, ""))
+    elif event_type == CanonicalEventType.UNKNOWN and text:
+        results.append((CanonicalEventType.UNKNOWN, text))
+
+    return results

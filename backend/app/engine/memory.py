@@ -4,6 +4,7 @@ L1: Chapter fact ledger (per chapter, after finalization)
 L2: 10-chapter stage summary
 L3: Volume summary
 L4: Authoritative state snapshot (per chapter + human)
+FIX P0-6: L4 merges fields into complete entity state, not single field per snapshot
 """
 import uuid
 import hashlib
@@ -15,7 +16,6 @@ from app.models import (
 )
 
 
-# Idempotency keys per §5.3
 def l1_idempotency_key(book_id, chapter_id, finalized_version):
     return f"l1:{book_id}:{chapter_id}:{finalized_version}"
 
@@ -28,9 +28,24 @@ def l3_idempotency_key(book_id, volume_no, outline_version):
 def l4_idempotency_key(book_id, entity_type, entity_id, as_of_chapter, version):
     return f"l4:{book_id}:{entity_type}:{entity_id}:{as_of_chapter}:{version}"
 
-
 def compute_source_hash(content: str) -> str:
     return hashlib.sha256(content.encode()).hexdigest()
+
+
+async def _get_latest_l4(db: AsyncSession, book_id: uuid.UUID,
+                         entity_id: uuid.UUID, as_of_chapter: int) -> MemoryL4StateSnapshot | None:
+    """Get the latest L4 snapshot for an entity before or at this chapter."""
+    result = await db.execute(
+        select(MemoryL4StateSnapshot).where(
+            MemoryL4StateSnapshot.book_id == book_id,
+            MemoryL4StateSnapshot.entity_id == entity_id,
+            MemoryL4StateSnapshot.as_of_chapter <= as_of_chapter,
+        ).order_by(
+            MemoryL4StateSnapshot.as_of_chapter.desc(),
+            MemoryL4StateSnapshot.version.desc(),
+        ).limit(1)
+    )
+    return result.scalar_one_or_none()
 
 
 async def commit_l4_with_events(
@@ -42,14 +57,15 @@ async def commit_l4_with_events(
     source_run_id: uuid.UUID,
 ) -> None:
     """§5.5: Finalization atomic transaction.
-    
-    Order: story_events -> L4 snapshot -> L1 ledger -> scene_search_documents -> commit
-    All in one transaction. Any failure = full rollback.
+
+    Order: story_events -> L4 snapshot (merged) -> L1 ledger -> commit
+    FIX P0-6: L4 merges into existing state to create complete entity snapshot,
+    not just single field.
     """
     # Step 4: Write story_events
     for evt in events:
         if evt.get("certainty") != "explicit":
-            continue  # §5.5: only explicit events go to L4
+            continue
         story_event = StoryEvent(
             id=uuid.uuid4(),
             book_id=book_id,
@@ -67,16 +83,34 @@ async def commit_l4_with_events(
         )
         db.add(story_event)
 
-        # Step 5: Update L4 snapshot
+        # Step 5: Update L4 snapshot — MERGE into existing state
         entity_id = uuid.UUID(evt["entity_id"]) if isinstance(evt.get("entity_id"), str) else evt.get("entity_id")
         if entity_id:
+            entity_type = evt.get("entity_type", "character")
+            # Get previous state to merge
+            prev_snap = await _get_latest_l4(db, book_id, entity_id, as_of_chapter)
+
+            if prev_snap:
+                # Merge: copy previous state dict and update with new field
+                prev_chapter = prev_snap.as_of_chapter
+                merged = dict(prev_snap.state) if isinstance(prev_snap.state, dict) else {}
+            else:
+                merged = {}
+
+            # Apply the new field/value
+            field = evt.get("field")
+            new_value = evt.get("new_value")
+            if field:
+                merged[field] = new_value
+
+            # Create new L4 snapshot with complete merged state
             snap = MemoryL4StateSnapshot(
                 id=uuid.uuid4(),
                 book_id=book_id,
-                entity_type=evt.get("entity_type", "character"),
+                entity_type=entity_type,
                 entity_id=entity_id,
                 as_of_chapter=as_of_chapter,
-                state={"field": evt.get("field"), "value": evt.get("new_value")},
+                state=merged,  # Complete entity state, not single field
                 version=1,
                 source_run_id=source_run_id,
             )
@@ -95,58 +129,23 @@ async def commit_l4_with_events(
     )
     db.add(l1)
 
-    # Step 7: Generate scene_search_documents (done separately per scene)
-    # Step 8: commit (handled by caller)
-
 
 async def get_l4_state(db: AsyncSession, book_id: uuid.UUID,
                        entity_id: uuid.UUID, as_of_chapter: int) -> dict | None:
-    """Get latest L4 state for an entity up to a chapter."""
+    """Get latest L4 state for an entity up to a chapter.
+    FIX: Returns complete merged state, not just last single field.
+    """
     result = await db.execute(
         select(MemoryL4StateSnapshot).where(
             MemoryL4StateSnapshot.book_id == book_id,
             MemoryL4StateSnapshot.entity_id == entity_id,
             MemoryL4StateSnapshot.as_of_chapter <= as_of_chapter,
-        ).order_by(MemoryL4StateSnapshot.as_of_chapter.desc(),
-                   MemoryL4StateSnapshot.version.desc()).limit(1)
+        ).order_by(
+            MemoryL4StateSnapshot.as_of_chapter.desc(),
+            MemoryL4StateSnapshot.version.desc(),
+        ).limit(1)
     )
     snap = result.scalar_one_or_none()
     if snap and snap.is_locked:
         return {"state": snap.state, "locked": True}
     return {"state": snap.state, "locked": False} if snap else None
-
-
-async def generate_l2_summary(db: AsyncSession, book_id: uuid.UUID,
-                                chapter_start: int, chapter_end: int,
-                                outline_version: int,
-                                source_run_id: uuid.UUID) -> MemoryL2StageSummary:
-    """Generate L2 summary for chapters [start, end]."""
-    # Collect L1s for this range
-    # TODO: use MemoryCompiler with LLM to summarize
-    summary = MemoryL2StageSummary(
-        id=uuid.uuid4(), book_id=book_id,
-        chapter_range_start=chapter_start, chapter_range_end=chapter_end,
-        outline_version=outline_version,
-        source_hash="pending",
-        status="generated",
-        summary_json={"note": "TODO: LLM-generated summary"},
-        source_run_id=source_run_id,
-    )
-    db.add(summary)
-    return summary
-
-
-async def generate_l3_summary(db: AsyncSession, book_id: uuid.UUID,
-                                volume_no: int, outline_version: int,
-                                source_run_id: uuid.UUID) -> MemoryL3VolumeSummary:
-    """Generate L3 volume summary."""
-    summary = MemoryL3VolumeSummary(
-        id=uuid.uuid4(), book_id=book_id,
-        volume_no=volume_no, outline_version=outline_version,
-        source_hash="pending",
-        status="generated",
-        summary_json={"note": "TODO: LLM-generated volume summary"},
-        source_run_id=source_run_id,
-    )
-    db.add(summary)
-    return summary

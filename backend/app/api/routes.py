@@ -4,7 +4,7 @@ import json
 import asyncio
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Depends, WebSocket, WebSocketDisconnect
-from sqlalchemy import select, update, func
+from sqlalchemy import select, update, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, async_session_factory
 from app.models import (
@@ -25,6 +25,7 @@ from typing import Any
 import os
 
 router = APIRouter()
+health_router = APIRouter()
 
 
 def gen_uuid():
@@ -57,21 +58,31 @@ class ResourceBlockRequest(BaseModel):
 
 
 # ---- Health ----
-@router.get("/health/live")
+@health_router.get("/health/live")
 async def health_live():
     return {"status": "alive"}
 
 
-@router.get("/health/ready")
+@health_router.get("/health/ready")
 async def health_ready(db: AsyncSession = Depends(get_db)):
+    """Check database connectivity AND that core tables exist.
+    FIX P0-3: Not just select(1) — verify tables are present.
+    """
     try:
-        result = await db.execute(select(1))
-        return {"status": "ready", "database": "ok"}
+        result = await db.execute(
+            text("SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'books'")
+        )
+        table_count = result.scalar()
+        if table_count == 0:
+            raise HTTPException(503, "Database ready but tables missing — run alembic upgrade head")
+        return {"status": "ready", "database": "ok", "tables": table_count}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(503, f"Database: {e}")
 
 
-@router.get("/metrics")
+@health_router.get("/metrics")
 async def metrics():
     return {"app": "novelforge", "status": "running"}
 
@@ -432,7 +443,15 @@ async def get_event(book_id: str, event_id: str, db: AsyncSession = Depends(get_
 # ---- Retrieval test ----
 @router.post("/api/books/{book_id}/retrieval/test")
 async def retrieval_test(book_id: str, req: dict, db: AsyncSession = Depends(get_db)):
-    return {"book_id": book_id, "results": [], "note": "TODO"}
+    """Run a retrieval test — returns actual search results."""
+    from app.engine.retrieval import full_text_search, event_ledger_search
+    bid = uuid.UUID(book_id)
+    search_terms = req.get("search_terms", [])
+    char_ids = req.get("character_ids", [])
+    chap_range = tuple(req.get("chapter_range", [1, 500]))
+    ft_results = await full_text_search(db, bid, search_terms, chap_range)
+    event_results = await event_ledger_search(db, bid, char_ids, [], chap_range)
+    return {"book_id": book_id, "ft_results": ft_results[:10], "event_results": event_results[:10]}
 
 
 @router.post("/api/books/{book_id}/retrieval/gold-samples")

@@ -1,5 +1,6 @@
 """ReviewAgent / ContinuityJudge - checks chapter for issues.
 Per §7.2 Step 6+8 + §A.4 v7.3.
+FIX: Fail-Closed — agent failure does NOT mean pass.
 """
 import uuid
 import json
@@ -21,9 +22,9 @@ async def review_chapter(
 ) -> tuple[bool, list[dict]]:
     """Review chapter for issues. Returns (passed, issues).
     
-    Also serves as ContinuityJudge (§7.2 Step 8).
+    FIX: Fail-Closed — if agent fails, chapter does NOT pass review.
+    The caller should handle failed review by retrying or escalating.
     """
-    # Get L4 state for involved characters
     l4_states = {}
     for char_id in outline_node.involved_character_ids:
         cid = uuid.UUID(char_id) if isinstance(char_id, str) else char_id
@@ -37,11 +38,8 @@ async def review_chapter(
         if s:
             l4_states[str(char_id)] = s.state
 
-    # Get voice cards
     vc = await db.execute(select(StyleVoiceCard).where(StyleVoiceCard.book_id == book_id))
     voice_cards = [{"register": v.register, "emotion_expression": v.emotion_expression} for v in vc.scalars().all()]
-
-    # Get tone anchor
     ta = await db.execute(
         select(StyleToneAnchor).where(StyleToneAnchor.book_id == book_id)
         .order_by(StyleToneAnchor.version.desc()).limit(1)
@@ -72,8 +70,10 @@ async def review_chapter(
     )
 
     if not result:
-        logger.error(f"ReviewAgent failed: {meta}")
-        return True, []  # Don't block on agent failure
+        logger.error(f"ReviewAgent failed (FAIL-CLOSED): {meta}")
+        # FAIL-CLOSED: agent failure means review did NOT pass.
+        # Return (False, []) to signal failure without issues to patch.
+        return False, []  # caller should treat this as NEEDS_HUMAN or retry
 
     passed = result.get("passed", False)
     issues = result.get("issues", [])

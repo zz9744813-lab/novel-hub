@@ -1,12 +1,12 @@
 """ARQ Worker - max_jobs=1, executes chapter pipeline.
 Per §7.2 v7.3: 13-step fixed flow.
+FIX P0-7: 断点恢复传 chapter_id 而非 task.id
 """
 import asyncio
 import os
 import uuid
 import logging
 
-# Monkey-patch redis to disable CLIENT SETINFO before importing arq
 import redis.asyncio.connection as _redis_conn
 _orig_on_connect = _redis_conn.AbstractConnection.on_connect
 
@@ -63,13 +63,13 @@ async def run_chapter_pipeline(ctx, chapter_id: str, book_id: str, chapter_no: i
             await db.commit()
         return
 
-    logger.info(f"Starting chapter {chapter_no} pipeline")
+    logger.info(f"Starting chapter {chapter_no} pipeline (chapter_id={chapter_id})")
     await execute_pipeline(uuid.UUID(book_id), uuid.UUID(chapter_id), chapter_no)
 
 
 async def on_startup(ctx):
     logger.info("NovelForge worker started")
-    # Recover stale tasks
+    # Recover stale tasks — FIX P0-7: look up the correct chapter_id
     async with async_session_factory() as db:
         result = await db.execute(
             select(ChapterTask).where(
@@ -78,10 +78,25 @@ async def on_startup(ctx):
         )
         tasks = result.scalars().all()
         for task in tasks:
-            logger.info(f"Recovering task chapter {task.chapter_no}")
+            logger.info(f"Recovering task {task.id} for chapter {task.chapter_no}")
             task.status = ChapterState.QUEUED.value
-            await ctx["redis"].enqueue_job("run_chapter_pipeline",
-                str(task.id), str(task.book_id), task.chapter_no)
+            # FIX P0-7: Find the actual Chapter row by book_id + chapter_no
+            chapter_result = await db.execute(
+                select(Chapter).where(
+                    Chapter.book_id == task.book_id,
+                    Chapter.chapter_no == task.chapter_no,
+                )
+            )
+            chapter = chapter_result.scalar_one_or_none()
+            if chapter:
+                await ctx["redis"].enqueue_job(
+                    "run_chapter_pipeline",
+                    str(chapter.id),  # Pass the actual Chapter.id, NOT task.id
+                    str(task.book_id),
+                    task.chapter_no,
+                )
+            else:
+                logger.warning(f"Chapter not found for task {task.id} chapter {task.chapter_no}")
         await db.commit()
 
 

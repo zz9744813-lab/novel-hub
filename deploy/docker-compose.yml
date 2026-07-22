@@ -34,15 +34,11 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     command:
-      - uvicorn
-      - app.main:app
-      - --host
-      - 0.0.0.0
-      - --port
-      - "8000"
-      - --workers
-      - "1"
-      - --no-access-log
+      - sh
+      - -c
+      - |
+        alembic upgrade head &&
+        exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1 --no-access-log
     env_file:
       - .env
     environment:
@@ -53,7 +49,10 @@ services:
       SQLALCHEMY_MAX_OVERFLOW: "1"
       PYTHONUNBUFFERED: "1"
       MALLOC_ARENA_MAX: "2"
-      PRIMARY_BASE_URL: http://new-api:3000/v1
+      PRIMARY_BASE_URL: ${PRIMARY_BASE_URL}
+      PRIMARY_API_KEY: ${PRIMARY_API_KEY}
+      FALLBACK_BASE_URL: ${FALLBACK_BASE_URL}
+      FALLBACK_API_KEY: ${FALLBACK_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy
@@ -64,7 +63,7 @@ services:
       interval: 30s
       timeout: 8s
       retries: 5
-      start_period: 30s
+      start_period: 45s
     volumes:
       - ../data/books:/app/data/books
       - ../data/exports:/app/data/exports
@@ -95,7 +94,10 @@ services:
       GLOBAL_LLM_CONCURRENCY: "1"
       MALLOC_ARENA_MAX: "2"
       PYTHONUNBUFFERED: "1"
-      PRIMARY_BASE_URL: http://new-api:3000/v1
+      PRIMARY_BASE_URL: ${PRIMARY_BASE_URL}
+      PRIMARY_API_KEY: ${PRIMARY_API_KEY}
+      FALLBACK_BASE_URL: ${FALLBACK_BASE_URL}
+      FALLBACK_API_KEY: ${FALLBACK_API_KEY}
     depends_on:
       api:
         condition: service_healthy

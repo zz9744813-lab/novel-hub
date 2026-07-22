@@ -1,18 +1,36 @@
-__pycache__/
-.pytest_cache/
-*.pyc
-.venv/
-node_modules/
+# 环境变量与密钥
 .env
-novelhub.db
-novelhub.db.before-refactor.*
-*.db
-/root/ObsidianVault/
-ObsidianVault/
-.novelhub-backups/
-data/
-cookie.txt
-*.log
-server*.log
-novelhub.db-*
+deploy/.env
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
 venv/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# 运行时数据
+data/backups/
+data/books/
+data/exports/
+*.db
+*.db-journal
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

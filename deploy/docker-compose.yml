@@ -1,0 +1,166 @@
+name: novelforge
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "80:80"
+    environment:
+      DOMAIN: ${DOMAIN:-:80}
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - internal
+    mem_limit: 64m
+    cpus: "0.15"
+    logging: *default-logging
+
+  api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --workers
+      - "1"
+      - --no-access-log
+    env_file:
+      - .env
+    environment:
+      APP_ROLE: api
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      SQLALCHEMY_POOL_SIZE: "3"
+      SQLALCHEMY_MAX_OVERFLOW: "1"
+      PYTHONUNBUFFERED: "1"
+      MALLOC_ARENA_MAX: "2"
+      PRIMARY_BASE_URL: http://new-api:3000/v1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=5)"]
+      interval: 30s
+      timeout: 8s
+      retries: 5
+      start_period: 30s
+    volumes:
+      - ../data/books:/app/data/books
+      - ../data/exports:/app/data/exports
+    networks:
+      - internal
+    mem_limit: 384m
+    cpus: "0.50"
+    pids_limit: 128
+    logging: *default-logging
+
+  worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["arq", "app.workers.arq_worker.WorkerSettings"]
+    env_file:
+      - .env
+    environment:
+      APP_ROLE: worker
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      ARQ_MAX_JOBS: "1"
+      SQLALCHEMY_POOL_SIZE: "2"
+      SQLALCHEMY_MAX_OVERFLOW: "0"
+      GLOBAL_LLM_CONCURRENCY: "1"
+      MALLOC_ARENA_MAX: "2"
+      PYTHONUNBUFFERED: "1"
+      PRIMARY_BASE_URL: http://new-api:3000/v1
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - ../data/books:/app/data/books
+      - ../data/exports:/app/data/exports
+    networks:
+      - internal
+    mem_limit: 640m
+    cpus: "1.00"
+    pids_limit: 192
+    stop_grace_period: 90s
+    logging: *default-logging
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file:
+      - .env
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf", "-c", "hba_file=/etc/postgresql/pg_hba.conf"]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-novelforge}
+      POSTGRES_USER: ${POSTGRES_USER:-novelforge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-replace-with-secure-password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ../data/backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+    mem_limit: 768m
+    cpus: "0.75"
+    shm_size: 256m
+    logging: *default-logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    volumes:
+      - redis_data:/data
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+    mem_limit: 160m
+    cpus: "0.20"
+    logging: *default-logging
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:

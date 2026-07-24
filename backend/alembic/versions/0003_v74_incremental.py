@@ -35,13 +35,14 @@ def upgrade() -> None:
             "ck_reasoning_mode",
         ),
     )
-    op.create_index(
-        "ux_agent_model_binding",
-        "agent_model_bindings",
-        ["scope_type", sa.text("COALESCE(scope_id, '00000000-0000-0000-0000-000000000000'::uuid)")],
-        unique=True,
-        postgresql_where=sa.text("scope_type = 'global' OR scope_id IS NOT NULL"),
-    )
+    op.execute("""
+        CREATE UNIQUE INDEX ux_agent_model_binding
+        ON agent_model_bindings (
+            scope_type,
+            COALESCE(scope_id, '00000000-0000-0000-0000-000000000000'::uuid),
+            agent_role
+        )
+    """)
 
     # 3.2 Model change log
     op.create_table(

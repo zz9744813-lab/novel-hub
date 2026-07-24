@@ -577,3 +577,146 @@ async def seed_prompt_templates():
                 )
                 db.add(tpl)
         await db.commit()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# v7.4 API Routes: Model Bindings + Context Inspector + GenreProfile + Research
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/api/model-bindings")
+async def list_model_bindings(db: AsyncSession = Depends(get_db)):
+    from app.models.tables import AgentModelBinding
+    result = await db.execute(select(AgentModelBinding).order_by(AgentModelBinding.agent_role))
+    rows = result.scalars().all()
+    return [{
+        "id": str(r.id), "scope_type": r.scope_type, "scope_id": str(r.scope_id) if r.scope_id else None,
+        "agent_role": r.agent_role, "provider": r.provider, "primary_model": r.primary_model,
+        "fallback_model": r.fallback_model, "reasoning_mode": r.reasoning_mode,
+        "version": r.version, "updated_by": r.updated_by, "updated_at": r.updated_at.isoformat(),
+    } for r in rows]
+
+
+@router.patch("/api/model-bindings/{binding_id}")
+async def update_model_binding(binding_id: str, payload: dict, db: AsyncSession = Depends(get_db)):
+    from app.v74_utils import ModelBindingService
+    svc = ModelBindingService(db)
+    binding = await svc.update_binding(
+        binding_id=uuid.UUID(binding_id),
+        new_provider=payload.get("provider"),
+        new_model=payload.get("primary_model"),
+        new_reasoning_mode=payload.get("reasoning_mode"),
+        new_fallback=payload.get("fallback_model"),
+        reason=payload.get("reason", "Manual update via API"),
+        changed_by=payload.get("changed_by", "user"),
+    )
+    await db.commit()
+    return {"id": str(binding.id), "status": "updated"}
+
+
+@router.get("/api/model-change-log")
+async def list_model_change_log(db: AsyncSession = Depends(get_db)):
+    from app.models.tables import ModelChangeLog
+    result = await db.execute(select(ModelChangeLog).order_by(ModelChangeLog.changed_at.desc()).limit(100))
+    rows = result.scalars().all()
+    return [{"id": str(r.id), "agent_role": r.agent_role, "old_model": r.old_model, "new_model": r.new_model,
+             "reason": r.reason, "changed_by": r.changed_by, "changed_at": r.changed_at.isoformat()} for r in rows]
+
+
+@router.get("/api/runs/{run_id}/model-route-events")
+async def get_model_route_events(run_id: str, db: AsyncSession = Depends(get_db)):
+    from app.models.tables import ModelRouteEvent
+    result = await db.execute(
+        select(ModelRouteEvent).where(ModelRouteEvent.run_id == uuid.UUID(run_id)).order_by(ModelRouteEvent.attempt_no)
+    )
+    rows = result.scalars().all()
+    return [{"attempt_no": r.attempt_no, "configured_model": r.configured_model, "actual_model": r.actual_model,
+             "route_type": r.route_type, "reason": r.reason} for r in rows]
+
+
+@router.get("/api/chapters/{chapter_id}/context-packages")
+async def list_context_packages(chapter_id: str, db: AsyncSession = Depends(get_db)):
+    from app.models.tables import AgentContextPackage
+    result = await db.execute(
+        select(AgentContextPackage).where(AgentContextPackage.chapter_id == uuid.UUID(chapter_id))
+        .order_by(AgentContextPackage.assembled_at.desc()).limit(20)
+    )
+    rows = result.scalars().all()
+    return [{"id": str(r.id), "run_id": str(r.run_id), "attempt_no": r.attempt_no, "agent_role": r.agent_role,
+             "provider": r.provider, "model": r.model, "publish_state": r.publish_state,
+             "block_reason": r.block_reason, "assembled_at": r.assembled_at.isoformat()} for r in rows]
+
+
+@router.get("/api/context-packages/{pkg_id}")
+async def get_context_package_detail(pkg_id: str, db: AsyncSession = Depends(get_db)):
+    from app.models.tables import AgentContextPackage
+    result = await db.execute(select(AgentContextPackage).where(AgentContextPackage.id == uuid.UUID(pkg_id)))
+    pkg = result.scalar_one_or_none()
+    if not pkg:
+        raise HTTPException(404, "Context package not found")
+    return {
+        "id": str(pkg.id), "run_id": str(pkg.run_id), "attempt_no": pkg.attempt_no,
+        "agent_role": pkg.agent_role, "provider": pkg.provider, "model": pkg.model,
+        "prompt_version": pkg.prompt_version, "prompt_template_hash": pkg.prompt_template_hash,
+        "rendered_prompt_hash": pkg.rendered_prompt_hash, "assembly_manifest": pkg.assembly_manifest,
+        "l4_entity_refs": pkg.l4_entity_refs, "assembled_token_estimate": pkg.assembled_token_estimate,
+        "publish_state": pkg.publish_state, "block_reason": pkg.block_reason,
+        "assembled_at": pkg.assembled_at.isoformat(),
+    }
+
+
+@router.post("/api/books/{book_id}/reference-samples")
+async def upload_reference_sample(book_id: str, file: UploadFile = File(...), db: AsyncSession = Depends(get_db)):
+    # Simplified: save compressed to /data/references/{book_id}/{uuid}.txt.gz
+    import gzip
+    import hashlib
+    from pathlib import Path
+    from app.models.tables import ReferenceSample
+    book = await db.execute(select(Book).where(Book.id == uuid.UUID(book_id)))
+    if not book.scalar_one_or_none():
+        raise HTTPException(404, "Book not found")
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(400, "File too large (max 10MB)")
+    sha = hashlib.sha256(content).hexdigest()
+    sample_id = gen_uuid()
+    out_dir = Path(f"/data/references/{book_id}")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{sample_id}.txt.gz"
+    compressed = gzip.compress(content)
+    out_path.write_bytes(compressed)
+    sample = ReferenceSample(
+        id=sample_id, book_id=uuid.UUID(book_id), original_filename=file.filename or "upload.txt",
+        storage_path=str(out_path), content_sha256=sha, mime_type=file.content_type or "text/plain",
+        original_size_bytes=len(content), compressed_size_bytes=len(compressed),
+        character_count=len(content.decode("utf-8", errors="ignore")),
+        status="ready", created_by="user",
+    )
+    db.add(sample)
+    await db.commit()
+    return {"sample_id": str(sample_id), "status": "ready"}
+
+
+@router.get("/api/books/{book_id}/genre-profiles")
+async def list_genre_profiles(book_id: str, db: AsyncSession = Depends(get_db)):
+    from app.models.tables import GenreProfile
+    result = await db.execute(
+        select(GenreProfile).where(GenreProfile.book_id == uuid.UUID(book_id)).order_by(GenreProfile.version.desc())
+    )
+    rows = result.scalars().all()
+    return [{"id": str(r.id), "version": r.version, "status": r.status, "created_at": r.created_at.isoformat()} for r in rows]
+
+
+@router.post("/api/research-sessions/{session_id}/approve")
+async def approve_research_session(session_id: str, db: AsyncSession = Depends(get_db)):
+    from app.models.tables import ResearchSession
+    result = await db.execute(select(ResearchSession).where(ResearchSession.id == uuid.UUID(session_id)))
+    sess = result.scalar_one_or_none()
+    if not sess:
+        raise HTTPException(404, "Research session not found")
+    if sess.status not in ("suggested", "queued"):
+        raise HTTPException(400, f"Cannot approve session in status {sess.status}")
+    sess.status = "approved"
+    sess.approved_by = "user"
+    sess.approved_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {"session_id": session_id, "status": "approved"}

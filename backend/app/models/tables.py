@@ -601,7 +601,7 @@ class TechniqueCard(Base, TimestampMixin):
 # v7.4 Tables: Model Bindings + Change Log + Route Events + Context Packages
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class AgentModelBinding(Base, TimestampMixin):
+class AgentModelBinding(Base):
     __tablename__ = "agent_model_bindings"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
     scope_type: Mapped[str] = mapped_column(String(20), nullable=False)  # 'global' or 'book'
@@ -616,7 +616,7 @@ class AgentModelBinding(Base, TimestampMixin):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
-class ModelChangeLog(Base, TimestampMixin):
+class ModelChangeLog(Base):
     __tablename__ = "model_change_log"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
     binding_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("agent_model_bindings.id"), nullable=False)
@@ -632,7 +632,7 @@ class ModelChangeLog(Base, TimestampMixin):
     changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
-class ModelRouteEvent(Base, TimestampMixin):
+class ModelRouteEvent(Base):
     __tablename__ = "model_route_events"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
     run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("agent_runs.id"), nullable=False)
@@ -646,7 +646,7 @@ class ModelRouteEvent(Base, TimestampMixin):
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
-class AgentContextPackage(Base, TimestampMixin):
+class AgentContextPackage(Base):
     __tablename__ = "agent_context_packages"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
     run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("agent_runs.id"), nullable=False)
@@ -678,7 +678,7 @@ class AgentContextPackage(Base, TimestampMixin):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-class ReferenceSample(Base, TimestampMixin):
+class ReferenceSample(Base):
     __tablename__ = "reference_samples"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
     book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=False)
@@ -695,7 +695,7 @@ class ReferenceSample(Base, TimestampMixin):
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
-class GenreProfile(Base, TimestampMixin):
+class GenreProfile(Base):
     __tablename__ = "genre_profiles"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
     book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=False)
@@ -713,7 +713,7 @@ class GenreProfile(Base, TimestampMixin):
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-class ResearchSession(Base, TimestampMixin):
+class ResearchSession(Base):
     __tablename__ = "research_sessions"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
     book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=False)
@@ -729,7 +729,7 @@ class ResearchSession(Base, TimestampMixin):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-class ExternalResearchEvidence(Base, TimestampMixin):
+class ExternalResearchEvidence(Base):
     __tablename__ = "external_research_evidence"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
     research_session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("research_sessions.id", ondelete="CASCADE"), nullable=False)

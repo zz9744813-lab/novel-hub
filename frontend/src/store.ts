@@ -8,7 +8,7 @@ interface AppState {
   error: string | null;
   fetchBooks: () => Promise<void>;
   selectBook: (id: string) => void;
-  createBook: (title: string, desc?: string) => Promise<string | null>;
+  createBook: (title: string, desc?: string, targetChapters?: number) => Promise<string | null>;
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -29,9 +29,13 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
   selectBook: (id: string) => set({ selectedBookId: id }),
-  createBook: async (title: string, desc?: string) => {
+  createBook: async (title: string, desc?: string, targetChapters?: number) => {
     try {
-      const { book_id } = await api.books.create({ title, description: desc });
+      const { book_id } = await api.books.create({
+        title,
+        description: desc,
+        target_chapters: targetChapters ?? 500,
+      });
       await get().fetchBooks();
       set({ selectedBookId: book_id });
       return book_id;

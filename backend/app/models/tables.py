@@ -2,7 +2,7 @@
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import (
-    Integer, String, Text, Boolean, DateTime, Float, ForeignKey, Index, UniqueConstraint
+    Integer, String, Text, Boolean, DateTime, Float, ForeignKey, Index, UniqueConstraint, func
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY, TSVECTOR
@@ -486,20 +486,21 @@ class RewritePatch(Base, TimestampMixin):
 
 
 # ---- DriftAudit ----
-class DriftAuditReport(Base, TimestampMixin):
+class DriftAuditReport(Base):
     __tablename__ = "drift_audit_reports"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
     book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     chapter_range_start: Mapped[int] = mapped_column(Integer, nullable=False)
     chapter_range_end: Mapped[int] = mapped_column(Integer, nullable=False)
-    status: Mapped[str] = mapped_column(String(50), default="pending", nullable=False)
-    metrics: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    redline_findings: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
-    yellow_findings: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
-    affected_entities: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
-    affected_future_nodes: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
-    recommended_actions: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
-    evidence_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    metrics: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    redline_findings: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    yellow_findings: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    affected_entities: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    affected_future_nodes: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    recommended_actions: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    evidence_refs: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
 # ---- Agent run tables ----
@@ -594,3 +595,159 @@ class TechniqueCard(Base, TimestampMixin):
     approved_by_human: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     source_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# v7.4 Tables: Model Bindings + Change Log + Route Events + Context Packages
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class AgentModelBinding(Base, TimestampMixin):
+    __tablename__ = "agent_model_bindings"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    scope_type: Mapped[str] = mapped_column(String(20), nullable=False)  # 'global' or 'book'
+    scope_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    agent_role: Mapped[str] = mapped_column(String(100), nullable=False)
+    provider: Mapped[str] = mapped_column(String(100), nullable=False)
+    primary_model: Mapped[str] = mapped_column(String(200), nullable=False)
+    fallback_model: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    reasoning_mode: Mapped[str] = mapped_column(String(30), nullable=False, default="auto")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    updated_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class ModelChangeLog(Base, TimestampMixin):
+    __tablename__ = "model_change_log"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    binding_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("agent_model_bindings.id"), nullable=False)
+    agent_role: Mapped[str] = mapped_column(String(100), nullable=False)
+    old_provider: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    old_model: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    new_provider: Mapped[str] = mapped_column(String(100), nullable=False)
+    new_model: Mapped[str] = mapped_column(String(200), nullable=False)
+    old_reasoning_mode: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    new_reasoning_mode: Mapped[str] = mapped_column(String(30), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    changed_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class ModelRouteEvent(Base, TimestampMixin):
+    __tablename__ = "model_route_events"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("agent_runs.id"), nullable=False)
+    attempt_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    agent_role: Mapped[str] = mapped_column(String(100), nullable=False)
+    configured_provider: Mapped[str] = mapped_column(String(100), nullable=False)
+    configured_model: Mapped[str] = mapped_column(String(200), nullable=False)
+    actual_provider: Mapped[str] = mapped_column(String(100), nullable=False)
+    actual_model: Mapped[str] = mapped_column(String(200), nullable=False)
+    route_type: Mapped[str] = mapped_column(String(20), nullable=False)  # 'primary', 'retry', 'fallback'
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class AgentContextPackage(Base, TimestampMixin):
+    __tablename__ = "agent_context_packages"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("agent_runs.id"), nullable=False)
+    attempt_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=False)
+    chapter_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("chapters.id"), nullable=True)
+    scene_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("scenes.id"), nullable=True)
+    agent_role: Mapped[str] = mapped_column(String(100), nullable=False)
+    provider: Mapped[str] = mapped_column(String(100), nullable=False)
+    model: Mapped[str] = mapped_column(String(200), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    prompt_template_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    context_schema_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    assembler_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    request_parameters: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    assembly_manifest: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    l4_entity_refs: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    l1_ledger_refs: Mapped[list] = mapped_column(ARRAY(UUID(as_uuid=True)), nullable=False, server_default="{}")
+    l2_summary_refs: Mapped[list] = mapped_column(ARRAY(UUID(as_uuid=True)), nullable=False, server_default="{}")
+    l3_summary_refs: Mapped[list] = mapped_column(ARRAY(UUID(as_uuid=True)), nullable=False, server_default="{}")
+    genre_profile_ref: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("genre_profiles.id"), nullable=True)
+    story_evidence_refs: Mapped[list] = mapped_column(ARRAY(UUID(as_uuid=True)), nullable=False, server_default="{}")
+    external_evidence_refs: Mapped[list] = mapped_column(ARRAY(UUID(as_uuid=True)), nullable=False, server_default="{}")
+    assembled_token_estimate: Mapped[int] = mapped_column(Integer, nullable=False)
+    rendered_prompt_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    publish_state: Mapped[str] = mapped_column(String(50), nullable=False)
+    block_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    assembled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ReferenceSample(Base, TimestampMixin):
+    __tablename__ = "reference_samples"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(500), nullable=False)
+    storage_path: Mapped[str] = mapped_column(String(1000), nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    original_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    compressed_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    character_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    genre_hint: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    status: Mapped[str] = mapped_column(String(50), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class GenreProfile(Base, TimestampMixin):
+    __tablename__ = "genre_profiles"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(50), nullable=False)
+    narrative_person: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    pacing_profile: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    technique_tags: Mapped[list] = mapped_column(ARRAY(String), nullable=False, server_default="{}")
+    lexical_tendency: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    content_intensity_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prompt_injection_snippet: Mapped[str] = mapped_column(Text, nullable=False)
+    analyzer_run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("agent_runs.id"), nullable=False)
+    sanitizer_report: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    approved_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ResearchSession(Base, TimestampMixin):
+    __tablename__ = "research_sessions"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=False)
+    chapter_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("chapters.id"), nullable=True)
+    outline_node_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("outline_nodes.id"), nullable=True)
+    trigger_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    status: Mapped[str] = mapped_column(String(50), nullable=False)
+    requested_topic: Mapped[str] = mapped_column(Text, nullable=False)
+    plan_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("agent_runs.id"), nullable=True)
+    synthesis_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("agent_runs.id"), nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ExternalResearchEvidence(Base, TimestampMixin):
+    __tablename__ = "external_research_evidence"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    research_session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("research_sessions.id", ondelete="CASCADE"), nullable=False)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=False)
+    chapter_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("chapters.id"), nullable=True)
+    query: Mapped[str] = mapped_column(Text, nullable=False)
+    source_url: Mapped[str] = mapped_column(String(2000), nullable=False)
+    source_domain: Mapped[str] = mapped_column(String(500), nullable=False)
+    source_title: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    source_content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    valid_as_of: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    trust_tier: Mapped[str] = mapped_column(String(50), nullable=False)
+    relevance: Mapped[str] = mapped_column(String(50), nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    status: Mapped[str] = mapped_column(String(50), nullable=False)
+    conflicts_or_uncertainty: Mapped[list | None] = mapped_column(ARRAY(String), nullable=True)
+    evidence_source: Mapped[str] = mapped_column(String(50), nullable=False, server_default="external_research")
+    source_run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("agent_runs.id"), nullable=False)

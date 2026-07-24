@@ -47,10 +47,12 @@ async def commit_l4_with_events(
 
     Order: advisory_lock -> story_events -> L4 snapshot -> L1 ledger -> commit
     All in one transaction. Any failure = full rollback.
+    
+    C-25: Uses deterministic SHA-256 -> bigint for advisory lock key.
     """
-    # §7.4: Acquire book-level advisory lock for L4 commit
-    # Use book_id hash as lock key (positive int for pg_advisory_xact_lock)
-    lock_key = abs(hash(str(book_id))) % (2**31)
+    # C-25: Deterministic advisory lock using SHA-256
+    from app.v74_utils import advisory_lock_key
+    lock_key = advisory_lock_key(book_id)
     await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key})
 
     # Step 4: Write story_events (only explicit certainty per §5.5)

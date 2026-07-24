@@ -12,6 +12,9 @@ from app.models.tables import (
     ReviewIssue, RewritePatch, DriftAuditReport,
     AgentRun, AgentRunOutput, LlmUsageEvent,
     HumanIntervention, PromptTemplate, TechniqueCard,
+    # v7.4 models
+    AgentModelBinding, ModelChangeLog, ModelRouteEvent, AgentContextPackage,
+    ReferenceSample, GenreProfile, ResearchSession, ExternalResearchEvidence,
 )
 
 __all__ = [
@@ -27,4 +30,7 @@ __all__ = [
     "ReviewIssue", "RewritePatch", "DriftAuditReport",
     "AgentRun", "AgentRunOutput", "LlmUsageEvent",
     "HumanIntervention", "PromptTemplate", "TechniqueCard",
+    # v7.4
+    "AgentModelBinding", "ModelChangeLog", "ModelRouteEvent", "AgentContextPackage",
+    "ReferenceSample", "GenreProfile", "ResearchSession", "ExternalResearchEvidence",
 ]

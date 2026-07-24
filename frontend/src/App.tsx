@@ -15,9 +15,6 @@ import { ResearchPanel } from "./components/ResearchPanel";
 
 type Tab = "overview" | "outline" | "chapters" | "memory" | "audit" | "context" | "models" | "genre" | "research";
 
-// Tabs that work without a selected book
-const GLOBAL_TABS = new Set<Tab>(["overview", "models"]);
-
 export default function App() {
   const { fetchBooks, books, selectedBookId } = useStore();
   const [tab, setTab] = useState<Tab>("overview");
@@ -36,20 +33,29 @@ export default function App() {
   }, [tab]);
 
   const renderMain = () => {
-    // Global tabs (no book required)
+    // Global / no-book tabs
     if (tab === "models") return <ModelBindingPanel />;
+    if (tab === "context") {
+      return <ContextInspector bookId={selectedBookId || ""} />;
+    }
+    if (tab === "genre") {
+      return selectedBookId
+        ? <GenreProfilePanel bookId={selectedBookId} />
+        : <EmptyBookHint title="Genre Profile" tip="请先新建/选择一个项目，再管理文风档案" onNew={() => setShowCreate(true)} />;
+    }
+    if (tab === "research") {
+      return selectedBookId
+        ? <ResearchPanel bookId={selectedBookId} />
+        : <EmptyBookHint title="Research Sessions" tip="请先新建/选择一个项目" onNew={() => setShowCreate(true)} />;
+    }
     if (tab === "overview" || !selectedBookId) {
       return <BookList onNewBook={() => setShowCreate(true)} />;
     }
-    // Book-scoped tabs
     switch (tab) {
       case "outline": return <OutlineGraph bookId={selectedBookId} />;
       case "chapters": return <ChapterList bookId={selectedBookId} />;
       case "memory": return <MemoryPanel bookId={selectedBookId} />;
       case "audit": return <DriftAuditPanel bookId={selectedBookId} />;
-      case "context": return <ContextInspector bookId={selectedBookId} />;
-      case "genre": return <GenreProfilePanel bookId={selectedBookId} />;
-      case "research": return <ResearchPanel bookId={selectedBookId} />;
       default: return <BookList onNewBook={() => setShowCreate(true)} />;
     }
   };
@@ -79,6 +85,16 @@ export default function App() {
       </div>
 
       {showCreate && <CreateBookModal onClose={() => setShowCreate(false)} />}
+    </div>
+  );
+}
+
+function EmptyBookHint({ title, tip, onNew }: { title: string; tip: string; onNew: () => void }) {
+  return (
+    <div className="panel-elevated rounded-lg p-8 max-w-md mx-auto mt-16 text-center space-y-3">
+      <h2 className="text-sm text-text-primary" style={{ fontWeight: 510 }}>{title}</h2>
+      <p className="text-xs text-text-tertiary">{tip}</p>
+      <button onClick={onNew} className="btn-primary px-4 py-2 text-xs rounded-md">新建项目</button>
     </div>
   );
 }

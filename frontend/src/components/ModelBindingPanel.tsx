@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
-import { api, ModelBinding, ModelChangeLogEntry } from "../api";
+import { api, ModelBinding, ModelChangeLogEntry, AvailableModel } from "../api";
 import { Cpu, History, Save, RefreshCw } from "lucide-react";
 
 export function ModelBindingPanel() {
   const [bindings, setBindings] = useState<ModelBinding[]>([]);
   const [logs, setLogs] = useState<ModelChangeLogEntry[]>([]);
+  const [available, setAvailable] = useState<AvailableModel[]>([]);
+  const [modelSource, setModelSource] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Record<string, Partial<ModelBinding> & { reason?: string }>>({});
   const [error, setError] = useState<string | null>(null);
@@ -14,9 +16,15 @@ export function ModelBindingPanel() {
     setLoading(true);
     setError(null);
     try {
-      const [b, l] = await Promise.all([api.models.list(), api.models.changeLog()]);
+      const [b, l, a] = await Promise.all([
+        api.models.list(),
+        api.models.changeLog(),
+        api.models.available().catch(() => ({ models: [] as AvailableModel[], count: 0, source: "" })),
+      ]);
       setBindings(b);
       setLogs(l);
+      setAvailable(a.models || []);
+      setModelSource(a.source || "");
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -58,12 +66,22 @@ export function ModelBindingPanel() {
     }
   };
 
+  const modelOptions = (current: string | null | undefined) => {
+    const ids = available.map((m) => m.id);
+    if (current && !ids.includes(current)) ids.unshift(current);
+    return ids;
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-sm text-text-primary" style={{ fontWeight: 510 }}>模型绑定</h2>
-          <p className="text-2xs text-text-disabled font-mono mt-0.5">C-21 · agent_model_bindings · 运行时读库不读 .env</p>
+          <p className="text-2xs text-text-disabled font-mono mt-0.5">
+            C-21 · 下拉列表自动从 API 拉取
+            {modelSource ? ` · ${modelSource}` : ""}
+            {available.length ? ` · ${available.length} models` : ""}
+          </p>
         </div>
         <button onClick={load} className="btn-ghost px-2.5 py-1.5 text-xs rounded-md flex items-center gap-1.5">
           <RefreshCw size={12} /> 刷新
@@ -100,30 +118,48 @@ export function ModelBindingPanel() {
                 {bindings.map((b) => {
                   const e = editing[b.id] || {};
                   const dirty = !!editing[b.id];
+                  const primary = e.primary_model ?? b.primary_model;
+                  const fallback = e.fallback_model ?? b.fallback_model ?? "";
                   return (
                     <tr key={b.id} className="hover:bg-bg-hover/50">
                       <td className="px-3 py-2 text-text-primary" style={{ fontWeight: 510 }}>{b.agent_role}</td>
                       <td className="px-3 py-2">
-                        <input
-                          className="w-24 bg-bg-canvas border border-border rounded px-1.5 py-1 text-2xs font-mono text-text-secondary focus:outline-none focus:border-brand"
+                        <select
+                          className="w-28 bg-bg-canvas border border-border rounded px-1.5 py-1 text-2xs font-mono text-text-secondary focus:outline-none focus:border-brand"
                           value={e.provider ?? b.provider}
                           onChange={(ev) => setField(b.id, "provider", ev.target.value)}
-                        />
+                        >
+                          {["openrouter", "new-api", "openai", "anthropic", "custom"].map((p) => (
+                            <option key={p} value={p}>{p}</option>
+                          ))}
+                          {(e.provider ?? b.provider) &&
+                            !["openrouter", "new-api", "openai", "anthropic", "custom"].includes(e.provider ?? b.provider) && (
+                              <option value={e.provider ?? b.provider}>{e.provider ?? b.provider}</option>
+                            )}
+                        </select>
                       </td>
                       <td className="px-3 py-2">
-                        <input
-                          className="w-44 bg-bg-canvas border border-border rounded px-1.5 py-1 text-2xs font-mono text-text-secondary focus:outline-none focus:border-brand"
-                          value={e.primary_model ?? b.primary_model}
+                        <select
+                          className="w-48 max-w-[14rem] bg-bg-canvas border border-border rounded px-1.5 py-1 text-2xs font-mono text-text-secondary focus:outline-none focus:border-brand"
+                          value={primary}
                           onChange={(ev) => setField(b.id, "primary_model", ev.target.value)}
-                        />
+                        >
+                          {modelOptions(primary).map((id) => (
+                            <option key={id} value={id}>{id}</option>
+                          ))}
+                        </select>
                       </td>
                       <td className="px-3 py-2">
-                        <input
-                          className="w-36 bg-bg-canvas border border-border rounded px-1.5 py-1 text-2xs font-mono text-text-secondary focus:outline-none focus:border-brand"
-                          value={e.fallback_model ?? b.fallback_model ?? ""}
-                          placeholder="—"
+                        <select
+                          className="w-40 max-w-[12rem] bg-bg-canvas border border-border rounded px-1.5 py-1 text-2xs font-mono text-text-secondary focus:outline-none focus:border-brand"
+                          value={fallback}
                           onChange={(ev) => setField(b.id, "fallback_model", ev.target.value)}
-                        />
+                        >
+                          <option value="">— 无 fallback —</option>
+                          {modelOptions(fallback || null).map((id) => (
+                            <option key={id} value={id}>{id}</option>
+                          ))}
+                        </select>
                       </td>
                       <td className="px-3 py-2">
                         <input
@@ -152,7 +188,6 @@ export function ModelBindingPanel() {
         )}
       </div>
 
-      {/* Change log */}
       <div className="panel-elevated rounded-lg overflow-hidden">
         <div className="px-3 py-2 border-b border-border flex items-center gap-2">
           <History size={13} className="text-brand-accent" />

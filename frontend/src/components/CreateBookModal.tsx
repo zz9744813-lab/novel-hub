@@ -3,8 +3,9 @@ import { useStore } from "../store";
 import { api } from "../api";
 import { X, Loader2, PenTool, Upload, FileText, CheckCircle2 } from "lucide-react";
 
-const ACCEPTED = ".txt,.md,.markdown,.text";
-const MAX_MB = 2;
+const ACCEPTED = ".txt,.md,.markdown,.text,.docx,.doc,.pdf,.rtf,.csv,.tsv,.json,.jsonl,.html,.htm,.xml,.log";
+const MAX_MB = 5;
+const ACCEPT_HINT = ".txt / .md / .docx / .pdf / .rtf / .csv / .json / .html";
 
 export function CreateBookModal({ onClose }: { onClose: () => void }) {
   const { createBook } = useStore();
@@ -22,8 +23,14 @@ export function CreateBookModal({ onClose }: { onClose: () => void }) {
   const pickFile = useCallback((f: File | null | undefined) => {
     if (!f) return;
     const name = f.name.toLowerCase();
-    if (!name.endsWith(".txt") && !name.endsWith(".md") && !name.endsWith(".markdown") && !name.endsWith(".text")) {
-      setError("仅支持 .txt / .md 大纲文件");
+    const ok = [
+      ".txt", ".md", ".markdown", ".text",
+      ".docx", ".doc", ".pdf", ".rtf",
+      ".csv", ".tsv", ".json", ".jsonl",
+      ".html", ".htm", ".xml", ".log",
+    ].some((ext) => name.endsWith(ext));
+    if (!ok) {
+      setError(`不支持该文件类型。支持：${ACCEPT_HINT}`);
       return;
     }
     if (f.size > MAX_MB * 1024 * 1024) {
@@ -32,9 +39,8 @@ export function CreateBookModal({ onClose }: { onClose: () => void }) {
     }
     setError(null);
     setFile(f);
-    // Auto-fill title from filename if empty
     if (!title.trim()) {
-      const base = f.name.replace(/\.(txt|md|markdown|text)$/i, "");
+      const base = f.name.replace(/\.[^.]+$/i, "");
       setTitle(base);
     }
   }, [title]);
@@ -108,7 +114,7 @@ export function CreateBookModal({ onClose }: { onClose: () => void }) {
           {/* Drop zone */}
           <div>
             <label className="block text-2xs text-text-tertiary mb-1.5 uppercase tracking-wider">
-              大纲文件 <span className="text-text-disabled normal-case">（可选 · .txt / .md）</span>
+              大纲文件 <span className="text-text-disabled normal-case">（可选 · {ACCEPT_HINT}）</span>
             </label>
             <div
               onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
@@ -147,7 +153,7 @@ export function CreateBookModal({ onClose }: { onClose: () => void }) {
                   <div className="text-xs text-text-secondary">
                     {dragOver ? "松开以上传" : "拖拽大纲文件到这里"}
                   </div>
-                  <div className="text-2xs text-text-disabled">或点击选择 · 最大 {MAX_MB}MB</div>
+                  <div className="text-2xs text-text-disabled">或点击选择 · 最大 {MAX_MB}MB · {ACCEPT_HINT}</div>
                 </>
               )}
             </div>

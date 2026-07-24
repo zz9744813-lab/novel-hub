@@ -115,30 +115,22 @@ async def upload_outline_file(
     target_chapter_count: int = Form(500),
     db: AsyncSession = Depends(get_db),
 ):
-    """Upload a .txt/.md file containing outline text, parse it via AI.
+    """Upload outline document and parse via AI.
 
-    Supports: text/plain, text/markdown, application/octet-stream.
-    Max file size: 2MB (low-spec VPS constraint).
+    Supports: .txt .md .docx .pdf .rtf .csv .json .html .xml (max 5MB).
     """
-    # Validate file type
-    allowed_types = {"text/plain", "text/markdown", "application/octet-stream", ""}
-    if file.content_type and file.content_type not in allowed_types:
-        raise HTTPException(400, f"Unsupported file type: {file.content_type}. Use .txt or .md files.")
+    from app.engine.file_extract import extract_text, ALLOWED_EXTENSIONS
 
-    # Read file content (max 2MB)
     content = await file.read()
-    if len(content) > 2 * 1024 * 1024:
-        raise HTTPException(400, "File too large. Max 2MB for low-spec VPS.")
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(400, "File too large. Max 5MB.")
     if len(content) == 0:
         raise HTTPException(400, "Empty file.")
 
     try:
-        raw_text = content.decode("utf-8")
-    except UnicodeDecodeError:
-        try:
-            raw_text = content.decode("gbk")
-        except UnicodeDecodeError:
-            raw_text = content.decode("utf-8", errors="replace")
+        raw_text = extract_text(content, filename=file.filename, content_type=file.content_type)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
 
     # Create outline version and parse
     from app.agents.outline_parser import parse_outline as do_parse
@@ -582,6 +574,53 @@ async def seed_prompt_templates():
 # ═══════════════════════════════════════════════════════════════════════════════
 # v7.4 API Routes: Model Bindings + Context Inspector + GenreProfile + Research
 # ═══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/api/models/available")
+async def list_available_models():
+    """Pull model list from primary LLM gateway (New-API / OpenAI-compatible /v1/models)."""
+    import httpx
+    from app.config import settings
+
+    base = (settings.primary_base_url or "").rstrip("/")
+    if not base:
+        raise HTTPException(503, "PRIMARY_BASE_URL not configured")
+
+    url = f"{base}/models"
+    headers = {}
+    if settings.primary_api_key:
+        headers["Authorization"] = f"Bearer {settings.primary_api_key}"
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+            payload = resp.json()
+    except Exception as e:
+        raise HTTPException(502, f"Failed to fetch models from gateway: {e}") from e
+
+    data = payload.get("data") if isinstance(payload, dict) else payload
+    models: list[dict] = []
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict) and item.get("id"):
+                models.append({
+                    "id": item["id"],
+                    "owned_by": item.get("owned_by"),
+                    "object": item.get("object", "model"),
+                })
+            elif isinstance(item, str):
+                models.append({"id": item, "owned_by": None, "object": "model"})
+
+    # Deduplicate + sort
+    seen = set()
+    unique = []
+    for m in models:
+        if m["id"] not in seen:
+            seen.add(m["id"])
+            unique.append(m)
+    unique.sort(key=lambda x: x["id"].lower())
+    return {"models": unique, "count": len(unique), "source": base}
+
 
 @router.get("/api/model-bindings")
 async def list_model_bindings(db: AsyncSession = Depends(get_db)):

@@ -9,37 +9,36 @@ interface Props {
 }
 
 const tabs = [
-  { id: "overview", label: "项目总览", icon: BookOpen, desc: "BOOKS" },
-  { id: "outline",  label: "大纲依赖", icon: GitGraph,  desc: "DAG" },
-  { id: "chapters", label: "章节流水线", icon: FileText, desc: "PIPE" },
-  { id: "memory",   label: "记忆银行", icon: Brain,     desc: "L0-L4" },
-  { id: "audit",    label: "漂移审计", icon: AlertTriangle, desc: "DRIFT" },
-  { id: "context",  label: "Context", icon: Package, desc: "C-35" },
-  { id: "models",   label: "模型绑定", icon: Cpu, desc: "C-21" },
-  { id: "genre",    label: "Genre", icon: Palette, desc: "C-27" },
-  { id: "research", label: "调研", icon: Globe, desc: "C-32" },
+  { id: "overview", label: "项目总览", icon: BookOpen, desc: "BOOKS", needsBook: false },
+  { id: "outline",  label: "大纲依赖", icon: GitGraph,  desc: "DAG", needsBook: true },
+  { id: "chapters", label: "章节流水线", icon: FileText, desc: "PIPE", needsBook: true },
+  { id: "memory",   label: "记忆银行", icon: Brain,     desc: "L0-L4", needsBook: true },
+  { id: "audit",    label: "漂移审计", icon: AlertTriangle, desc: "DRIFT", needsBook: true },
+  { id: "context",  label: "Context", icon: Package, desc: "C-35", needsBook: false },
+  { id: "models",   label: "模型绑定", icon: Cpu, desc: "C-21", needsBook: false },
+  { id: "genre",    label: "Genre", icon: Palette, desc: "C-27", needsBook: false },
+  { id: "research", label: "调研", icon: Globe, desc: "C-32", needsBook: false },
 ];
 
 export function Sidebar({ tab, setTab, onNewBook, selectedBookId }: Props) {
   return (
     <aside className="w-52 bg-bg-panel border-r border-border flex flex-col shrink-0">
-      {/* Logo */}
       <div className="h-11 flex items-center px-4 border-b border-border">
         <PenTool size={15} className="text-brand" />
         <span className="ml-2 text-xs text-text-primary tracking-wide" style={{ fontWeight: 510 }}>NovelForge</span>
         <span className="ml-auto text-2xs text-text-disabled font-mono">v7.4</span>
       </div>
 
-      {/* Nav */}
       <nav className="flex-1 p-2 space-y-px overflow-auto">
         {tabs.map((t) => {
           const Icon = t.icon;
           const active = tab === t.id;
-          const disabled = !["overview", "models"].includes(t.id) && !selectedBookId;
+          const disabled = t.needsBook && !selectedBookId;
           return (
             <button
               key={t.id}
               onClick={() => !disabled && setTab(t.id)}
+              title={disabled ? "请先选择或新建一个项目" : undefined}
               className={clsx(
                 "w-full flex items-center gap-2.5 px-3 py-[7px] rounded text-xs text-left transition-all duration-150",
                 active
@@ -59,7 +58,6 @@ export function Sidebar({ tab, setTab, onNewBook, selectedBookId }: Props) {
         })}
       </nav>
 
-      {/* New Book */}
       <div className="p-2 border-t border-border">
         <button
           onClick={onNewBook}

@@ -63,6 +63,7 @@ export const api = {
   },
   models: {
     list: () => fetchJSON<ModelBinding[]>("/api/model-bindings"),
+    available: () => fetchJSON<{ models: AvailableModel[]; count: number; source: string }>("/api/models/available"),
     update: (id: string, data: Partial<ModelBinding> & { reason?: string }) =>
       fetchJSON<{ id: string; status: string }>(`/api/model-bindings/${id}`, {
         method: "PATCH",
@@ -120,6 +121,12 @@ export interface ModelBinding {
   version: number;
   updated_by: string;
   updated_at: string;
+}
+
+export interface AvailableModel {
+  id: string;
+  owned_by?: string | null;
+  object?: string;
 }
 
 export interface ModelChangeLogEntry {

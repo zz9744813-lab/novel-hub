@@ -1,0 +1,26 @@
+:80 {
+    # API and backend routes -> reverse proxy to API
+    @api path /api/* /health/* /metrics /ws/* /docs /redoc /openapi.json
+    handle @api {
+        reverse_proxy api:8000
+    }
+
+    # Everything else -> SPA static files
+    handle {
+        root * /srv
+        try_files {path} /index.html
+        file_server
+    }
+
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options SAMEORIGIN
+        Referrer-Policy strict-origin-when-cross-origin
+        -Server
+    }
+
+    log {
+        output stdout
+        format json
+    }
+}

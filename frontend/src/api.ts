@@ -55,6 +55,29 @@ export const api = {
     get: (id: string) => fetchJSON<Chapter>(`/api/chapters/${id}`),
     pause: (id: string) => fetchJSON<void>(`/api/chapters/${id}/pause`, { method: "POST" }),
     resume: (id: string) => fetchJSON<void>(`/api/chapters/${id}/resume`, { method: "POST" }),
+    contextPackages: (chapterId: string) =>
+      fetchJSON<ContextPackageSummary[]>(`/api/chapters/${chapterId}/context-packages`),
+  },
+  context: {
+    get: (id: string) => fetchJSON<ContextPackageDetail>(`/api/context-packages/${id}`),
+  },
+  models: {
+    list: () => fetchJSON<ModelBinding[]>("/api/model-bindings"),
+    update: (id: string, data: Partial<ModelBinding> & { reason?: string }) =>
+      fetchJSON<{ id: string; status: string }>(`/api/model-bindings/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }),
+    changeLog: () => fetchJSON<ModelChangeLogEntry[]>("/api/model-change-log"),
+    routeEvents: (runId: string) =>
+      fetchJSON<ModelRouteEvent[]>(`/api/runs/${runId}/model-route-events`),
+  },
+  genre: {
+    list: (bookId: string) => fetchJSON<GenreProfileSummary[]>(`/api/books/${bookId}/genre-profiles`),
+  },
+  research: {
+    approve: (sessionId: string) =>
+      fetchJSON<{ session_id: string; status: string }>(`/api/research-sessions/${sessionId}/approve`, { method: "POST" }),
   },
   memory: {
     l4: (bookId: string) => fetchJSON<{ snapshots: L4Snapshot[] }>(`/api/books/${bookId}/memory/l4`),
@@ -83,4 +106,64 @@ export interface Chapter {
 export interface L4Snapshot {
   id: string; entity_type: string; entity_id: string;
   as_of_chapter: number; state: any; version: number; is_locked: boolean;
+}
+
+export interface ModelBinding {
+  id: string;
+  scope_type: string;
+  scope_id: string | null;
+  agent_role: string;
+  provider: string;
+  primary_model: string;
+  fallback_model: string | null;
+  reasoning_mode: string;
+  version: number;
+  updated_by: string;
+  updated_at: string;
+}
+
+export interface ModelChangeLogEntry {
+  id: string;
+  agent_role: string;
+  old_model: string | null;
+  new_model: string;
+  reason: string;
+  changed_by: string;
+  changed_at: string;
+}
+
+export interface ModelRouteEvent {
+  attempt_no: number;
+  configured_model: string;
+  actual_model: string;
+  route_type: string;
+  reason: string | null;
+}
+
+export interface ContextPackageSummary {
+  id: string;
+  run_id: string;
+  attempt_no: number;
+  agent_role: string;
+  provider: string;
+  model: string;
+  publish_state: string;
+  block_reason: string | null;
+  assembled_at: string;
+}
+
+export interface ContextPackageDetail extends ContextPackageSummary {
+  prompt_version: string;
+  prompt_template_hash: string;
+  rendered_prompt_hash: string;
+  assembly_manifest: any;
+  l4_entity_refs: any[];
+  assembled_token_estimate: number;
+}
+
+export interface GenreProfileSummary {
+  id: string;
+  version: number;
+  status: string;
+  created_at: string;
 }

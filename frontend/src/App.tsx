@@ -8,8 +8,15 @@ import { MemoryPanel } from "./components/MemoryPanel";
 import { DriftAuditPanel } from "./components/DriftAuditPanel";
 import { ResourceBar } from "./components/ResourceBar";
 import { CreateBookModal } from "./components/CreateBookModal";
+import { ContextInspector } from "./components/ContextInspector";
+import { ModelBindingPanel } from "./components/ModelBindingPanel";
+import { GenreProfilePanel } from "./components/GenreProfilePanel";
+import { ResearchPanel } from "./components/ResearchPanel";
 
-type Tab = "overview" | "outline" | "chapters" | "memory" | "audit";
+type Tab = "overview" | "outline" | "chapters" | "memory" | "audit" | "context" | "models" | "genre" | "research";
+
+// Tabs that work without a selected book
+const GLOBAL_TABS = new Set<Tab>(["overview", "models"]);
 
 export default function App() {
   const { fetchBooks, books, selectedBookId } = useStore();
@@ -28,16 +35,34 @@ export default function App() {
     }
   }, [tab]);
 
+  const renderMain = () => {
+    // Global tabs (no book required)
+    if (tab === "models") return <ModelBindingPanel />;
+    if (tab === "overview" || !selectedBookId) {
+      return <BookList onNewBook={() => setShowCreate(true)} />;
+    }
+    // Book-scoped tabs
+    switch (tab) {
+      case "outline": return <OutlineGraph bookId={selectedBookId} />;
+      case "chapters": return <ChapterList bookId={selectedBookId} />;
+      case "memory": return <MemoryPanel bookId={selectedBookId} />;
+      case "audit": return <DriftAuditPanel bookId={selectedBookId} />;
+      case "context": return <ContextInspector bookId={selectedBookId} />;
+      case "genre": return <GenreProfilePanel bookId={selectedBookId} />;
+      case "research": return <ResearchPanel bookId={selectedBookId} />;
+      default: return <BookList onNewBook={() => setShowCreate(true)} />;
+    }
+  };
+
   return (
     <div className="flex h-screen overflow-hidden bg-bg-canvas">
       <Sidebar tab={tab} setTab={handleTabChange} onNewBook={() => setShowCreate(true)} selectedBookId={selectedBookId} />
 
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Top bar */}
         <header className="flex items-center justify-between px-5 h-11 border-b border-border shrink-0 bg-bg-panel">
           <div className="flex items-center gap-2 text-xs">
             <span className="font-semibold text-text-primary tracking-wide" style={{ fontWeight: 510 }}>NovelForge</span>
-            <span className="text-text-disabled font-mono text-2xs">v7.3</span>
+            <span className="text-text-disabled font-mono text-2xs">v7.4</span>
             {selectedBook && (
               <>
                 <span className="text-text-disabled mx-0.5">/</span>
@@ -48,19 +73,8 @@ export default function App() {
           <ResourceBar />
         </header>
 
-        {/* Content with page transition */}
         <main key={tabKey} className="flex-1 overflow-auto p-6 animate-page-in">
-          {!selectedBookId || tab === "overview" ? (
-            <BookList onNewBook={() => setShowCreate(true)} />
-          ) : tab === "outline" ? (
-            <OutlineGraph bookId={selectedBookId} />
-          ) : tab === "chapters" ? (
-            <ChapterList bookId={selectedBookId} />
-          ) : tab === "memory" ? (
-            <MemoryPanel bookId={selectedBookId} />
-          ) : tab === "audit" ? (
-            <DriftAuditPanel bookId={selectedBookId} />
-          ) : null}
+          {renderMain()}
         </main>
       </div>
 

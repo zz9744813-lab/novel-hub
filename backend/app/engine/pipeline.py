@@ -119,17 +119,22 @@ async def execute_pipeline(book_id: uuid.UUID, chapter_id: uuid.UUID, chapter_no
         }
 
     # === Phase 2: QueryPlanner (LLM call — no session held) ===
-    query_plan = await query_planner_agent(
-        outline_node={
-            "chapter_no": outline_data["chapter_no"],
-            "involved_character_ids": outline_data["involved_character_ids"],
-            "plot_thread_ids": outline_data["plot_thread_ids"],
-            "depends_on": outline_data["depends_on"],
-        },
-        scene_plan={},
-        required_deps=forced_deps,
-        l4_summary=json.dumps(l4_summary, ensure_ascii=False)[:2000],
-    )
+    async with async_session_factory() as db:
+        query_plan = await query_planner_agent(
+            db=db,
+            book_id=book_id,
+            outline_node={
+                "chapter_no": outline_data["chapter_no"],
+                "involved_character_ids": outline_data["involved_character_ids"],
+                "plot_thread_ids": outline_data["plot_thread_ids"],
+                "depends_on": outline_data["depends_on"],
+            },
+            scene_plan={},
+            required_deps=forced_deps,
+            l4_summary=json.dumps(l4_summary, ensure_ascii=False)[:2000],
+            chapter_id=chapter_id,
+            l4_refs=[{"entity_id": k} for k in l4_summary.keys()],
+        )
 
     if query_plan is None:
         query_plan = deterministic_query_template(
@@ -172,7 +177,15 @@ async def execute_pipeline(book_id: uuid.UUID, chapter_id: uuid.UUID, chapter_no
 
     # Step 7: EvidenceRanker (LLM call — no session held)
     semantic_qs = query_plan.get("semantic_questions", [])
-    ranked = await evidence_ranker_agent(scored, semantic_qs, outline_data["goal"])
+    async with async_session_factory() as db:
+        ranked = await evidence_ranker_agent(
+            db=db,
+            book_id=book_id,
+            candidates=scored,
+            semantic_questions=semantic_qs,
+            chapter_goal=outline_data["goal"],
+            chapter_id=chapter_id,
+        )
     retrieved_evidence = ranked[:8]
 
     # === Phase 4: ContextAssembler ===

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { api, ContextPackageSummary, ContextPackageDetail } from "../api";
-import { Search, Package, ChevronRight, AlertCircle, CheckCircle2, XCircle } from "lucide-react";
+import { api, ContextPackageSummary, ContextPackageDetail, ChapterListItem } from "../api";
+import { Search, Package, ChevronRight, AlertCircle, CheckCircle2, XCircle, FileText } from "lucide-react";
 
 interface Props {
   bookId: string;
@@ -9,18 +9,33 @@ interface Props {
 export function ContextInspector({ bookId }: Props) {
   const [packages, setPackages] = useState<ContextPackageSummary[]>([]);
   const [selected, setSelected] = useState<ContextPackageDetail | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [preview, setPreview] = useState<any>(null);
+  const [chapters, setChapters] = useState<ChapterListItem[]>([]);
+  const [loading, setLoading] = useState(false);
   const [chapterId, setChapterId] = useState("");
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!bookId) {
+      setChapters([]);
+      return;
+    }
+    api.chapters
+      .list(bookId)
+      .then(setChapters)
+      .catch(() => setChapters([]));
+  }, [bookId]);
 
   const loadByChapter = async (cid: string) => {
     if (!cid) return;
     setLoading(true);
     setError(null);
+    setChapterId(cid);
     try {
       const data = await api.chapters.contextPackages(cid);
       setPackages(data);
       setSelected(null);
+      setPreview(null);
     } catch (e: any) {
       setError(e.message);
       setPackages([]);
@@ -33,17 +48,24 @@ export function ContextInspector({ bookId }: Props) {
     try {
       const d = await api.context.get(id);
       setSelected(d);
+      setPreview(null);
     } catch (e: any) {
       setError(e.message);
     }
   };
 
-  useEffect(() => {
-    setLoading(false);
-  }, [bookId]);
+  const openPreview = async (id: string) => {
+    try {
+      const p = await api.context.promptPreview(id);
+      setPreview(p);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
 
   const stateIcon = (s: string) => {
-    if (s === "published" || s === "ok" || s === "completed") return <CheckCircle2 size={12} className="text-emerald-400" />;
+    if (s === "published" || s === "ok" || s === "completed" || s === "publishable")
+      return <CheckCircle2 size={12} className="text-emerald-400" />;
     if (s === "blocked" || s === "failed") return <XCircle size={12} className="text-red-400" />;
     return <AlertCircle size={12} className="text-amber-400" />;
   };
@@ -53,14 +75,32 @@ export function ContextInspector({ bookId }: Props) {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-sm text-text-primary" style={{ fontWeight: 510 }}>Context Inspector</h2>
-          <p className="text-2xs text-text-disabled font-mono mt-0.5">C-35 · agent_context_packages</p>
+          <p className="text-2xs text-text-disabled font-mono mt-0.5">C-35 · agent_context_packages · prompt preview</p>
         </div>
       </div>
 
+      {bookId && chapters.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {chapters.map((c) => (
+            <button
+              key={c.chapter_id}
+              onClick={() => loadByChapter(c.chapter_id)}
+              className={`px-2 py-1 rounded text-2xs font-mono border ${
+                chapterId === c.chapter_id
+                  ? "border-brand bg-brand/10 text-brand-accent"
+                  : "border-border text-text-tertiary hover:border-brand/40"
+              }`}
+            >
+              Ch{c.chapter_no} · {c.status}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="flex gap-2">
         <input
-          className="flex-1 bg-bg-elevated border border-border rounded-md px-3 py-1.5 text-xs text-text-primary placeholder:text-text-disabled focus:outline-none focus:border-brand"
-          placeholder="输入 chapter_id (UUID) 查询 Context Packages..."
+          className="flex-1 bg-bg-elevated border border-border rounded-md px-3 py-1.5 text-xs text-text-primary placeholder:text-text-disabled focus:outline-none focus:border-brand font-mono"
+          placeholder="或输入 chapter_id (UUID)..."
           value={chapterId}
           onChange={(e) => setChapterId(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && loadByChapter(chapterId.trim())}
@@ -78,7 +118,6 @@ export function ContextInspector({ bookId }: Props) {
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* List */}
         <div className="panel-elevated rounded-lg overflow-hidden">
           <div className="px-3 py-2 border-b border-border flex items-center gap-2">
             <Package size={13} className="text-brand-accent" />
@@ -89,7 +128,7 @@ export function ContextInspector({ bookId }: Props) {
             {loading ? (
               <div className="p-4 text-xs text-text-disabled">加载中...</div>
             ) : packages.length === 0 ? (
-              <div className="p-4 text-xs text-text-disabled">输入 chapter_id 后查询，或暂无记录</div>
+              <div className="p-4 text-xs text-text-disabled">选择章节或输入 chapter_id 查询</div>
             ) : (
               packages.map((p) => (
                 <button
@@ -117,10 +156,17 @@ export function ContextInspector({ bookId }: Props) {
           </div>
         </div>
 
-        {/* Detail */}
         <div className="panel-elevated rounded-lg overflow-hidden">
-          <div className="px-3 py-2 border-b border-border">
+          <div className="px-3 py-2 border-b border-border flex items-center justify-between">
             <span className="text-xs text-text-secondary" style={{ fontWeight: 510 }}>Package Detail</span>
+            {selected && (
+              <button
+                className="btn-ghost px-2 py-1 text-2xs rounded flex items-center gap-1"
+                onClick={() => openPreview(selected.id)}
+              >
+                <FileText size={11} /> Prompt 重建
+              </button>
+            )}
           </div>
           {!selected ? (
             <div className="p-4 text-xs text-text-disabled">选择左侧条目查看详情</div>
@@ -134,8 +180,8 @@ export function ContextInspector({ bookId }: Props) {
               <Row label="Publish" value={selected.publish_state} />
               {selected.block_reason && <Row label="Block" value={selected.block_reason} />}
               <Row label="Prompt Ver" value={selected.prompt_version} mono />
-              <Row label="Template Hash" value={selected.prompt_template_hash?.slice(0, 16) + "…"} mono />
-              <Row label="Rendered Hash" value={selected.rendered_prompt_hash?.slice(0, 16) + "…"} mono />
+              <Row label="Template Hash" value={(selected.prompt_template_hash || "").slice(0, 16) + "…"} mono />
+              <Row label="Rendered Hash" value={(selected.rendered_prompt_hash || "").slice(0, 16) + "…"} mono />
               <Row label="Token Est." value={String(selected.assembled_token_estimate ?? "—")} mono />
               <div>
                 <div className="text-2xs text-text-disabled mb-1">Assembly Manifest</div>
@@ -149,6 +195,14 @@ export function ContextInspector({ bookId }: Props) {
                   {JSON.stringify(selected.l4_entity_refs, null, 2)}
                 </pre>
               </div>
+              {preview && (
+                <div>
+                  <div className="text-2xs text-text-disabled mb-1">Prompt Preview (skeleton)</div>
+                  <pre className="bg-bg-canvas border border-border rounded p-2 text-2xs font-mono text-text-tertiary overflow-auto max-h-48">
+                    {JSON.stringify(preview, null, 2)}
+                  </pre>
+                </div>
+              )}
             </div>
           )}
         </div>

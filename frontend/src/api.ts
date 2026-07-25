@@ -50,6 +50,7 @@ export const api = {
       fetchJSON<{ status: string }>(`/api/books/${bookId}/outlines/${version}/approve`, { method: "POST" }),
   },
   chapters: {
+    list: (bookId: string) => fetchJSON<ChapterListItem[]>(`/api/books/${bookId}/chapters`),
     run: (bookId: string, chapterNo: number) =>
       fetchJSON<{ chapter_id: string; status: string }>(`/api/books/${bookId}/chapters/${chapterNo}/run`, { method: "POST" }),
     get: (id: string) => fetchJSON<Chapter>(`/api/chapters/${id}`),
@@ -60,6 +61,7 @@ export const api = {
   },
   context: {
     get: (id: string) => fetchJSON<ContextPackageDetail>(`/api/context-packages/${id}`),
+    promptPreview: (id: string) => fetchJSON<any>(`/api/context-packages/${id}/prompt-preview`),
   },
   models: {
     list: () => fetchJSON<ModelBinding[]>("/api/model-bindings"),
@@ -75,8 +77,59 @@ export const api = {
   },
   genre: {
     list: (bookId: string) => fetchJSON<GenreProfileSummary[]>(`/api/books/${bookId}/genre-profiles`),
+    get: (id: string) => fetchJSON<any>(`/api/genre-profiles/${id}`),
+    listSamples: (bookId: string) => fetchJSON<ReferenceSample[]>(`/api/books/${bookId}/reference-samples`),
+    uploadSample: async (bookId: string, file: File, genreHint: string = "") => {
+      const formData = new FormData();
+      formData.append("file", file);
+      if (genreHint) formData.append("genre_hint", genreHint);
+      const r = await fetch(BASE + `/api/books/${bookId}/reference-samples`, {
+        method: "POST",
+        body: formData,
+      });
+      if (!r.ok) throw new Error(`${r.status}: ${await r.text()}`);
+      return r.json() as Promise<{
+        sample_id: string;
+        status: string;
+        character_count: number;
+        filename: string;
+      }>;
+    },
+    analyze: (bookId: string, sampleId: string) =>
+      fetchJSON<{
+        profile_id: string;
+        version: number;
+        status: string;
+        sanitizer_report: any;
+        narrative_person?: string;
+        prompt_injection_snippet?: string;
+      }>(`/api/books/${bookId}/reference-samples/${sampleId}/analyze`, { method: "POST" }),
+    edit: (profileId: string, data: Partial<{ prompt_injection_snippet: string; narrative_person: string }>) =>
+      fetchJSON<{ id: string; status: string }>(`/api/genre-profiles/${profileId}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }),
+    approve: (profileId: string) =>
+      fetchJSON<{ id: string; status: string; version: number }>(
+        `/api/genre-profiles/${profileId}/approve`,
+        { method: "POST" }
+      ),
   },
   research: {
+    list: (bookId: string) => fetchJSON<ResearchSessionSummary[]>(`/api/books/${bookId}/research-sessions`),
+    get: (sessionId: string) => fetchJSON<ResearchSessionDetail>(`/api/research-sessions/${sessionId}`),
+    create: (bookId: string, data: { topic: string; urls?: string[]; search?: boolean; max_results?: number; chapter_id?: string }) =>
+      fetchJSON<{
+        session_id: string;
+        status: string;
+        topic: string;
+        evidence_count: number;
+        evidence_ids: string[];
+        plan?: any;
+      }>(`/api/books/${bookId}/research-sessions`, {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
     approve: (sessionId: string) =>
       fetchJSON<{ session_id: string; status: string }>(`/api/research-sessions/${sessionId}/approve`, { method: "POST" }),
   },
@@ -103,6 +156,13 @@ export interface Chapter {
   chapter_id: string; chapter_no: number; status: string;
   title: string | null; content: string | null; word_count: number;
   finalized_version: number | null;
+}
+export interface ChapterListItem {
+  chapter_id: string;
+  chapter_no: number;
+  status: string;
+  title: string | null;
+  word_count: number;
 }
 export interface L4Snapshot {
   id: string; entity_type: string; entity_id: string;
@@ -172,5 +232,46 @@ export interface GenreProfileSummary {
   id: string;
   version: number;
   status: string;
-  created_at: string;
+  created_at: string | null;
+  narrative_person?: string | null;
+  technique_tags?: string[];
+  prompt_injection_snippet?: string;
+  sanitizer_report?: any;
+  approved_by?: string | null;
+  approved_at?: string | null;
+}
+
+export interface ReferenceSample {
+  id: string;
+  filename: string;
+  status: string;
+  character_count: number;
+  genre_hint?: string | null;
+  uploaded_at?: string | null;
+}
+
+export interface ResearchSessionSummary {
+  id: string;
+  status: string;
+  requested_topic: string;
+  trigger_type: string;
+  approved_by?: string | null;
+  approved_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface ResearchSessionDetail {
+  id: string;
+  book_id: string;
+  status: string;
+  requested_topic: string;
+  evidence: Array<{
+    id: string;
+    source_url: string;
+    source_title?: string | null;
+    summary: string;
+    status: string;
+    confidence: number;
+    trust_tier: string;
+  }>;
 }

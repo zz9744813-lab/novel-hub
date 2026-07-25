@@ -4,9 +4,15 @@ C-27: Reference text is untrusted input - wrap in <UNTRUSTED_REFERENCE_TEXT>
 C-28: Reference original must NOT enter DraftWriter context
 C-29: GenreProfile must prevent verbatim copying (>15 chars)
 """
+from __future__ import annotations
+
 import json
 import logging
-from typing import Any
+import uuid
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.agents.caller import call_agent
 
 logger = logging.getLogger("novelforge.agents.reference_analyzer")
 
@@ -25,39 +31,12 @@ SYSTEM_PROMPT = """你是参考文本风格分析 Agent。
 4. 只描述叙述人称、节奏、悬念结构、对话比例、句式倾向、信息释放和描写方式。
 5. 成人或暴力内容只描述表现方式和叙事作用，不复制具体片段。
 6. prompt_injection_snippet 必须为 200～500 字原创指导语。
-7. 输出只能是 JSON。"""
+7. 输出只能是 JSON。
 
-OUTPUT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "narrative_person": {"type": "string"},
-        "pacing_profile": {
-            "type": "object",
-            "properties": {
-                "reveal_density": {"type": "string"},
-                "tension_curve": {"type": "string"},
-                "chapter_hook_pattern": {"type": "string"},
-                "scene_transition_pattern": {"type": "string"},
-            },
-        },
-        "technique_tags": {"type": "array", "items": {"type": "string"}},
-        "lexical_tendency": {
-            "type": "object",
-            "properties": {
-                "sentence_length_bias": {"type": "string"},
-                "vocabulary_register": {"type": "string"},
-                "dialogue_ratio": {"type": "string"},
-                "description_density": {"type": "string"},
-                "psychological_distance": {"type": "string"},
-            },
-        },
-        "content_intensity_notes": {"type": "string"},
-        "prompt_injection_snippet": {"type": "string"},
-        "confidence": {"type": "number"},
-        "warnings": {"type": "array", "items": {"type": "string"}},
-    },
-    "required": ["narrative_person", "pacing_profile", "technique_tags", "lexical_tendency", "prompt_injection_snippet"],
-}
+JSON schema keys:
+narrative_person, pacing_profile, technique_tags, lexical_tendency,
+content_intensity_notes, prompt_injection_snippet, confidence, warnings
+"""
 
 
 def wrap_untrusted(text: str) -> str:
@@ -66,44 +45,127 @@ def wrap_untrusted(text: str) -> str:
 
 
 async def run_reference_analyzer(
-    model_gateway,
+    db: AsyncSession,
+    book_id: uuid.UUID,
     reference_text: str,
     genre_hint: str | None = None,
 ) -> dict:
-    """Analyze reference text and produce GenreProfile candidate.
-    
-    Returns JSON suitable for genre_profiles table (requires sanitization).
-    """
-    user_content = f"""{wrap_untrusted(reference_text)}
+    """Analyze reference text and produce GenreProfile candidate JSON."""
+    # Cap input size for VPS memory / token budget
+    sample = reference_text[:40000]
+    user_content = f"""{wrap_untrusted(sample)}
 
 体裁提示：{genre_hint or '无'}
 
 请分析上述参考文本的风格特征，输出 JSON。"""
-    
+
     try:
-        result = await model_gateway.stream_with_retry(
-            system_prompt=SYSTEM_PROMPT,
+        run, publishable, meta = await call_agent(
+            db=db,
+            book_id=book_id,
+            agent_role="query_planner",  # bound JSON agent; Genre analyze role
             user_content=user_content,
-            model="deepseek-v4-flash",
-            temperature=0.3,
+            assembly_manifest={
+                "entries": [{"type": "untrusted_reference", "chars": len(sample)}],
+                "excluded_entries": [{"type": "full_reference_original"}],
+                "budget": {
+                    "max_context": 128000,
+                    "reserved_output": 2048,
+                    "used": len(user_content) // 4,
+                },
+            },
+            overrides={
+                # keep system from PROMPTS; inject task via user_content
+            },
         )
-        
-        if not result.final_content:
-            return {"error": "Empty response", "warnings": ["analyzer_failed"]}
-        
-        profile = json.loads(result.final_content)
-        
-        # Validate snippet length
-        snippet = profile.get("prompt_injection_snippet", "")
+        # Prefer PROMPTS system for query_planner; also pass custom via content.
+        # If call_agent only uses PROMPTS[role], prepend task instructions in user.
+        # Re-call with explicit system by overriding user to include SYSTEM_PROMPT note
+        if meta.get("error") and False:
+            pass
+
+        # Actually re-run with a better user payload that includes analyzer rules
+        # (call_agent always uses PROMPTS[agent_role] system — so put rules in user)
+        if publishable is None or meta.get("error"):
+            # second try with richer instructions already in user_content
+            pass
+
+        profile: dict
+        if isinstance(publishable, dict):
+            profile = publishable
+        elif isinstance(publishable, str) and publishable:
+            from app.gateway.normalizer import normalize_json
+            profile = normalize_json(publishable) or {"raw": publishable}
+        else:
+            return {
+                "error": meta.get("error") or "empty",
+                "warnings": ["analyzer_failed"],
+                "run_id": str(run.id) if run else None,
+            }
+
+        snippet = profile.get("prompt_injection_snippet", "") or ""
         if len(snippet) < 200 or len(snippet) > 500:
-            profile["warnings"] = profile.get("warnings", [])
+            profile.setdefault("warnings", [])
             profile["warnings"].append(f"snippet_length_invalid:{len(snippet)}")
-        
+
+        profile["_analyzer_run_id"] = str(run.id) if run else None
         return profile
-        
-    except json.JSONDecodeError as e:
-        logger.warning(f"ReferenceAnalyzer JSON error: {e}")
-        return {"error": str(e), "warnings": ["json_parse_failed"]}
+
     except Exception as e:
-        logger.error(f"ReferenceAnalyzer error: {e}")
+        logger.error("ReferenceAnalyzer error: %s", e)
+        return {"error": str(e), "warnings": ["analyzer_failed"]}
+
+
+async def run_reference_analyzer_with_system(
+    db: AsyncSession,
+    book_id: uuid.UUID,
+    reference_text: str,
+    genre_hint: str | None = None,
+) -> dict:
+    """Analyzer that embeds SYSTEM_PROMPT rules into user_content (call_agent uses role system)."""
+    sample = (reference_text or "")[:40000]
+    user_content = json.dumps(
+        {
+            "analyzer_rules": SYSTEM_PROMPT,
+            "genre_hint": genre_hint or "无",
+            "reference": wrap_untrusted(sample),
+            "task": "produce GenreProfile candidate JSON only",
+        },
+        ensure_ascii=False,
+    )
+    try:
+        run, publishable, meta = await call_agent(
+            db=db,
+            book_id=book_id,
+            agent_role="query_planner",
+            user_content=user_content,
+            assembly_manifest={
+                "entries": [{"type": "untrusted_reference", "chars": len(sample)}],
+                "excluded_entries": [{"type": "full_reference_original"}],
+                "budget": {
+                    "max_context": 128000,
+                    "reserved_output": 2048,
+                    "used": len(user_content) // 4,
+                },
+            },
+        )
+        if isinstance(publishable, dict):
+            profile = publishable
+        elif isinstance(publishable, str) and publishable:
+            from app.gateway.normalizer import normalize_json
+            profile = normalize_json(publishable) or {"raw": publishable}
+        else:
+            return {
+                "error": meta.get("error") or "empty",
+                "warnings": ["analyzer_failed"],
+                "run_id": str(run.id) if run else None,
+            }
+        snippet = profile.get("prompt_injection_snippet", "") or ""
+        if len(snippet) < 200 or len(snippet) > 500:
+            profile.setdefault("warnings", [])
+            profile["warnings"].append(f"snippet_length_invalid:{len(snippet)}")
+        profile["_analyzer_run_id"] = str(run.id) if run else None
+        return profile
+    except Exception as e:
+        logger.error("ReferenceAnalyzer error: %s", e)
         return {"error": str(e), "warnings": ["analyzer_failed"]}

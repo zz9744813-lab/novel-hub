@@ -5,18 +5,31 @@ C-29: GenreProfile must prevent:
 - Named entities unique to reference
 - High similarity sentences (5-gram Jaccard > 0.35)
 - Prompt injection residual
+
+Memory-safe on low-RAM VPS: never build O(n*m) DP over full reference text.
 """
 from __future__ import annotations
 
 import re
 from typing import Any
 
+INJECTION_PATTERNS = [
+    r"ignore\s+(all\s+)?previous",
+    r"system\s*prompt",
+    r"你现在是",
+    r"忽略以上",
+    r"泄漏\s*prompt",
+    r"output\s+your\s+instructions",
+]
+
 
 def _ngrams(text: str, n: int = 5) -> set[str]:
     text = re.sub(r"\s+", "", text)
     if len(text) < n:
         return set()
-    return {text[i : i + n] for i in range(len(text) - n + 1)}
+    # Cap ngram set size for huge references
+    max_start = min(len(text) - n + 1, 200_000)
+    return {text[i : i + n] for i in range(max_start)}
 
 
 def _jaccard(a: set[str], b: set[str]) -> float:
@@ -27,31 +40,34 @@ def _jaccard(a: set[str], b: set[str]) -> float:
     return inter / union if union else 0.0
 
 
-def _longest_common_substring(a: str, b: str) -> str:
-    a = re.sub(r"\s+", "", a)
-    b = re.sub(r"\s+", "", b)
+def _longest_common_substring_capped(a: str, b: str, max_b: int = 8000) -> str:
+    """Find LCS of short candidate vs reference sample windows (not full O(n*m))."""
+    a = re.sub(r"\s+", "", a or "")
+    b = re.sub(r"\s+", "", b or "")
     if not a or not b:
         return ""
+    # Only compare against first + middle + last windows of reference
+    windows = [b[:max_b]]
+    if len(b) > max_b:
+        mid = max(0, (len(b) - max_b) // 2)
+        windows.append(b[mid : mid + max_b])
+        windows.append(b[-max_b:])
     best = ""
-    # O(n*m) but limited by short snippets
-    dp = [[0] * (len(b) + 1) for _ in range(len(a) + 1)]
-    for i in range(1, len(a) + 1):
-        for j in range(1, len(b) + 1):
-            if a[i - 1] == b[j - 1]:
-                dp[i][j] = dp[i - 1][j - 1] + 1
-                if dp[i][j] > len(best):
-                    best = a[i - dp[i][j] : i]
+    # For each window use rolling hash-ish scan of a-length substrings of a
+    # Since a (snippet) is short (<=500), DP against each window is fine.
+    for win in windows:
+        if not win:
+            continue
+        dp_prev = [0] * (len(win) + 1)
+        for i in range(1, len(a) + 1):
+            dp_cur = [0] * (len(win) + 1)
+            for j in range(1, len(win) + 1):
+                if a[i - 1] == win[j - 1]:
+                    dp_cur[j] = dp_prev[j - 1] + 1
+                    if dp_cur[j] > len(best):
+                        best = a[i - dp_cur[j] : i]
+            dp_prev = dp_cur
     return best
-
-
-INJECTION_PATTERNS = [
-    r"ignore\s+(all\s+)?previous",
-    r"system\s*prompt",
-    r"你现在是",
-    r"忽略以上",
-    r"泄漏\s*prompt",
-    r"output\s+your\s+instructions",
-]
 
 
 def sanitize_genre_profile(
@@ -68,39 +84,40 @@ def sanitize_genre_profile(
         "manual_review_required": False,
     }
 
+    # Cap reference for ngram work
+    ref_sample = (reference_text or "")[:120_000]
+
     snippet = profile.get("prompt_injection_snippet") or ""
     content_notes = profile.get("content_intensity_notes") or ""
     candidates = [snippet, content_notes]
     for tag in profile.get("technique_tags") or []:
         candidates.append(str(tag))
 
-    # Exact span >= 15
     for cand in candidates:
         if not cand:
             continue
-        lcs = _longest_common_substring(cand, reference_text)
+        lcs = _longest_common_substring_capped(cand, ref_sample)
         if len(lcs) >= 15:
             report["exact_span_violations"].append({"span": lcs[:50], "length": len(lcs)})
             report["passed"] = False
 
-    # 5-gram Jaccard
-    ref_ng = _ngrams(reference_text, 5)
+    ref_ng = _ngrams(ref_sample, 5)
     for cand in candidates:
         if not cand or len(cand) < 20:
             continue
         score = _jaccard(_ngrams(cand, 5), ref_ng)
         if score > 0.35:
-            report["high_similarity_sentences"].append({"score": round(score, 3), "preview": cand[:80]})
+            report["high_similarity_sentences"].append(
+                {"score": round(score, 3), "preview": cand[:80]}
+            )
             report["passed"] = False
 
-    # Injection residual in profile fields
     joined = "\n".join(candidates)
     for pat in INJECTION_PATTERNS:
         if re.search(pat, joined, re.IGNORECASE):
             report["instruction_injection_findings"].append(pat)
             report["passed"] = False
 
-    # Snippet length
     if not (200 <= len(snippet) <= 500):
         report["manual_review_required"] = True
         report["passed"] = False

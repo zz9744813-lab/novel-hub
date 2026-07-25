@@ -2,6 +2,10 @@
 .env
 *.env.local
 deploy/.env
+*.bak
+*.bak2
+**/*.bak
+**/*.bak2
 
 # 数据目录
 data/
@@ -39,4 +43,3 @@ Thumbs.db
 
 # 日志
 *.log
-logs/

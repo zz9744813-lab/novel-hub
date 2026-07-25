@@ -13,8 +13,8 @@ from app.models import (
     PlotThread, StoryEvent, SceneSearchDocument, EntityAlias,
     QueryPlan, RetrievalRun, RetrievalCandidate, Chapter,
 )
-from app.gateway.model_gateway import stream_with_retry
-from app.prompts import PROMPTS, AGENT_MODELS, AGENT_TEMPERATURES
+from app.agents.caller import call_agent
+from app.engine.chinese_tokenizer import tokenize_for_search
 import json
 import time
 
@@ -141,21 +141,27 @@ async def event_ledger_search(db: AsyncSession, book_id: uuid.UUID,
 
 async def full_text_search(db: AsyncSession, book_id: uuid.UUID,
                             search_terms: list[str], chapter_range: tuple[int, int]) -> list[dict]:
-    """Step 5: tsvector full-text search on scene_search_documents."""
+    """Step 5: tsvector full-text search on scene_search_documents.
+
+    Query terms are Chinese-pre-tokenized so they match the same
+    unigram/bigram tokens written at index time.
+    """
     if not search_terms:
         return []
-    query_str = " ".join(search_terms)
+    query_str = tokenize_for_search(" ".join(search_terms)) or " ".join(search_terms)
+    ch_from, ch_to = chapter_range if chapter_range else (0, 10**9)
     result = await db.execute(
         text("""
             SELECT id, chapter_no, scene_no, scene_summary,
                    ts_rank(search_tsv, plainto_tsquery('simple', :q)) as rank
             FROM scene_search_documents
             WHERE book_id = :book_id AND canon_status = 'canon'
+              AND chapter_no BETWEEN :ch_from AND :ch_to
               AND search_tsv @@ plainto_tsquery('simple', :q)
             ORDER BY rank DESC
             LIMIT 40
         """),
-        {"q": query_str, "book_id": str(book_id)}
+        {"q": query_str, "book_id": str(book_id), "ch_from": ch_from, "ch_to": ch_to},
     )
     rows = result.fetchall()
     return [{"id": str(r[0]), "chapter_no": r[1], "scene_no": r[2],
@@ -230,40 +236,73 @@ def candidate_merge_and_score(event_candidates: list, ft_candidates: list,
     return scored[:24]
 
 
-async def evidence_ranker_agent(candidates: list, semantic_questions: list,
-                                  chapter_goal: str) -> list[dict]:
-    """Step 7: Use LLM to rank Top 24 candidates, return Top 8."""
+async def evidence_ranker_agent(
+    db: AsyncSession,
+    book_id: uuid.UUID,
+    candidates: list,
+    semantic_questions: list,
+    chapter_goal: str,
+    chapter_id: uuid.UUID | None = None,
+) -> list[dict]:
+    """Step 7: Use LLM via call_agent to rank Top 24 candidates, return Top 8."""
     if not candidates:
         return []
-    prompt = PROMPTS["evidence_ranker"]["system_prompt"]
     user_content = json.dumps({
         "candidates": candidates[:24],
         "semantic_questions": semantic_questions,
         "chapter_goal": chapter_goal,
     }, ensure_ascii=False)
 
-    result = await stream_with_retry(
-        system_prompt=prompt,
-        user_content=user_content,
-        model=AGENT_MODELS["evidence_ranker"],
-        temperature=AGENT_TEMPERATURES["evidence_ranker"],
-    )
-
-    if result.error or not result.final_content:
-        # §6.8: Degraded mode - use rule scores
+    try:
+        run, publishable, meta = await call_agent(
+            db=db,
+            book_id=book_id,
+            agent_role="evidence_ranker",
+            user_content=user_content,
+            chapter_id=chapter_id,
+            assembly_manifest={
+                "entries": [
+                    {"type": "retrieval_candidates", "count": min(24, len(candidates))},
+                    {
+                        "type": "story_evidence_refs",
+                        "ids": [
+                            c.get("id") or c.get("event_id")
+                            for c in candidates[:24]
+                            if c.get("id") or c.get("event_id")
+                        ],
+                    },
+                ],
+                "excluded_entries": [],
+                "budget": {"max_context": 128000, "reserved_output": 2048, "used": len(user_content) // 4},
+            },
+        )
+    except Exception:
         return candidates[:8]
 
-    from app.gateway.normalizer import normalize_json
-    parsed = normalize_json(result.final_content)
-    if parsed and "ranked_candidates" in parsed:
-        return parsed["ranked_candidates"][:8]
+    if meta.get("error") or publishable is None:
+        return candidates[:8]
+
+    if isinstance(publishable, dict) and "ranked_candidates" in publishable:
+        return publishable["ranked_candidates"][:8]
+    if isinstance(publishable, str):
+        from app.gateway.normalizer import normalize_json
+        parsed = normalize_json(publishable)
+        if parsed and "ranked_candidates" in parsed:
+            return parsed["ranked_candidates"][:8]
     return candidates[:8]
 
 
-async def query_planner_agent(outline_node: dict, scene_plan: dict,
-                               required_deps: list, l4_summary: str) -> dict | None:
-    """Use LLM to generate structured query plan."""
-    prompt = PROMPTS["query_planner"]["system_prompt"]
+async def query_planner_agent(
+    db: AsyncSession,
+    book_id: uuid.UUID,
+    outline_node: dict,
+    scene_plan: dict,
+    required_deps: list,
+    l4_summary: str,
+    chapter_id: uuid.UUID | None = None,
+    l4_refs: list | None = None,
+) -> dict | None:
+    """Use LLM via call_agent to generate structured query plan."""
     user_content = json.dumps({
         "chapter_outline_node": outline_node,
         "scene_plan": scene_plan or {},
@@ -271,19 +310,36 @@ async def query_planner_agent(outline_node: dict, scene_plan: dict,
         "l4_state_summary": l4_summary,
     }, ensure_ascii=False)
 
-    result = await stream_with_retry(
-        system_prompt=prompt,
-        user_content=user_content,
-        model=AGENT_MODELS["query_planner"],
-        temperature=AGENT_TEMPERATURES["query_planner"],
-    )
+    try:
+        run, publishable, meta = await call_agent(
+            db=db,
+            book_id=book_id,
+            agent_role="query_planner",
+            user_content=user_content,
+            chapter_id=chapter_id,
+            l4_refs=l4_refs or [],
+            assembly_manifest={
+                "entries": [
+                    {"type": "outline_node"},
+                    {"type": "l4_summary"},
+                    {"type": "required_deps", "count": len(required_deps or [])},
+                ],
+                "excluded_entries": [],
+                "budget": {"max_context": 128000, "reserved_output": 2048, "used": len(user_content) // 4},
+            },
+        )
+    except Exception:
+        return None
 
-    if result.error or not result.final_content:
-        return None  # Use deterministic fallback
+    if meta.get("error") or publishable is None:
+        return None
 
-    from app.gateway.normalizer import normalize_json
-    parsed = normalize_json(result.final_content)
-    return parsed
+    if isinstance(publishable, dict):
+        return publishable
+    if isinstance(publishable, str):
+        from app.gateway.normalizer import normalize_json
+        return normalize_json(publishable)
+    return None
 
 
 def deterministic_query_template(outline_node: dict, scene_plan: dict,

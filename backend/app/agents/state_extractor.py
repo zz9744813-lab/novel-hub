@@ -123,14 +123,16 @@ async def extract_and_commit(
         db.add(search_doc)
         await db.flush()
 
-        # Basic tsvector; Chinese pre-tokenizer still TODO (P1)
+        # Basic tsvector with Chinese pre-tokenization (unigram + bigram)
+        from app.engine.chinese_tokenizer import tokenize_for_search
+        tokenized = tokenize_for_search(search_doc.search_text)
         await db.execute(
             text("""
                 UPDATE scene_search_documents
                 SET search_tsv = to_tsvector('simple', :search_text)
                 WHERE id = :doc_id
             """),
-            {"search_text": search_doc.search_text, "doc_id": str(search_doc.id)},
+            {"search_text": tokenized or search_doc.search_text, "doc_id": str(search_doc.id)},
         )
 
     # CRITICAL P0: commit so L4/L1/events/search docs survive session close

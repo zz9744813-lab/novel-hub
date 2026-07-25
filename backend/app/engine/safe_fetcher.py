@@ -50,6 +50,57 @@ class NullSearchProvider:
         return []
 
 
+class DuckDuckGoLiteProvider:
+    """Best-effort HTML search via DuckDuckGo HTML endpoint (no API key).
+
+    Returns [{url, title, snippet}]. Failures degrade to [].
+    """
+
+    async def search(self, query: str, *, max_results: int = 5) -> list[dict]:
+        import re
+        from urllib.parse import unquote, urlparse
+
+        q = (query or "").strip()
+        if not q:
+            return []
+        url = "https://html.duckduckgo.com/html/"
+        try:
+            async with httpx.AsyncClient(
+                follow_redirects=True,
+                timeout=TIMEOUT,
+                headers={"User-Agent": "NovelForge-Research/7.4"},
+            ) as client:
+                resp = await client.post(url, data={"q": q})
+            if resp.status_code >= 400:
+                return []
+            html = resp.text
+        except Exception as e:
+            logger.warning("DuckDuckGo search failed: %s", e)
+            return []
+
+        # Parse result links: uddg= real URL
+        hits: list[dict] = []
+        for m in re.finditer(
+            r'uddg=([^&"]+)[^>]*>\s*([^<]+)</a>',
+            html,
+            flags=re.IGNORECASE,
+        ):
+            try:
+                real = unquote(m.group(1))
+                title = re.sub(r"\s+", " ", m.group(2)).strip()
+            except Exception:
+                continue
+            parsed = urlparse(real)
+            if parsed.scheme not in ALLOWED_SCHEMES or not parsed.hostname:
+                continue
+            if parsed.hostname in {"localhost", "0.0.0.0"}:
+                continue
+            hits.append({"url": real, "title": title or real, "snippet": ""})
+            if len(hits) >= max_results:
+                break
+        return hits
+
+
 def _is_blocked_ip(ip: str) -> bool:
     try:
         addr = ipaddress.ip_address(ip)

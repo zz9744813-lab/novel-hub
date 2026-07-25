@@ -64,6 +64,15 @@ class TestCallAgentSessionPattern:
             async def commit(self):
                 pass
 
+            async def flush(self):
+                pass
+
+            async def execute(self, *args, **kwargs):
+                return MagicMock()
+
+            async def refresh(self, *args, **kwargs):
+                pass
+
         tracking_factory = MagicMock(return_value=TrackingSession())
 
         # Create a mock StreamResult for success
@@ -80,8 +89,10 @@ class TestCallAgentSessionPattern:
 
         with patch("app.agents.caller.async_session_factory", tracking_factory), \
              patch("app.agents.caller.stream_with_retry", new_callable=AsyncMock) as mock_stream, \
-             patch("app.agents.caller.full_pipeline") as mock_pipeline:
+             patch("app.agents.caller.full_pipeline_async", new_callable=AsyncMock) as mock_pipeline, \
+             patch("app.agents.caller._resolve_model", new_callable=AsyncMock) as mock_resolve:
 
+            mock_resolve.return_value = ("new-api", "deepseek-v4-flash", None)
             mock_stream.return_value = mock_result
             mock_pipeline.return_value = ({"test": "output"}, MagicMock(value="publishable"), {})
 
@@ -101,6 +112,11 @@ class TestCallAgentSessionPattern:
 
             # Verify stream_with_retry was called (the LLM call)
             assert mock_stream.call_count == 1
+
+            # Verify provider is passed to gateway
+            kwargs = mock_stream.call_args.kwargs
+            assert kwargs.get("provider") == "new-api"
+            assert kwargs.get("model") == "deepseek-v4-flash"
 
             # Verify the dummy_db was never used for add/flush/commit
             # (call_agent should use its own sessions)
@@ -136,13 +152,24 @@ class TestCallAgentSessionPattern:
             async def commit(self):
                 pass
 
+            async def flush(self):
+                pass
+
+            async def execute(self, *args, **kwargs):
+                return MagicMock()
+
+            async def refresh(self, *args, **kwargs):
+                pass
+
         session = TrackingSession()
         tracking_factory = MagicMock(return_value=session)
 
         with patch("app.agents.caller.async_session_factory", tracking_factory), \
              patch("app.agents.caller.stream_with_retry", new_callable=AsyncMock) as mock_stream, \
-             patch("app.agents.caller.full_pipeline") as mock_pipeline:
+             patch("app.agents.caller.full_pipeline_async", new_callable=AsyncMock) as mock_pipeline, \
+             patch("app.agents.caller._resolve_model", new_callable=AsyncMock) as mock_resolve:
 
+            mock_resolve.return_value = ("new-api", "deepseek-v4-flash", None)
             mock_stream.return_value = mock_result
             mock_pipeline.return_value = (None, MagicMock(value="blocked"), {"block_reason": "HTTP_500"})
 

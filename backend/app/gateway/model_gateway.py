@@ -45,20 +45,42 @@ RETRYABLE_ERRORS = {
 }
 
 
-def _get_provider_config(role: str = "primary") -> dict:
-    """Read provider config from environment per §2.7."""
+def _get_provider_config(role: str = "primary", provider: str | None = None) -> dict:
+    """Read provider config from environment per §2.7.
+
+    `role` selects PRIMARY vs FALLBACK credentials.
+    `provider` is the logical provider name from model bindings (openrouter/new-api/...).
+    When provider-specific env vars exist they win; otherwise PRIMARY/FALLBACK is used.
+    """
     prefix = "PRIMARY" if role == "primary" else "FALLBACK"
+    base_url = os.environ.get(
+        f"{prefix}_BASE_URL",
+        os.environ.get("PRIMARY_BASE_URL", "http://127.0.0.1:3000/v1"),
+    )
+    api_key = os.environ.get(
+        f"{prefix}_API_KEY",
+        os.environ.get("PRIMARY_API_KEY", os.environ.get("LLM_API_KEY", "sk-test")),
+    )
+
+    # Optional per-provider overrides (so UI provider field can actually route)
+    if provider:
+        p = provider.upper().replace("-", "_")
+        base_url = os.environ.get(f"{p}_BASE_URL", base_url)
+        api_key = os.environ.get(f"{p}_API_KEY", api_key)
+        # Common aliases
+        if provider.lower() in ("new-api", "new_api", "newapi"):
+            base_url = os.environ.get("NEW_API_BASE_URL", os.environ.get("PRIMARY_BASE_URL", base_url))
+            api_key = os.environ.get("NEW_API_API_KEY", os.environ.get("PRIMARY_API_KEY", api_key))
+        elif provider.lower() == "openrouter":
+            base_url = os.environ.get("OPENROUTER_BASE_URL", base_url)
+            api_key = os.environ.get("OPENROUTER_API_KEY", api_key)
+
     return {
-        "base_url": os.environ.get(
-            f"{prefix}_BASE_URL",
-            os.environ.get("PRIMARY_BASE_URL", "http://127.0.0.1:3000/v1"),
-        ),
-        "api_key": os.environ.get(
-            f"{prefix}_API_KEY",
-            os.environ.get("PRIMARY_API_KEY", os.environ.get("LLM_API_KEY", "sk-test")),
-        ),
+        "base_url": base_url.rstrip("/"),
+        "api_key": api_key,
         "connect_timeout": 15,
         "read_timeout": 600,
+        "provider": provider or role,
     }
 
 
@@ -81,12 +103,15 @@ async def stream_completion_and_collect(
     temperature: float = 0.7,
     max_tokens: int = 16384,
     provider_role: str = "primary",
+    provider: str | None = None,
 ) -> StreamResult:
     """Stream and collect all chunks from a single provider attempt.
 
     Integrates InlineReasoningParser for cross-chunk tag handling per §11.4.
+    `provider` is the logical binding provider (openrouter/new-api/...).
+    `provider_role` is primary|fallback for credential selection.
     """
-    config = _get_provider_config(provider_role)
+    config = _get_provider_config(provider_role, provider=provider)
 
     headers = {
         "Authorization": f"Bearer {config['api_key']}",
@@ -103,7 +128,7 @@ async def stream_completion_and_collect(
         "stream": True,
     }
 
-    result = StreamResult(provider_used=provider_role)
+    result = StreamResult(provider_used=provider or provider_role)
     start_time = time.time()
 
     # §11.4: InlineReasoningParser for cross-chunk state machine
@@ -234,30 +259,50 @@ async def stream_with_retry(
     model: str,
     temperature: float = 0.7,
     max_tokens: int = 16384,
+    provider: str | None = None,
+    fallback_model: str | None = None,
+    fallback_provider: str | None = None,
 ) -> StreamResult:
     """§11.11: Retry and fallback logic.
-    - Same model same request: max 2 attempts (primary)
-    - Fallback provider: max 1 attempt
+    - Same model same request: max 2 attempts (primary credentials)
+    - Fallback model/provider: max 1 attempt
     - Total max 3 attempts
     - Non-retryable errors break immediately
+
+    C-21/C-23: `provider` and `fallback_model` come from agent_model_bindings.
     """
     last_result = None
+    use_model = model
+    use_provider = provider
 
     for attempt in range(1, 4):
-        provider_role = "primary" if attempt <= 2 else "fallback"
+        # Attempts 1-2: primary model + primary credentials
+        # Attempt 3: fallback model (if configured) + fallback credentials
+        if attempt <= 2:
+            provider_role = "primary"
+            use_model = model
+            use_provider = provider
+        else:
+            provider_role = "fallback"
+            use_model = fallback_model or model
+            use_provider = fallback_provider or provider
+
         logger.info(
-            f"LLM call attempt {attempt}/3 [{provider_role}] model={model}"
+            f"LLM call attempt {attempt}/3 [{provider_role}] "
+            f"provider={use_provider} model={use_model}"
         )
 
         result = await stream_completion_and_collect(
             system_prompt=system_prompt,
             user_content=user_content,
-            model=model,
+            model=use_model,
             temperature=temperature,
             max_tokens=max_tokens,
             provider_role=provider_role,
+            provider=use_provider,
         )
         result.attempt = attempt
+        result.provider_used = use_provider or provider_role
 
         # Success: got final content with no error
         if result.final_content and not result.error:
@@ -270,10 +315,17 @@ async def stream_with_retry(
             logger.warning(f"Non-retryable error: {result.error}, stopping")
             break
 
-        logger.warning(
-            f"Attempt {attempt} failed: {result.error}, "
-            f"{'will retry' if attempt < 3 else 'all attempts exhausted'}"
-        )
+        # If no fallback model configured, don't bother with attempt 3 model switch noise
+        if attempt == 2 and not fallback_model:
+            logger.warning(
+                f"Attempt {attempt} failed: {result.error}, no fallback_model configured"
+            )
+            # still allow a third try on same model with fallback credentials
+        else:
+            logger.warning(
+                f"Attempt {attempt} failed: {result.error}, "
+                f"{'will retry' if attempt < 3 else 'all attempts exhausted'}"
+            )
 
     return last_result or StreamResult(error="all_attempts_failed")
 
@@ -284,6 +336,8 @@ async def stream_agent_call(
     model: str,
     temperature: float = 0.1,
     max_tokens: int = 16384,
+    provider: str | None = None,
+    fallback_model: str | None = None,
 ) -> StreamResult:
     """Compatibility wrapper for memory_compiler.py and other callers.
     Routes through stream_with_retry for C-11 compliance.
@@ -294,4 +348,6 @@ async def stream_agent_call(
         model=model,
         temperature=temperature,
         max_tokens=max_tokens,
+        provider=provider,
+        fallback_model=fallback_model,
     )

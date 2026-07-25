@@ -23,39 +23,69 @@ async def startup():
 async def bootstrap_model_bindings():
     """C-21: Initialize model bindings from .env on first startup.
     After this, .env is not read for model config at runtime.
+
+    C-23: Ensure draft_writer and other strict roles exist; log hard error if missing
+    after bootstrap. Provider defaults to PRIMARY provider label, not hard-coded openrouter
+    when NEW_API is the configured primary.
     """
+    import os
     import asyncio
     await asyncio.sleep(2)  # Let DB be ready
     from app.database import async_session_factory
     from app.v74_utils import ModelBindingService
     from app.prompts import AGENT_MODELS
-    from app.config import settings
-    
+    from app.models.tables import AgentModelBinding
+    from sqlalchemy import select
+
+    # Prefer explicit provider name; when PRIMARY points at new-api, label it new-api
+    primary_base = os.environ.get("PRIMARY_BASE_URL", "")
+    if "new-api" in primary_base or primary_base.endswith(":3000/v1"):
+        default_provider = "new-api"
+    else:
+        default_provider = os.environ.get("DEFAULT_PROVIDER", "openrouter")
+
+    # Include aileak_judge even if not in AGENT_MODELS prompts map
+    roles = dict(AGENT_MODELS)
+    roles.setdefault("aileak_judge", roles.get("review_agent", "deepseek-v4-flash"))
+
     async with async_session_factory() as db:
         svc = ModelBindingService(db)
-        # Check if any global bindings exist
-        from app.models.tables import AgentModelBinding
-        from sqlalchemy import select
         result = await db.execute(
             select(AgentModelBinding).where(AgentModelBinding.scope_type == "global")
         )
-        existing = result.scalars().all()
-        if existing:
-            return  # Already bootstrapped
-        
-        # Create global bindings from .env defaults
-        for agent_role, model_name in AGENT_MODELS.items():
-            provider = "openrouter"  # Default provider
+        existing = {b.agent_role: b for b in result.scalars().all()}
+
+        created = 0
+        for agent_role, model_name in roles.items():
+            if agent_role in existing:
+                continue
             await svc.get_or_create_binding(
                 agent_role=agent_role,
-                provider=provider,
+                provider=default_provider,
                 primary_model=model_name,
                 fallback_model=None,
                 reasoning_mode="auto",
                 updated_by="system_bootstrap",
             )
-        await db.commit()
-        print("[v7.4] Model bindings bootstrapped from .env")
+            created += 1
+        if created:
+            await db.commit()
+            print(f"[v7.4] Model bindings bootstrapped: +{created} roles, provider={default_provider}")
+
+        # C-23: verify strict production roles exist
+        result = await db.execute(
+            select(AgentModelBinding).where(AgentModelBinding.scope_type == "global")
+        )
+        have = {b.agent_role for b in result.scalars().all()}
+        required = {
+            "draft_writer", "chapter_planner", "review_agent",
+            "state_extractor", "outline_parser",
+        }
+        missing = required - have
+        if missing:
+            print(f"[v7.4][FATAL] Missing required model bindings: {sorted(missing)}")
+        else:
+            print(f"[v7.4] Required model bindings OK: {sorted(required)}")
 
 
 @app.on_event("shutdown")

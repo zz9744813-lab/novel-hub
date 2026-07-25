@@ -1,10 +1,15 @@
 """StateExtractorAgent + StateCommitter - extracts events and commits L4 atomically.
 Per §7.2 Step 9-10 + §5.5 v7.3.
 
-Key fix: search_tsv generation via SQL update (was empty string).
+P0 fixes:
+- commit() after flush so L4/L1/events/search docs are not rolled back
+- content_hash uses SHA-256 (not Python hash())
 """
+from __future__ import annotations
+
 import uuid
 import json
+import hashlib
 import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
@@ -13,6 +18,10 @@ from app.engine.memory import commit_l4_with_events
 from app.models import OutlineNode
 
 logger = logging.getLogger("novelforge.state_extractor")
+
+
+def _sha256_int_or_hex(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 async def extract_and_commit(
@@ -55,8 +64,8 @@ async def extract_and_commit(
         logger.error(f"StateExtractor failed: {meta}")
         return False, [meta.get("block_reason", "extraction failed")]
 
-    events = result.get("events", [])
-    conflicts = result.get("conflicts", [])
+    events = result.get("events", []) if isinstance(result, dict) else []
+    conflicts = result.get("conflicts", []) if isinstance(result, dict) else []
 
     if conflicts:
         logger.warning(f"StateExtractor found {len(conflicts)} conflicts with L4")
@@ -64,7 +73,7 @@ async def extract_and_commit(
     # §5.5: Filter to explicit-only events
     explicit_events = [e for e in events if e.get("certainty") == "explicit"]
 
-    # Atomic commit: story_events -> L4 -> L1
+    # Atomic commit: story_events -> L4 (merged) -> L1
     await commit_l4_with_events(
         db=db,
         book_id=book_id,
@@ -79,7 +88,10 @@ async def extract_and_commit(
     for scene in scenes:
         scene_id = scene.get("scene_id")
         if isinstance(scene_id, str):
-            scene_id = uuid.UUID(scene_id)
+            try:
+                scene_id = uuid.UUID(scene_id)
+            except ValueError:
+                scene_id = uuid.uuid4()
         elif scene_id is None:
             scene_id = uuid.uuid4()
 
@@ -105,15 +117,13 @@ async def extract_and_commit(
             search_text=scene_content,
             search_tsv="",  # Set via SQL below
             canon_status="canon",
-            content_hash=hash(scene_content),
+            content_hash=_sha256_int_or_hex(scene_content),
             version=1,
         )
         db.add(search_doc)
         await db.flush()
 
-        # §3.5: Generate tsvector via SQL - application-layer tokenization
-        # Use to_tsvector('simple', search_text) for basic tokenization
-        # For Chinese, a pre-tokenizer should split text into space-separated tokens
+        # Basic tsvector; Chinese pre-tokenizer still TODO (P1)
         await db.execute(
             text("""
                 UPDATE scene_search_documents
@@ -123,5 +133,6 @@ async def extract_and_commit(
             {"search_text": search_doc.search_text, "doc_id": str(search_doc.id)},
         )
 
-    await db.flush()
+    # CRITICAL P0: commit so L4/L1/events/search docs survive session close
+    await db.commit()
     return True, conflicts

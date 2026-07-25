@@ -1,6 +1,10 @@
 """ReviewAgent / ContinuityJudge - checks chapter for issues.
 Per §7.2 Step 6+8 + §A.4 v7.3.
+
+P0: fail-closed on agent failure (do NOT auto-pass).
 """
+from __future__ import annotations
+
 import uuid
 import json
 import logging
@@ -20,8 +24,9 @@ async def review_chapter(
     outline_node: OutlineNode,
 ) -> tuple[bool, list[dict]]:
     """Review chapter for issues. Returns (passed, issues).
-    
+
     Also serves as ContinuityJudge (§7.2 Step 8).
+    Fail-closed: agent failure => (False, [service_error issue]).
     """
     # Get L4 state for involved characters
     l4_states = {}
@@ -39,7 +44,10 @@ async def review_chapter(
 
     # Get voice cards
     vc = await db.execute(select(StyleVoiceCard).where(StyleVoiceCard.book_id == book_id))
-    voice_cards = [{"register": v.register, "emotion_expression": v.emotion_expression} for v in vc.scalars().all()]
+    voice_cards = [
+        {"register": v.register, "emotion_expression": v.emotion_expression}
+        for v in vc.scalars().all()
+    ]
 
     # Get tone anchor
     ta = await db.execute(
@@ -73,8 +81,24 @@ async def review_chapter(
 
     if not result:
         logger.error(f"ReviewAgent failed: {meta}")
-        return True, []  # Don't block on agent failure
+        # P0 fail-closed: service failure is NOT a pass
+        return False, [{
+            "issue_id": "review_service_failure",
+            "issue_cluster_id": "service",
+            "severity": "critical",
+            "category": "service_error",
+            "message": meta.get("block_reason") or meta.get("error") or "ReviewAgent failed",
+        }]
 
-    passed = result.get("passed", False)
-    issues = result.get("issues", [])
+    if not isinstance(result, dict):
+        return False, [{
+            "issue_id": "review_invalid_payload",
+            "issue_cluster_id": "service",
+            "severity": "critical",
+            "category": "service_error",
+            "message": "ReviewAgent returned non-dict payload",
+        }]
+
+    passed = bool(result.get("passed", False))
+    issues = result.get("issues", []) or []
     return passed, issues

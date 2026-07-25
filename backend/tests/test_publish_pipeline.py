@@ -155,3 +155,16 @@ class TestFullPipeline:
         publishable, state, meta = full_pipeline(result, is_json=False)
         assert state == PublishState.PUBLISHABLE
         assert publishable is not None
+
+
+class TestLeakResultBlockCandidate:
+    def test_leak_result_has_block_candidate(self):
+        from app.gateway.leak_guard import check_leak
+        r = check_leak("现在开始写正文内容。\n\n作为AI我需要检查一下情节。\n\n以下是正文内容。\n\n需要注意角色。")
+        assert hasattr(r, "block_candidate")
+        assert r.block_candidate is True
+
+    def test_block_candidate_false_on_clean(self):
+        from app.gateway.leak_guard import check_leak
+        r = check_leak("The knight stood at the gate under moonlight.")
+        assert r.block_candidate is False

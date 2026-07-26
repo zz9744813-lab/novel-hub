@@ -28,3 +28,9 @@ Baseline: main@ab3861105864ab5f9698677934edb8f98714a6f7
 
 - Code-side secret hygiene: **DONE**
 - Server-side key revocation: **OPERATOR REQUIRED** (NOT VERIFIED by agent)
+
+
+## E2E update (2026-07-26T14:30:23.745351+00:00)
+- Production auth gate verified (401/401/200)
+- No secrets committed in this push (deploy/.env untracked)
+- Operator still must revoke any historically leaked midstream keys

@@ -61,11 +61,14 @@ RETRYABLE_ERRORS = {
     "UNTERMINATED_REASONING",
     "CONNECT_TIMEOUT",
     "READ_TIMEOUT",
+    "HTTP_400",  # often bad/unknown model on midstream — allow retry/fallback
+    "HTTP_404",
     "HTTP_500",
     "HTTP_502",
     "HTTP_503",
     "HTTP_504",
     "HTTP_429",
+    "MODEL_NOT_FOUND",
 }
 
 
@@ -222,7 +225,15 @@ async def stream_completion_and_collect(
                         logger.warning("Unterminated reasoning tag at stream end")
 
     except httpx.HTTPStatusError as e:
-        result.error = f"HTTP_{e.response.status_code}"
+        code = e.response.status_code
+        result.error = f"HTTP_{code}"
+        # Normalize common "model not found" bodies so attempt audit is clearer
+        try:
+            body = e.response.text[:500].lower()
+            if code in (400, 404) and ("model" in body or "not found" in body or "invalid" in body):
+                result.error = "MODEL_NOT_FOUND" if "model" in body else result.error
+        except Exception:
+            pass
         result.latency_ms = int((time.time() - start_time) * 1000)
         return result
     except httpx.ConnectTimeout:
@@ -234,7 +245,12 @@ async def stream_completion_and_collect(
         result.latency_ms = int((time.time() - start_time) * 1000)
         return result
     except Exception as e:
-        result.error = str(e)
+        msg = str(e)
+        # httpx may raise without HTTPStatusError in some adapters
+        if "404" in msg and "model" in msg.lower():
+            result.error = "MODEL_NOT_FOUND"
+        else:
+            result.error = msg
         result.latency_ms = int((time.time() - start_time) * 1000)
         return result
 

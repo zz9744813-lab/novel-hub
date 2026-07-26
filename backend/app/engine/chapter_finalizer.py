@@ -1,9 +1,9 @@
 """Atomic final chapter snapshot service (P0-06).
 
 In one transaction:
-- create ChapterVersion
-- write Scene/Paragraph at same version
-- supersede old scenes
+- create/upsert ChapterVersion at new_version
+- write Scene/Paragraph at same version (canon)
+- supersede old scenes (draft + previous canon)
 - rebuild search index
 - set Chapter.finalized_version
 - idempotent Book stats
@@ -15,7 +15,7 @@ import hashlib
 import uuid
 import logging
 from dataclasses import dataclass
-from sqlalchemy import select, update, text
+from sqlalchemy import select, update, text, func, delete
 from app.database import async_session_factory
 from app.models import Chapter, ChapterVersion, Scene, Paragraph, Book
 from app.state_machine import ChapterState
@@ -65,8 +65,21 @@ async def commit_final_chapter_snapshot(
     if not final_scenes:
         return FinalSnapshotResult(ok=False, error="no_scenes")
 
+    # Ensure unique sequential scene numbers
+    renumbered: list[FinalScene] = []
+    for idx, sc in enumerate(final_scenes, start=1):
+        renumbered.append(
+            FinalScene(
+                scene_no=idx,
+                content=sc.content,
+                scene_id=sc.scene_id or uuid.uuid4(),
+                summary=sc.summary,
+                pov_character_id=sc.pov_character_id,
+            )
+        )
+    final_scenes = renumbered
+
     joined = "\n\n".join(s.content for s in final_scenes)
-    # Allow either exact join equality or single-scene full content
     if len(final_scenes) > 1 and _sha(joined) != _sha(final_content):
         # Prefer final_content as source of truth for multi-scene drift after patch
         final_scenes = [
@@ -86,7 +99,6 @@ async def commit_final_chapter_snapshot(
 
     source_run = source_run_ids[0] if source_run_ids else uuid.uuid4()
     word_count = len(final_content)
-    new_version = max(expected_previous_version + 1, 1)
 
     async with async_session_factory() as db:
         chapter = (
@@ -95,8 +107,23 @@ async def commit_final_chapter_snapshot(
         if not chapter:
             return FinalSnapshotResult(ok=False, error="chapter_not_found")
 
-        # Idempotent: already finalized at this version
-        if chapter.finalized_version and chapter.finalized_version >= new_version and chapter.status == ChapterState.FINALIZED.value:
+        max_ver = (
+            await db.execute(
+                select(func.coalesce(func.max(ChapterVersion.version), 0)).where(
+                    ChapterVersion.chapter_id == chapter_id
+                )
+            )
+        ).scalar() or 0
+
+        # Final version is always a new row after drafts/patches
+        new_version = max(int(expected_previous_version) + 1, int(max_ver) + 1, 1)
+
+        # Idempotent: already finalized at this or higher version
+        if (
+            chapter.finalized_version
+            and chapter.finalized_version >= new_version
+            and chapter.status == ChapterState.FINALIZED.value
+        ):
             return FinalSnapshotResult(
                 ok=True,
                 version=chapter.finalized_version,
@@ -106,27 +133,75 @@ async def commit_final_chapter_snapshot(
 
         chapter.status = ChapterState.FINALIZING.value
 
-        # Supersede previous canon scenes
+        # Supersede all prior scenes for this chapter (draft + canon)
         await db.execute(
             update(Scene)
-            .where(Scene.chapter_id == chapter_id, Scene.canon_status == "canon")
+            .where(
+                Scene.chapter_id == chapter_id,
+                Scene.canon_status.in_(["canon", "draft"]),
+            )
             .values(canon_status="superseded")
         )
 
-        ch_ver = ChapterVersion(
-            id=uuid.uuid4(),
-            book_id=book_id,
-            chapter_id=chapter_id,
-            version=new_version,
-            content=final_content,
-            word_count=word_count,
-            source_run_id=source_run,
-        )
-        db.add(ch_ver)
+        # Upsert ChapterVersion
+        existing_ver = (
+            await db.execute(
+                select(ChapterVersion).where(
+                    ChapterVersion.chapter_id == chapter_id,
+                    ChapterVersion.version == new_version,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing_ver:
+            existing_ver.content = final_content
+            existing_ver.word_count = word_count
+            existing_ver.source_run_id = source_run
+        else:
+            db.add(
+                ChapterVersion(
+                    id=uuid.uuid4(),
+                    book_id=book_id,
+                    chapter_id=chapter_id,
+                    version=new_version,
+                    content=final_content,
+                    word_count=word_count,
+                    source_run_id=source_run,
+                )
+            )
+
+        # Clear any accidental rows already at new_version (recovery)
+        old_at_ver = (
+            await db.execute(
+                select(Scene.id).where(
+                    Scene.chapter_id == chapter_id,
+                    Scene.version == new_version,
+                )
+            )
+        ).scalars().all()
+        if old_at_ver:
+            await db.execute(delete(Paragraph).where(Paragraph.scene_id.in_(old_at_ver)))
+            await db.execute(
+                delete(Scene).where(
+                    Scene.chapter_id == chapter_id,
+                    Scene.version == new_version,
+                )
+            )
 
         para_parts: list[str] = []
         for sc in final_scenes:
             sid = sc.scene_id or uuid.uuid4()
+            # Always new id for final rows to avoid PK collision with draft ids
+            # when promoting same logical scene.
+            if sc.scene_id:
+                # Keep id only if not already used by a remaining row
+                clash = (
+                    await db.execute(select(Scene.id).where(Scene.id == sid))
+                ).scalar_one_or_none()
+                if clash:
+                    sid = uuid.uuid4()
+            else:
+                sid = uuid.uuid4()
+
             sc_hash = _sha(sc.content)
             scene_row = Scene(
                 id=sid,
@@ -151,7 +226,7 @@ async def commit_final_chapter_snapshot(
                         book_id=book_id,
                         chapter_id=chapter_id,
                         scene_id=sid,
-                        paragraph_key=f"p-{sc.scene_no:02d}-{pi:04d}",
+                        paragraph_key=f"p-{sc.scene_no:02d}-{pi:04d}-v{new_version}",
                         ordinal=pi,
                         content=para_text,
                         content_hash=_sha(para_text),
@@ -159,11 +234,17 @@ async def commit_final_chapter_snapshot(
                     )
                 )
 
-            # Search index for final scene
             from app.models.tables import SceneSearchDocument
 
             tokenized = tokenize_for_search(sc.content[:8000])
             excerpt = sc.content[:500]
+            # Drop old search docs for this scene_no
+            await db.execute(
+                delete(SceneSearchDocument).where(
+                    SceneSearchDocument.chapter_id == chapter_id,
+                    SceneSearchDocument.scene_no == sc.scene_no,
+                )
+            )
             doc = SceneSearchDocument(
                 id=uuid.uuid4(),
                 book_id=book_id,
@@ -199,9 +280,12 @@ async def commit_final_chapter_snapshot(
                 {"tok": tokenized or sc.content[:8000], "id": str(doc.id)},
             )
 
-        # Paragraph join hash check
+        # Paragraph join hash check (soft: scenes join already matched)
         para_hash = _sha("\n\n".join(para_parts)) if para_parts else content_hash
-        if para_hash != content_hash and _sha("\n\n".join(s.content for s in final_scenes)) != content_hash:
+        if (
+            para_hash != content_hash
+            and _sha("\n\n".join(s.content for s in final_scenes)) != content_hash
+        ):
             await db.rollback()
             return FinalSnapshotResult(ok=False, error="paragraph_hash_mismatch")
 
@@ -209,14 +293,8 @@ async def commit_final_chapter_snapshot(
         chapter.finalized_version = new_version
         chapter.title = title
 
-        # Idempotent book stats: only bump once per chapter finalization
         book = (await db.execute(select(Book).where(Book.id == book_id))).scalar_one_or_none()
         if book:
-            # Use finalized_version transition: if previous finalized_version was null, count once
-            # Reload prior finalized count via chapter uniqueness
-            already = chapter.finalized_version  # just set
-            # Count finalized chapters from DB to avoid double increment on recovery
-            from sqlalchemy import func
             cnt = (
                 await db.execute(
                     select(func.count())
@@ -227,7 +305,7 @@ async def commit_final_chapter_snapshot(
                     )
                 )
             ).scalar() or 0
-            # include current chapter if not yet visible in same transaction count
+            # current chapter counted after status set in same session
             words = (
                 await db.execute(
                     select(func.coalesce(func.sum(ChapterVersion.word_count), 0)).where(
@@ -236,12 +314,19 @@ async def commit_final_chapter_snapshot(
                                 Chapter.book_id == book_id,
                                 Chapter.status == ChapterState.FINALIZED.value,
                             )
-                        )
+                        ),
+                        ChapterVersion.version
+                        == select(Chapter.finalized_version)
+                        .where(Chapter.id == ChapterVersion.chapter_id)
+                        .scalar_subquery(),
                     )
                 )
-            ).scalar() or 0
+            ).scalar()
             book.finalized_chapters = int(cnt)
-            book.finalized_words = int(words) if words else book.finalized_words + word_count
+            if words:
+                book.finalized_words = int(words)
+            else:
+                book.finalized_words = (book.finalized_words or 0) + word_count
 
         await db.commit()
         return FinalSnapshotResult(

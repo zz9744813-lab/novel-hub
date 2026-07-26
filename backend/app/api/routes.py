@@ -268,8 +268,26 @@ async def run_chapter(book_id: str, chapter_no: int, db: AsyncSession = Depends(
     else:
         chapter.status = ChapterState.QUEUED.value
 
-    task = ChapterTask(id=gen_uuid(), book_id=bid, chapter_no=chapter_no, status=ChapterState.QUEUED.value)
-    db.add(task)
+    # Reuse latest ChapterTask for this book/chapter instead of always inserting
+    existing_task = (
+        await db.execute(
+            select(ChapterTask)
+            .where(ChapterTask.book_id == bid, ChapterTask.chapter_no == chapter_no)
+            .order_by(ChapterTask.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing_task:
+        task = existing_task
+        task.status = ChapterState.QUEUED.value
+        task.lease_owner = None
+        task.lease_expires_at = None
+        task.heartbeat_at = None
+        task.last_error_code = None
+        task.last_error_detail = None
+    else:
+        task = ChapterTask(id=gen_uuid(), book_id=bid, chapter_no=chapter_no, status=ChapterState.QUEUED.value)
+        db.add(task)
     await db.flush()
     # Commit before enqueuing ARQ job - worker uses a separate DB connection
     # and cannot see uncommitted data

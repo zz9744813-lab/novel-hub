@@ -2,11 +2,13 @@
 Per §7.2 Step 4 + §A.2 v7.3.
 
 P0-03: short sessions — load DTOs, then call_agent without holding Session.
+Deterministic fallback scene plan when LLM returns non-JSON / missing scenes.
 """
 from __future__ import annotations
 
 import uuid
 import json
+import re
 import logging
 from dataclasses import dataclass, field
 from sqlalchemy import select
@@ -36,6 +38,77 @@ class ChapterPlanInput:
     tone_anchor: dict
     retrieved_evidence: list = field(default_factory=list)
     target_word_count: int = 3000
+
+
+def _deterministic_plan(outline: dict, target_word_count: int = 3000) -> dict:
+    """Always-valid scene plan from outline beats so drafting can proceed."""
+    goal = outline.get("goal") or "推进本章剧情"
+    beats = outline.get("required_beats") or []
+    if isinstance(beats, str):
+        beats = [beats]
+    if not beats:
+        beats = [
+            "开场：建立场景与人物状态",
+            "发展：冲突升级或关键信息出现",
+            "收束：本章目标落地并留下钩子",
+        ]
+    # Cap scenes to 3 for VPS latency
+    beats = list(beats)[:3]
+    while len(beats) < 3:
+        beats.append(f"补充节拍{len(beats)+1}：围绕目标推进")
+    per = max(800, int(target_word_count / len(beats)))
+    scenes = []
+    for i, beat in enumerate(beats, start=1):
+        scenes.append(
+            {
+                "scene_no": i,
+                "goal": str(beat)[:500],
+                "pov_character_id": None,
+                "location": None,
+                "target_word_count": per,
+                "must_include": [goal] if i == 1 else [],
+                "must_not": outline.get("forbidden_outcomes") or [],
+            }
+        )
+    return {
+        "chapter_goal": goal,
+        "scenes": scenes,
+        "source": "deterministic_fallback",
+    }
+
+
+def _coerce_plan(result, meta: dict | None = None) -> dict | None:
+    if isinstance(result, dict) and isinstance(result.get("scenes"), list) and result["scenes"]:
+        return result
+    text = ""
+    if isinstance(result, str):
+        text = result
+    elif isinstance(result, dict):
+        for k in ("raw", "final_content", "content"):
+            if isinstance(result.get(k), str):
+                text = result[k]
+                break
+    if meta and not text and isinstance(meta.get("raw"), str):
+        text = meta["raw"]
+    if not text:
+        return None
+    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if m:
+        try:
+            obj = json.loads(m.group(1))
+            if isinstance(obj, dict) and obj.get("scenes"):
+                return obj
+        except Exception:
+            pass
+    m = re.search(r"\{.*\"scenes\"\s*:\s*\[.*\].*\}", text, re.DOTALL)
+    if m:
+        try:
+            obj = json.loads(m.group(0))
+            if isinstance(obj, dict) and obj.get("scenes"):
+                return obj
+        except Exception:
+            pass
+    return None
 
 
 async def load_chapter_plan_input(
@@ -126,6 +199,10 @@ async def load_chapter_plan_input(
 async def generate_chapter_plan(plan_input: ChapterPlanInput) -> dict | None:
     user_content = json.dumps(
         {
+            "instruction": (
+                "Return ONLY JSON with key scenes: array of objects "
+                "{scene_no, goal, target_word_count}. No prose."
+            ),
             "chapter_outline_node": plan_input.outline,
             "forced_dependencies": plan_input.forced_dependencies,
             "l4_state": plan_input.l4_states,
@@ -146,10 +223,14 @@ async def generate_chapter_plan(plan_input: ChapterPlanInput) -> dict | None:
         chapter_id=plan_input.chapter_id,
     )
 
-    if not result or not isinstance(result, dict) or "scenes" not in result:
-        logger.error(f"ChapterPlanner failed: {meta}")
-        return None
-    return result
+    plan = _coerce_plan(result, meta)
+    if plan and plan.get("scenes"):
+        return plan
+
+    logger.warning(
+        f"ChapterPlanner LLM plan unusable, using deterministic fallback. meta={meta}"
+    )
+    return _deterministic_plan(plan_input.outline, plan_input.target_word_count)
 
 
 async def plan_chapter(

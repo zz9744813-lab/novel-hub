@@ -134,12 +134,15 @@ async def run_chapter_pipeline(ctx, chapter_id: str, book_id: str, chapter_no: i
                 logger.warning(f"Could not acquire advisory lock for ch {chapter_no}")
                 return
 
-            # Find/create chapter task lease
+            # Find/create chapter task lease (latest row — API may create duplicates)
             result = await db.execute(
-                select(ChapterTask).where(
+                select(ChapterTask)
+                .where(
                     ChapterTask.book_id == uuid.UUID(book_id),
                     ChapterTask.chapter_no == int(chapter_no),
                 )
+                .order_by(ChapterTask.created_at.desc())
+                .limit(1)
             )
             task = result.scalar_one_or_none()
             now = datetime.now(timezone.utc)
@@ -152,6 +155,17 @@ async def run_chapter_pipeline(ctx, chapter_id: str, book_id: str, chapter_no: i
                 )
                 db.add(task)
                 await db.flush()
+            else:
+                # Collapse older duplicate task rows for same book/chapter
+                await db.execute(
+                    update(ChapterTask)
+                    .where(
+                        ChapterTask.book_id == uuid.UUID(book_id),
+                        ChapterTask.chapter_no == int(chapter_no),
+                        ChapterTask.id != task.id,
+                    )
+                    .values(status="superseded", lease_owner=None, lease_expires_at=None)
+                )
 
             # Skip if lease held by another live worker
             if (
@@ -165,15 +179,47 @@ async def run_chapter_pipeline(ctx, chapter_id: str, book_id: str, chapter_no: i
                 await db.commit()
                 return
 
-            # Skip if chapter already finalized
+            # Skip if chapter already finalized / needs human / not runnable
             ch = (
                 await db.execute(select(Chapter).where(Chapter.id == uuid.UUID(chapter_id)))
             ).scalar_one_or_none()
-            if ch and ch.status == ChapterState.FINALIZED.value and ch.finalized_version:
-                task.status = "completed"
-                await db.commit()
-                await db.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": lock_key})
-                return
+            if ch:
+                if ch.status == ChapterState.FINALIZED.value and ch.finalized_version:
+                    task.status = "completed"
+                    await db.commit()
+                    await db.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": lock_key})
+                    return
+                if ch.status in {
+                    ChapterState.NEEDS_HUMAN.value,
+                    "needs_human",
+                    "running",
+                    "drafting",
+                    "planning",
+                    "reviewing",
+                    "patching",
+                    "finalizing",
+                    "state_extracting",
+                    "consistency_check",
+                }:
+                    # Only re-enter from queued/failed/resource_blocked
+                    logger.info(
+                        f"Skip chapter {chapter_no}: status={ch.status} not re-runnable"
+                    )
+                    await db.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": lock_key})
+                    await db.commit()
+                    return
+                if ch.status not in {
+                    ChapterState.QUEUED.value,
+                    ChapterState.FAILED.value,
+                    "queued",
+                    "failed",
+                    "resource_blocked",
+                    ChapterState.RESOURCE_BLOCKED.value if hasattr(ChapterState, "RESOURCE_BLOCKED") else "resource_blocked",
+                }:
+                    logger.info(f"Skip chapter {chapter_no}: unexpected status={ch.status}")
+                    await db.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": lock_key})
+                    await db.commit()
+                    return
 
             task.status = "running"
             task.lease_owner = WORKER_ID

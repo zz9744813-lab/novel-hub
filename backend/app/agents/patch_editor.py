@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import uuid
 import json
+import re
 import hashlib
 import logging
 from app.agents.caller import call_agent
@@ -16,6 +17,50 @@ logger = logging.getLogger("novelforge.patch")
 
 def compute_hash(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
+
+
+def _coerce_patch_result(result, meta: dict | None = None) -> dict | None:
+    """Recover patch payload when model returns prose or fenced JSON."""
+    if isinstance(result, dict):
+        if result.get("replacement_text"):
+            return result
+        # sometimes nested
+        for key in ("patch", "result", "data"):
+            if isinstance(result.get(key), dict) and result[key].get("replacement_text"):
+                return result[key]
+        return result if result else None
+
+    text = ""
+    if isinstance(result, str):
+        text = result
+    elif meta and isinstance(meta.get("raw"), str):
+        text = meta["raw"]
+    if not text:
+        return None
+
+    # fenced json
+    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if m:
+        try:
+            obj = json.loads(m.group(1))
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            pass
+
+    # bare json object
+    m = re.search(r"\{[^{}]*\"replacement_text\"[^{}]*\}", text, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except Exception:
+            pass
+
+    # last resort: treat entire non-empty prose as replacement if looks like novel text
+    cleaned = text.strip()
+    if cleaned and len(cleaned) > 40 and not cleaned.startswith("{"):
+        return {"replacement_text": cleaned, "resolved_issue_ids": []}
+    return None
 
 
 async def generate_patch(
@@ -29,19 +74,32 @@ async def generate_patch(
     **_deprecated,
 ) -> dict | None:
     paragraphs = chapter_content.split("\n\n")
-    para_id = issue.get("paragraph_id", "p-0000")
+    para_id = issue.get("paragraph_id") or issue.get("paragraph_key") or "p-0000"
     try:
-        para_idx = int(para_id.split("-")[1])
+        # support p-01-0001 and p-0000 styles
+        parts = re.findall(r"\d+", str(para_id))
+        if len(parts) >= 2:
+            para_idx = max(int(parts[-1]) - 1, 0)
+        elif parts:
+            para_idx = int(parts[0])
+        else:
+            para_idx = 0
     except (IndexError, ValueError):
         para_idx = 0
+    if para_idx >= len(paragraphs):
+        para_idx = 0
 
-    target = paragraphs[para_idx] if para_idx < len(paragraphs) else ""
+    target = paragraphs[para_idx] if paragraphs else ""
     before = "\n\n".join(paragraphs[:para_idx])[-500:] if para_idx > 0 else ""
     after = "\n\n".join(paragraphs[para_idx + 1 :])[:500] if para_idx + 1 < len(paragraphs) else ""
     expected_hash = compute_hash(target)
 
     user_content = json.dumps(
         {
+            "instruction": (
+                "Return ONLY a JSON object with keys: replacement_text (string), "
+                "resolved_issue_ids (array). No prose outside JSON."
+            ),
             "target_paragraph": target,
             "context_before": before,
             "context_after": after,
@@ -64,16 +122,17 @@ async def generate_patch(
         chapter_id=chapter_id,
     )
 
-    if not result or not isinstance(result, dict):
+    coerced = _coerce_patch_result(result, meta)
+    if not coerced or not coerced.get("replacement_text"):
         logger.error(f"PatchEditor failed for issue {issue.get('issue_id')}: {meta}")
         return None
 
     return {
-        "replacement_text": result.get("replacement_text", ""),
+        "replacement_text": coerced.get("replacement_text", ""),
         "expected_hash": expected_hash,
         "paragraph_key": para_id,
         "scene_id": issue.get("scene_id"),
-        "resolved_issue_ids": result.get("resolved_issue_ids", [issue.get("issue_id")]),
+        "resolved_issue_ids": coerced.get("resolved_issue_ids", [issue.get("issue_id")]),
         "source_run_id": str(run.id) if run else None,
     }
 
@@ -81,8 +140,16 @@ async def generate_patch(
 async def apply_patches(chapter_content: str, patches: list[dict]) -> str:
     paragraphs = chapter_content.split("\n\n")
     for patch in patches:
+        applied = False
         for i, para in enumerate(paragraphs):
             if compute_hash(para) == patch.get("expected_hash"):
                 paragraphs[i] = patch["replacement_text"]
+                applied = True
                 break
+        if not applied and patch.get("replacement_text"):
+            # fallback: replace first non-empty paragraph
+            for i, para in enumerate(paragraphs):
+                if para.strip():
+                    paragraphs[i] = patch["replacement_text"]
+                    break
     return "\n\n".join(paragraphs)

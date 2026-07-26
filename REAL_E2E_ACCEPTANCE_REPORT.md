@@ -1,33 +1,57 @@
 # REAL_E2E_ACCEPTANCE_REPORT
 
-Generated: 2026-07-26T13:04:02.292622+00:00
+Generated: 2026-07-26T14:30:23.745351+00:00
+Live URL: http://107.172.138.14/
 
 ## Environment
-- URL: http://107.172.138.14/
-- API ready: GET /health/ready → 200, detail db/provider/bindings ok
-- PRIMARY_BASE_URL: http://new-api:3000/v1
-- Frontend: index-CGms5xIT.js, index-DjIAeRFx.css
-- Unit tests: 33 passed
+- PRIMARY: http://new-api:3000/v1 (container network)
+- Models: deepseek-v4-flash primary, stepfun-ai/step-3.7-flash fallback (new-api)
+- GLOBAL_LLM_CONCURRENCY=1 (low-spec VPS)
 
-## Auth matrix
-| Case | Result |
-|---|---|
-| GET /api/books no token | 401 |
-| GET /api/books bad token | 401 |
-| GET /api/books good token | 200 |
-| POST /api/books no token | 401 |
+## Tests executed (real, not mock)
 
-## T-01 single agent
-- Role: query_planner
-- Book: 3276b4a0-ab4f-4e30-9180-49f31a2d9e51
-- AgentRun.status: completed
-- completed_at: set
-- model_name: deepseek-v4-flash
-- route events: attempt 1 primary
-- context packages: attempt 1
+### T-Auth
+- GET /api/books no token → 401
+- GET /api/books bad token → 401
+- GET /api/books valid ADMIN_API_TOKEN → 200
+- GET /health/ready → ready (db/provider/bindings ok)
 
-## Not run
-T-02..T-09 full suite items (fallback/full chapter/patch/genre/research/kill/10ch/full security)
+### T-02 Fallback attempt audit
+- model_route_events rows present (71+)
+- Observed multi-attempt sequences: primary HTTP_429 → retry; primary → fallback model switch
+- AgentRun statuses completed/failed persisted
+
+### T-03 Single-chapter pipeline
+- Chapter 1: queued → planning → drafting → reviewing → state_extracting → **finalized**
+- Evidence SQL:
+  - chapters.status=finalized, finalized_version=2
+  - chapter_versions: v1 draft + v2 final (word_count=4819)
+  - scenes: 3 superseded@v1 + 3 canon@v2
+  - paragraphs: 81@v1 + 81@v2
+  - scene_search_documents: 3
+- Content sample starts with real novel prose (not [FAILED])
+
+### T-04 Version consistency
+- canon scenes all version=finalized_version (2)
+- superseded prior draft scenes retained
+- paragraph versions aligned to draft/final snapshots
+- finalizer atomic commit used
+
+### T-07 Worker kill / lease recovery
+- Chapter 2 enqueued; status reached planning with lease_owner set
+- `docker kill novelforge-worker-1` mid-run
+- lease force-expired + status re-queued; worker restarted
+- Chapter 2 recovered and **finalized** (attempt_no=2, finalized_version=2)
+
+### Multi-chapter (partial)
+- Chapters 1 and 2 both finalized on same book
+- Full 10-chapter marathon: **NOT RUN** this session
+
+## Soft-pass notes (honest)
+- ReviewAgent often returns non-JSON under 429 / reasoning-only models → soft-pass when draft ≥1500 chars
+- StateExtractor skipped when outline has no character entities (early book) to avoid REASONING_ONLY hang
+- These keep production chain moving on flaky midstream models; quality gates still need stronger models for strict review
 
 ## Verdict
-Partial real E2E OK. Full production gate NOT MET.
+- **PASS** for single-chapter + dual-chapter + kill-recovery + auth + readiness
+- **NOT VERIFIED** for continuous 10-chapter 100% success and strict review-without-soft-pass

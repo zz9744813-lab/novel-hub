@@ -52,10 +52,14 @@ async function fetchJSON<T>(url: string, opts?: RequestInit): Promise<T> {
 }
 
 export async function verifyAdminToken(token: string): Promise<boolean> {
-  const r = await fetch(BASE + "/api/books", {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  return r.ok;
+  try {
+    const r = await fetch(BASE + "/api/books", {
+      headers: { Authorization: "Bearer " + token },
+    });
+    return r.ok;
+  } catch {
+    return false;
+  }
 }
 
 export const api = {

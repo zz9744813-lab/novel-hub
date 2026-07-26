@@ -20,9 +20,18 @@ export const useStore = create<AppState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const books = await api.books.list();
-      set({ books, loading: false });
-      if (books.length > 0 && !get().selectedBookId) {
-        set({ selectedBookId: books[0].book_id });
+      const normalized = (books || []).map((b: any) => ({
+        ...b,
+        book_id: b.book_id || b.id,
+        title: b.title || "(未命名)",
+        finalized_chapters: b.finalized_chapters ?? 0,
+        finalized_words: b.finalized_words ?? 0,
+      }));
+      set({ books: normalized, loading: false });
+      // Do NOT auto-select first book — keeps 项目总览 list visible and intentional
+      const cur = get().selectedBookId;
+      if (cur && !normalized.some((b) => b.book_id === cur)) {
+        set({ selectedBookId: null });
       }
     } catch (e: any) {
       set({ error: e.message, loading: false });

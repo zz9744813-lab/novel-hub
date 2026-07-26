@@ -89,7 +89,6 @@ async def generate_l2(
     # call_agent signature: (db, book_id, agent_role, user_content, ...)
     # We pass db only for API compatibility; call_agent uses its own short sessions.
     run, publishable, meta = await call_agent(
-        db=db,
         book_id=book_id,
         agent_role="query_planner",
         user_content=user_content,
@@ -170,7 +169,6 @@ async def generate_l3(
     )
 
     run, publishable, meta = await call_agent(
-        db=db,
         book_id=book_id,
         agent_role="query_planner",
         user_content=user_content,

@@ -93,7 +93,6 @@ async def run_drift_audit(
     }, ensure_ascii=False)
 
     run, result, meta = await call_agent(
-        db=db,
         book_id=book_id,
         agent_role="drift_audit",
         user_content=user_content,

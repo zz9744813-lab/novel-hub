@@ -237,12 +237,12 @@ def candidate_merge_and_score(event_candidates: list, ft_candidates: list,
 
 
 async def evidence_ranker_agent(
-    db: AsyncSession,
     book_id: uuid.UUID,
     candidates: list,
     semantic_questions: list,
     chapter_goal: str,
     chapter_id: uuid.UUID | None = None,
+    **_deprecated,
 ) -> list[dict]:
     """Step 7: Use LLM via call_agent to rank Top 24 candidates, return Top 8."""
     if not candidates:
@@ -255,7 +255,6 @@ async def evidence_ranker_agent(
 
     try:
         run, publishable, meta = await call_agent(
-            db=db,
             book_id=book_id,
             agent_role="evidence_ranker",
             user_content=user_content,
@@ -293,7 +292,6 @@ async def evidence_ranker_agent(
 
 
 async def query_planner_agent(
-    db: AsyncSession,
     book_id: uuid.UUID,
     outline_node: dict,
     scene_plan: dict,
@@ -301,6 +299,7 @@ async def query_planner_agent(
     l4_summary: str,
     chapter_id: uuid.UUID | None = None,
     l4_refs: list | None = None,
+    **_deprecated,
 ) -> dict | None:
     """Use LLM via call_agent to generate structured query plan."""
     user_content = json.dumps({
@@ -312,7 +311,6 @@ async def query_planner_agent(
 
     try:
         run, publishable, meta = await call_agent(
-            db=db,
             book_id=book_id,
             agent_role="query_planner",
             user_content=user_content,

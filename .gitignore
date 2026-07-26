@@ -1,7 +1,9 @@
 # 环境配置
 .env
-*.env.local
+*.env
+!.env.example
 deploy/.env
+*.env.local
 *.bak
 *.bak2
 **/*.bak
@@ -41,5 +43,6 @@ Thumbs.db
 # Docker volumes (本地开发)
 .docker/
 
-# 日志
+# 日志 / 报告中的临时证据
 *.log
+/tmp/

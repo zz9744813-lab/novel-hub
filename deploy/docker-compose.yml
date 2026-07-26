@@ -53,7 +53,13 @@ services:
       SQLALCHEMY_MAX_OVERFLOW: "1"
       PYTHONUNBUFFERED: "1"
       MALLOC_ARENA_MAX: "2"
-      PRIMARY_BASE_URL: http://new-api:3000/v1
+      PRIMARY_BASE_URL: ${PRIMARY_BASE_URL}
+      PRIMARY_API_KEY: ${PRIMARY_API_KEY}
+      FALLBACK_BASE_URL: ${FALLBACK_BASE_URL:-}
+      FALLBACK_API_KEY: ${FALLBACK_API_KEY:-}
+      ADMIN_API_TOKEN: ${ADMIN_API_TOKEN}
+      ADMIN_CORS_ORIGINS: ${ADMIN_CORS_ORIGINS:-http://127.0.0.1,http://localhost,http://107.172.138.14}
+      APP_ENV: ${APP_ENV:-production}
     depends_on:
       postgres:
         condition: service_healthy
@@ -92,12 +98,18 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       ARQ_MAX_JOBS: "1"
+      ARQ_JOB_TIMEOUT: ${ARQ_JOB_TIMEOUT:-14400}
       SQLALCHEMY_POOL_SIZE: "2"
       SQLALCHEMY_MAX_OVERFLOW: "0"
       GLOBAL_LLM_CONCURRENCY: "1"
       MALLOC_ARENA_MAX: "2"
       PYTHONUNBUFFERED: "1"
-      PRIMARY_BASE_URL: http://new-api:3000/v1
+      PRIMARY_BASE_URL: ${PRIMARY_BASE_URL}
+      PRIMARY_API_KEY: ${PRIMARY_API_KEY}
+      FALLBACK_BASE_URL: ${FALLBACK_BASE_URL:-}
+      FALLBACK_API_KEY: ${FALLBACK_API_KEY:-}
+      ADMIN_API_TOKEN: ${ADMIN_API_TOKEN}
+      APP_ENV: ${APP_ENV:-production}
     depends_on:
       api:
         condition: service_healthy

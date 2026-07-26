@@ -119,22 +119,20 @@ async def execute_pipeline(book_id: uuid.UUID, chapter_id: uuid.UUID, chapter_no
         }
 
     # === Phase 2: QueryPlanner (LLM call — no session held) ===
-    async with async_session_factory() as db:
-        query_plan = await query_planner_agent(
-            db=db,
-            book_id=book_id,
-            outline_node={
-                "chapter_no": outline_data["chapter_no"],
-                "involved_character_ids": outline_data["involved_character_ids"],
-                "plot_thread_ids": outline_data["plot_thread_ids"],
-                "depends_on": outline_data["depends_on"],
-            },
-            scene_plan={},
-            required_deps=forced_deps,
-            l4_summary=json.dumps(l4_summary, ensure_ascii=False)[:2000],
-            chapter_id=chapter_id,
-            l4_refs=[{"entity_id": k} for k in l4_summary.keys()],
-        )
+    query_plan = await query_planner_agent(
+        book_id=book_id,
+        outline_node={
+            "chapter_no": outline_data["chapter_no"],
+            "involved_character_ids": outline_data["involved_character_ids"],
+            "plot_thread_ids": outline_data["plot_thread_ids"],
+            "depends_on": outline_data["depends_on"],
+        },
+        scene_plan={},
+        required_deps=forced_deps,
+        l4_summary=json.dumps(l4_summary, ensure_ascii=False)[:2000],
+        chapter_id=chapter_id,
+        l4_refs=[{"entity_id": k} for k in l4_summary.keys()],
+    )
 
     if query_plan is None:
         query_plan = deterministic_query_template(
@@ -177,15 +175,13 @@ async def execute_pipeline(book_id: uuid.UUID, chapter_id: uuid.UUID, chapter_no
 
     # Step 7: EvidenceRanker (LLM call — no session held)
     semantic_qs = query_plan.get("semantic_questions", [])
-    async with async_session_factory() as db:
-        ranked = await evidence_ranker_agent(
-            db=db,
-            book_id=book_id,
-            candidates=scored,
-            semantic_questions=semantic_qs,
-            chapter_goal=outline_data["goal"],
-            chapter_id=chapter_id,
-        )
+    ranked = await evidence_ranker_agent(
+        book_id=book_id,
+        candidates=scored,
+        semantic_questions=semantic_qs,
+        chapter_goal=outline_data["goal"],
+        chapter_id=chapter_id,
+    )
     retrieved_evidence = ranked[:8]
 
     # === Phase 4: ContextAssembler ===
@@ -203,16 +199,15 @@ async def execute_pipeline(book_id: uuid.UUID, chapter_id: uuid.UUID, chapter_no
     # === Phase 5: ChapterPlanner ===
     await _set_chapter_status(chapter_id, ChapterState.PLANNING.value)
 
-    async with async_session_factory() as db:
-        outline_node = await _get_outline_node(uuid.UUID(outline_data["id"]))
-        if not outline_node:
-            await _set_chapter_status(chapter_id, ChapterState.FAILED.value)
-            return
-
-        scene_plan = await plan_chapter(
-            db, book_id, chapter_id, outline_node,
-            forced_deps, l4_states, target_word_count=3000
-        )
+    scene_plan = await plan_chapter(
+        book_id=book_id,
+        chapter_id=chapter_id,
+        outline_node_id=uuid.UUID(outline_data["id"]),
+        forced_dependencies=forced_deps,
+        l4_states=l4_states,
+        retrieved_evidence=retrieved_evidence,
+        target_word_count=3000,
+    )
 
     if not scene_plan:
         await _set_chapter_status(chapter_id, ChapterState.FAILED.value)
@@ -225,12 +220,14 @@ async def execute_pipeline(book_id: uuid.UUID, chapter_id: uuid.UUID, chapter_no
     previous_tail = ""
     for scene_def in scene_plan.get("scenes", []):
         target_wc = scene_def.get("target_word_count", 2000)
-        # Each scene uses its own short-lived session
-        async with async_session_factory() as db:
-            content, error = await write_scene(
-                db, book_id, chapter_id, scene_def,
-                context_pkg, previous_tail, target_wc
-            )
+        content, error = await write_scene(
+            book_id=book_id,
+            chapter_id=chapter_id,
+            scene_plan=scene_def,
+            context_package=context_pkg,
+            previous_scene_tail=previous_tail,
+            target_word_count=target_wc,
+        )
 
         if error:
             if error.startswith("PIPELINE_BLOCKED"):
@@ -238,11 +235,14 @@ async def execute_pipeline(book_id: uuid.UUID, chapter_id: uuid.UUID, chapter_no
                 await _set_chapter_status(chapter_id, ChapterState.FAILED.value)
                 return
             logger.warning(f"Scene failed, retrying: {error}")
-            async with async_session_factory() as db:
-                content, error = await write_scene(
-                    db, book_id, chapter_id, scene_def,
-                    context_pkg, previous_tail, target_wc
-                )
+            content, error = await write_scene(
+                book_id=book_id,
+                chapter_id=chapter_id,
+                scene_plan=scene_def,
+                context_package=context_pkg,
+                previous_scene_tail=previous_tail,
+                target_word_count=target_wc,
+            )
 
         if not content or error:
             # P0: never continue with [FAILED] placeholders into finalization
@@ -328,15 +328,13 @@ async def execute_pipeline(book_id: uuid.UUID, chapter_id: uuid.UUID, chapter_no
 
     await _set_chapter_status(chapter_id, ChapterState.REVIEWING.value)
 
-    async with async_session_factory() as db:
-        outline_node = await _get_outline_node(uuid.UUID(outline_data["id"]))
-        if not outline_node:
-            logger.error(f"Outline missing at review for chapter {chapter_no}")
-            await _set_chapter_status(chapter_id, ChapterState.FAILED.value)
-            return
-        passed, issues = await review_chapter(
-            db, book_id, chapter_id, chapter_content, outline_node
-        )
+    passed, issues = await review_chapter(
+        book_id=book_id,
+        chapter_id=chapter_id,
+        chapter_content=chapter_content,
+        outline_data=outline_data,
+        outline_node_id=uuid.UUID(outline_data["id"]),
+    )
 
     # === Phase 8: Patching (if issues) ===
     if not passed and issues:
@@ -361,8 +359,11 @@ async def execute_pipeline(book_id: uuid.UUID, chapter_id: uuid.UUID, chapter_no
                         continue  # Critical issues go to NEEDS_HUMAN
                     async with async_session_factory() as db:
                         patch = await generate_patch(
-                            db, book_id, chapter_id, issue,
-                            chapter_content, retry_round=retry_round
+                            book_id=book_id,
+                            chapter_id=chapter_id,
+                            issue=issue,
+                            chapter_content=chapter_content,
+                            retry_round=retry_round,
                         )
                     if patch:
                         patches.append(patch)
@@ -385,24 +386,23 @@ async def execute_pipeline(book_id: uuid.UUID, chapter_id: uuid.UUID, chapter_no
                         db.add(patched_ver)
                         await db.commit()
 
-                # Re-review after patch
-                async with async_session_factory() as db:
-                    outline_node = await _get_outline_node(uuid.UUID(outline_data["id"]))
-                    if not outline_node:
-                        await _set_chapter_status(chapter_id, ChapterState.FAILED.value)
-                        return
-                    passed, remaining = await review_chapter(
-                        db, book_id, chapter_id, chapter_content, outline_node
-                    )
-                    if passed or not remaining:
-                        break
-                    # service error during re-review: fail closed
-                    if any(
-                        i.get("severity") == "critical" and i.get("category") == "service_error"
-                        for i in remaining
-                    ):
-                        await _set_chapter_status(chapter_id, ChapterState.FAILED.value)
-                        return
+                # Re-review after patch (no session held during LLM)
+                passed, remaining = await review_chapter(
+                    book_id=book_id,
+                    chapter_id=chapter_id,
+                    chapter_content=chapter_content,
+                    outline_data=outline_data,
+                    outline_node_id=uuid.UUID(outline_data["id"]),
+                )
+                if passed or not remaining:
+                    break
+                # service error during re-review: fail closed
+                if any(
+                    i.get("severity") == "critical" and i.get("category") == "service_error"
+                    for i in remaining
+                ):
+                    await _set_chapter_status(chapter_id, ChapterState.FAILED.value)
+                    return
 
         if not passed:
             await _set_chapter_status(chapter_id, ChapterState.NEEDS_HUMAN.value)
@@ -417,15 +417,10 @@ async def execute_pipeline(book_id: uuid.UUID, chapter_id: uuid.UUID, chapter_no
     await _set_chapter_status(chapter_id, ChapterState.CONSISTENCY_CHECK.value)
     await _set_chapter_status(chapter_id, ChapterState.STATE_EXTRACTING.value)
 
+    # Load L4 DTOs in short session
     async with async_session_factory() as db:
-        outline_node = await _get_outline_node(uuid.UUID(outline_data["id"]))
-        if not outline_node:
-            logger.error(f"Outline node disappeared for chapter {chapter_no}")
-            await _set_chapter_status(chapter_id, ChapterState.FAILED.value)
-            return
-
         current_l4 = {}
-        for char_id in outline_node.involved_character_ids[:5]:
+        for char_id in outline_data.get("involved_character_ids", [])[:5]:
             cid = uuid.UUID(char_id) if isinstance(char_id, str) else char_id
             snap = (await db.execute(
                 select(MemoryL4StateSnapshot).where(
@@ -436,10 +431,18 @@ async def execute_pipeline(book_id: uuid.UUID, chapter_id: uuid.UUID, chapter_no
             if snap:
                 current_l4[str(char_id)] = snap.state
 
+    # Write phase: extract_and_commit does LLM session-free then writes with db
+    async with async_session_factory() as db:
         success, conflicts = await extract_and_commit(
-            db, book_id, chapter_id, chapter_no,
-            chapter_content, scene_contents, outline_node,
-            current_l4, source_run
+            db=db,
+            book_id=book_id,
+            chapter_id=chapter_id,
+            chapter_no=chapter_no,
+            chapter_content=chapter_content,
+            scenes=scene_contents,
+            outline_node=outline_data,
+            current_l4=current_l4,
+            source_run_id=source_run,
         )
 
         if not success:
@@ -447,31 +450,66 @@ async def execute_pipeline(book_id: uuid.UUID, chapter_id: uuid.UUID, chapter_no
             await _set_chapter_status(chapter_id, ChapterState.FAILED.value)
             return
 
-    # === Phase 10: Finalization ===
-    async with async_session_factory() as db:
-        chapter = (await db.execute(
-            select(Chapter).where(Chapter.id == chapter_id)
-        )).scalar_one_or_none()
-        if not chapter:
-            return
+    # === Phase 10: Finalization via atomic snapshot service ===
+    from app.engine.chapter_finalizer import commit_final_chapter_snapshot, FinalScene
 
-        chapter.status = ChapterState.FINALIZING.value
-        await db.commit()
-
-        chapter.status = ChapterState.FINALIZED.value
-        chapter.finalized_version = current_version
-        chapter.title = outline_data["title"] or f"Chapter {chapter_no}"
-
-        from app.models import Book
-        book = (await db.execute(select(Book).where(Book.id == book_id))).scalar_one_or_none()
-        if book:
-            book.finalized_chapters += 1
-            book.finalized_words += word_count
-
-        await db.commit()
-        logger.info(
-            f"Chapter {chapter_no} finalized: {word_count} words v{current_version}"
+    final_scenes = [
+        FinalScene(
+            scene_no=sc["scene_no"],
+            content=sc["content"],
+            scene_id=uuid.UUID(sc["scene_id"]) if isinstance(sc["scene_id"], str) else sc["scene_id"],
+            summary=sc.get("summary", ""),
+            pov_character_id=(
+                uuid.UUID(sc["pov_character_id"])
+                if sc.get("pov_character_id") and isinstance(sc["pov_character_id"], str)
+                else sc.get("pov_character_id")
+            ),
         )
+        for sc in scene_contents
+    ]
+    # After patch, rebuild scenes from final chapter_content if version > 1
+    if current_version > 1 and scene_contents:
+        # Prefer joined content integrity: re-split chapter into scene slots by original counts
+        parts = chapter_content.split("\n\n\n")
+        if len(parts) == len(scene_contents):
+            for i, sc in enumerate(scene_contents):
+                final_scenes[i] = FinalScene(
+                    scene_no=sc["scene_no"],
+                    content=parts[i],
+                    scene_id=uuid.UUID(sc["scene_id"]) if isinstance(sc["scene_id"], str) else sc["scene_id"],
+                    summary=sc.get("summary", ""),
+                )
+        else:
+            # Single-scene fallback: put full content in first scene
+            final_scenes = [
+                FinalScene(
+                    scene_no=1,
+                    content=chapter_content,
+                    scene_id=uuid.UUID(scene_contents[0]["scene_id"])
+                    if isinstance(scene_contents[0]["scene_id"], str)
+                    else scene_contents[0]["scene_id"],
+                    summary=scene_contents[0].get("summary", ""),
+                )
+            ]
+
+    snap = await commit_final_chapter_snapshot(
+        book_id=book_id,
+        chapter_id=chapter_id,
+        expected_previous_version=current_version - 1 if current_version > 1 else 0,
+        final_content=chapter_content,
+        final_scenes=final_scenes,
+        source_run_ids=[source_run],
+        outline_node_id=uuid.UUID(outline_data["id"]),
+        title=outline_data.get("title") or f"Chapter {chapter_no}",
+        chapter_no=chapter_no,
+    )
+    if not snap.ok:
+        logger.error(f"Final snapshot failed for chapter {chapter_no}: {snap.error}")
+        await _set_chapter_status(chapter_id, ChapterState.FAILED.value)
+        return
+    logger.info(
+        f"Chapter {chapter_no} finalized: {snap.word_count} words v{snap.version}"
+    )
 
     # === Phase 11: MilestoneTrigger ===
     if chapter_no % 10 == 0:

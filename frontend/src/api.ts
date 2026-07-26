@@ -1,12 +1,61 @@
 const BASE = "";
+const TOKEN_KEY = "novelforge_admin_token";
+
+export function getAdminToken(): string | null {
+  try {
+    return sessionStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setAdminToken(token: string) {
+  sessionStorage.setItem(TOKEN_KEY, token);
+}
+
+export function clearAdminToken() {
+  try {
+    sessionStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+function authHeaders(extra?: HeadersInit): HeadersInit {
+  const token = getAdminToken();
+  const h: Record<string, string> = {
+    ...(extra as Record<string, string>),
+  };
+  if (token) {
+    h["Authorization"] = `Bearer ${token}`;
+  }
+  return h;
+}
+
 
 async function fetchJSON<T>(url: string, opts?: RequestInit): Promise<T> {
-  const r = await fetch(BASE + url, {
-    headers: { "Content-Type": "application/json", ...opts?.headers },
-    ...opts,
+  const headers = authHeaders({
+    "Content-Type": "application/json",
+    ...(opts?.headers as Record<string, string>),
   });
+  const r = await fetch(BASE + url, {
+    ...opts,
+    headers,
+  });
+  if (r.status === 401) {
+    clearAdminToken();
+    window.dispatchEvent(new CustomEvent("novelforge:unauthorized"));
+    throw new Error(`401: unauthorized`);
+  }
   if (!r.ok) throw new Error(`${r.status}: ${await r.text()}`);
   return r.json();
+}
+
+export async function verifyAdminToken(token: string): Promise<boolean> {
+  const r = await fetch(BASE + "/api/books", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return r.ok;
 }
 
 export const api = {
@@ -27,8 +76,14 @@ export const api = {
       formData.append("target_chapter_count", String(targetChapters));
       const r = await fetch(BASE + `/api/books/${bookId}/outlines/upload`, {
         method: "POST",
+        headers: authHeaders(),
         body: formData,
       });
+      if (r.status === 401) {
+        clearAdminToken();
+        window.dispatchEvent(new CustomEvent("novelforge:unauthorized"));
+        throw new Error(`401: unauthorized`);
+      }
       if (!r.ok) throw new Error(`${r.status}: ${await r.text()}`);
       return r.json() as Promise<{
         outline_version_id: string;
@@ -85,8 +140,14 @@ export const api = {
       if (genreHint) formData.append("genre_hint", genreHint);
       const r = await fetch(BASE + `/api/books/${bookId}/reference-samples`, {
         method: "POST",
+        headers: authHeaders(),
         body: formData,
       });
+      if (r.status === 401) {
+        clearAdminToken();
+        window.dispatchEvent(new CustomEvent("novelforge:unauthorized"));
+        throw new Error(`401: unauthorized`);
+      }
       if (!r.ok) throw new Error(`${r.status}: ${await r.text()}`);
       return r.json() as Promise<{
         sample_id: string;

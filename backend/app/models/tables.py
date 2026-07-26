@@ -88,6 +88,13 @@ class ChapterTask(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(50), default="queued", nullable=False, index=True)
     run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # P0-04 lease / recovery fields
+    lease_owner: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempt_no: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default="0")
+    last_error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    last_error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class Chapter(Base, TimestampMixin):

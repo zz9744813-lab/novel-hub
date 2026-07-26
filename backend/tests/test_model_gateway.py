@@ -1,6 +1,7 @@
 """Test model gateway — reasoning isolation, retry logic (pure functions)."""
 from app.gateway.model_gateway import (
     StreamResult,
+    AttemptRecord,
     _strip_inline_reasoning,
     RETRYABLE_ERRORS,
     REASONING_FIELDS,
@@ -8,8 +9,6 @@ from app.gateway.model_gateway import (
 
 
 class TestStreamResult:
-    """Test StreamResult dataclass."""
-
     def test_default_values(self):
         r = StreamResult()
         assert r.reasoning_text == ""
@@ -17,6 +16,11 @@ class TestStreamResult:
         assert r.reasoning_detected is False
         assert r.inline_leak_detected is False
         assert r.error is None
+        assert r.actual_provider == ""
+        assert r.actual_model == ""
+        assert r.successful_attempt_no is None
+        assert r.attempts == []
+        # backward-compat properties
         assert r.provider_used == "primary"
         assert r.attempt == 0
 
@@ -25,18 +29,42 @@ class TestStreamResult:
             final_content="Hello world",
             reasoning_text="Thinking...",
             reasoning_detected=True,
+            actual_provider="new-api",
+            actual_model="fallback-model",
+            successful_attempt_no=3,
             provider_used="fallback",
             attempt=3,
         )
         assert r.final_content == "Hello world"
         assert r.reasoning_text == "Thinking..."
+        assert r.actual_model == "fallback-model"
+        assert r.successful_attempt_no == 3
         assert r.provider_used == "fallback"
         assert r.attempt == 3
 
 
-class TestReasoningFields:
-    """Test reasoning field whitelist per C-18."""
+class TestAttemptRecord:
+    def test_fields(self):
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        a = AttemptRecord(
+            attempt_no=1,
+            provider="p",
+            model="m",
+            route_type="primary",
+            started_at=now,
+            completed_at=now,
+            latency_ms=5,
+            success=False,
+            error_code="HTTP_500",
+            prompt_tokens=0,
+            completion_tokens=0,
+        )
+        assert a.route_type == "primary"
+        assert a.success is False
 
+
+class TestReasoningFields:
     def test_fields_present(self):
         assert "reasoning_content" in REASONING_FIELDS
         assert "reasoning" in REASONING_FIELDS
@@ -45,8 +73,6 @@ class TestReasoningFields:
 
 
 class TestRetryableErrors:
-    """Test retryable error set per §11.11."""
-
     def test_timeout_errors_retryable(self):
         assert "CONNECT_TIMEOUT" in RETRYABLE_ERRORS
         assert "READ_TIMEOUT" in RETRYABLE_ERRORS
@@ -59,22 +85,18 @@ class TestRetryableErrors:
         assert "HTTP_429" in RETRYABLE_ERRORS
 
     def test_empty_final_retryable(self):
-        """final_content_empty is retryable (will try fallback)."""
         assert "final_content_empty" in RETRYABLE_ERRORS
 
     def test_unterminated_reasoning_retryable(self):
         assert "UNTERMINATED_REASONING" in RETRYABLE_ERRORS
 
     def test_non_retryable_not_in_set(self):
-        """Non-retryable errors should NOT be in the set."""
         assert "HTTP_400" not in RETRYABLE_ERRORS
         assert "HTTP_401" not in RETRYABLE_ERRORS
         assert "HTTP_403" not in RETRYABLE_ERRORS
 
 
 class TestStripInlineReasoning:
-    """Test inline reasoning tag stripping."""
-
     def test_clean_text_unchanged(self):
         text = "The knight entered the dark chamber."
         result, found = _strip_inline_reasoning(text)

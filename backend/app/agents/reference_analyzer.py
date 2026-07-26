@@ -45,10 +45,10 @@ def wrap_untrusted(text: str) -> str:
 
 
 async def run_reference_analyzer(
-    db: AsyncSession,
     book_id: uuid.UUID,
     reference_text: str,
     genre_hint: str | None = None,
+    **_deprecated,
 ) -> dict:
     """Analyze reference text and produce GenreProfile candidate JSON."""
     # Cap input size for VPS memory / token budget
@@ -61,7 +61,6 @@ async def run_reference_analyzer(
 
     try:
         run, publishable, meta = await call_agent(
-            db=db,
             book_id=book_id,
             agent_role="query_planner",  # bound JSON agent; Genre analyze role
             user_content=user_content,
@@ -117,10 +116,10 @@ async def run_reference_analyzer(
 
 
 async def run_reference_analyzer_with_system(
-    db: AsyncSession,
     book_id: uuid.UUID,
     reference_text: str,
     genre_hint: str | None = None,
+    **_deprecated,
 ) -> dict:
     """Analyzer that embeds SYSTEM_PROMPT rules into user_content (call_agent uses role system)."""
     sample = (reference_text or "")[:40000]
@@ -135,7 +134,6 @@ async def run_reference_analyzer_with_system(
     )
     try:
         run, publishable, meta = await call_agent(
-            db=db,
             book_id=book_id,
             agent_role="query_planner",
             user_content=user_content,

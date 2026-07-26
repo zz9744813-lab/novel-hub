@@ -1,9 +1,8 @@
 """StateExtractorAgent + StateCommitter - extracts events and commits L4 atomically.
 Per §7.2 Step 9-10 + §5.5 v7.3.
 
-P0 fixes:
-- commit() after flush so L4/L1/events/search docs are not rolled back
-- content_hash uses SHA-256 (not Python hash())
+P0-03: LLM phase without holding caller's session across await.
+P0: commit() after flush; SHA-256 content_hash.
 """
 from __future__ import annotations
 
@@ -20,7 +19,7 @@ from app.models import OutlineNode
 logger = logging.getLogger("novelforge.state_extractor")
 
 
-def _sha256_int_or_hex(content: str) -> str:
+def _sha256_hex(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
@@ -31,29 +30,41 @@ async def extract_and_commit(
     chapter_no: int,
     chapter_content: str,
     scenes: list[dict],
-    outline_node: OutlineNode,
+    outline_node: OutlineNode | dict,
     current_l4: dict,
     source_run_id: uuid.UUID,
 ) -> tuple[bool, list[str]]:
-    """Extract state events from finalized content and commit atomically.
+    """Extract state events then commit in the *write* session.
 
-    Per §5.5: story_events -> L4 -> L1 -> search_documents -> commit
-    All in one transaction. Any failure = rollback.
+    LLM call is session-free (call_agent). The provided `db` is only used for
+    the final write phase after LLM returns.
     """
-    user_content = json.dumps({
-        "chapter_content": chapter_content,
-        "scenes": scenes,
-        "paragraphs": [],
-        "current_l4": current_l4,
-        "outline_node": {
+    if isinstance(outline_node, OutlineNode):
+        outline_payload = {
             "chapter_no": outline_node.chapter_no,
             "goal": outline_node.goal,
             "expected_state_changes": outline_node.expected_state_changes,
-        },
-    }, ensure_ascii=False)
+        }
+    else:
+        outline_payload = {
+            "chapter_no": outline_node.get("chapter_no"),
+            "goal": outline_node.get("goal"),
+            "expected_state_changes": outline_node.get("expected_state_changes"),
+        }
 
+    user_content = json.dumps(
+        {
+            "chapter_content": chapter_content,
+            "scenes": scenes,
+            "paragraphs": [],
+            "current_l4": current_l4,
+            "outline_node": outline_payload,
+        },
+        ensure_ascii=False,
+    )
+
+    # LLM Phase — no session held by call_agent
     run, result, meta = await call_agent(
-        db=db,
         book_id=book_id,
         agent_role="state_extractor",
         user_content=user_content,
@@ -70,71 +81,48 @@ async def extract_and_commit(
     if conflicts:
         logger.warning(f"StateExtractor found {len(conflicts)} conflicts with L4")
 
-    # §5.5: Filter to explicit-only events
     explicit_events = [e for e in events if e.get("certainty") == "explicit"]
 
-    # Atomic commit: story_events -> L4 (merged) -> L1
     await commit_l4_with_events(
         db=db,
         book_id=book_id,
         chapter_id=chapter_id,
         as_of_chapter=chapter_no,
         events=explicit_events,
-        source_run_id=source_run_id,
+        source_run_id=source_run_id or run.id,
     )
 
-    # Generate scene_search_documents with proper tsvector
-    from app.models import SceneSearchDocument
-    for scene in scenes:
-        scene_id = scene.get("scene_id")
-        if isinstance(scene_id, str):
-            try:
-                scene_id = uuid.UUID(scene_id)
-            except ValueError:
-                scene_id = uuid.uuid4()
-        elif scene_id is None:
-            scene_id = uuid.uuid4()
+    # Search documents for scenes (SHA-256)
+    from app.engine.chinese_tokenizer import tokenize_for_search
+    from app.models.tables import SceneSearchDocument
 
-        scene_content = scene.get("content", chapter_content[:1000])
-        scene_summary = scene.get("summary", scene_content[:200])
-
-        search_doc = SceneSearchDocument(
+    for sc in scenes:
+        content = sc.get("content") or ""
+        content_hash = _sha256_hex(content)
+        search_text = content[:8000]
+        tokenized = tokenize_for_search(search_text)
+        doc = SceneSearchDocument(
             id=uuid.uuid4(),
             book_id=book_id,
             chapter_id=chapter_id,
-            scene_id=scene_id,
+            scene_id=sc.get("scene_id") or uuid.uuid4(),
             chapter_no=chapter_no,
-            scene_no=scene.get("scene_no", 1),
-            outline_node_id=outline_node.id,
-            pov_character_id=None,
-            character_ids=outline_node.involved_character_ids,
-            location_ids=[],
-            item_ids=[],
-            plot_thread_ids=outline_node.plot_thread_ids,
-            event_types=[e.get("entity_type") for e in explicit_events],
-            scene_summary=scene_summary,
-            evidence_excerpt=chapter_content[:500],
-            search_text=scene_content,
-            search_tsv="",  # Set via SQL below
-            canon_status="canon",
-            content_hash=_sha256_int_or_hex(scene_content),
-            version=1,
+            scene_no=sc.get("scene_no") or 0,
+            search_text=search_text,
+            content_hash=content_hash,
         )
-        db.add(search_doc)
+        db.add(doc)
         await db.flush()
-
-        # Basic tsvector with Chinese pre-tokenization (unigram + bigram)
-        from app.engine.chinese_tokenizer import tokenize_for_search
-        tokenized = tokenize_for_search(search_doc.search_text)
         await db.execute(
-            text("""
+            text(
+                """
                 UPDATE scene_search_documents
-                SET search_tsv = to_tsvector('simple', :search_text)
-                WHERE id = :doc_id
-            """),
-            {"search_text": tokenized or search_doc.search_text, "doc_id": str(search_doc.id)},
+                SET search_tsv = to_tsvector('simple', :tok)
+                WHERE id = :id
+                """
+            ),
+            {"tok": tokenized or search_text, "id": doc.id},
         )
 
-    # CRITICAL P0: commit so L4/L1/events/search docs survive session close
     await db.commit()
-    return True, conflicts
+    return True, []

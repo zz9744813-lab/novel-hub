@@ -1,18 +1,38 @@
 """Model Gateway - unified streaming Chat Completion, reasoning/final separation.
 Per v7.3: C-03 streaming, C-11 retry/fallback, C-18/C-19 reasoning isolation,
 §11.4 InlineReasoningParser cross-chunk state machine.
+
+P0-05: AttemptRecord on every real request; StreamResult carries full attempt audit.
 """
+from __future__ import annotations
+
 import json
 import time
 import re
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import httpx
 
 from app.gateway.provider_adapter import InlineReasoningParser, CanonicalEventType
 
 logger = logging.getLogger("novelforge.gateway")
+
+
+@dataclass
+class AttemptRecord:
+    attempt_no: int
+    provider: str
+    model: str
+    route_type: str  # primary | retry | fallback
+    started_at: datetime
+    completed_at: datetime
+    latency_ms: int
+    success: bool
+    error_code: str | None
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
 
 
 @dataclass
@@ -28,6 +48,10 @@ class StreamResult:
     latency_ms: int = 0
     attempt: int = 0
     provider_used: str = "primary"
+    actual_provider: str = ""
+    actual_model: str = ""
+    successful_attempt_no: int | None = None
+    attempts: list[AttemptRecord] = field(default_factory=list)
 
 
 REASONING_FIELDS = {"reasoning_content", "reasoning", "thinking", "thought"}
@@ -49,8 +73,7 @@ def _get_provider_config(role: str = "primary", provider: str | None = None) -> 
     """Read provider config from environment per §2.7.
 
     `role` selects PRIMARY vs FALLBACK credentials.
-    `provider` is the logical provider name from model bindings (openrouter/new-api/...).
-    When provider-specific env vars exist they win; otherwise PRIMARY/FALLBACK is used.
+    `provider` is the logical provider name from model bindings.
     """
     prefix = "PRIMARY" if role == "primary" else "FALLBACK"
     base_url = os.environ.get(
@@ -62,12 +85,10 @@ def _get_provider_config(role: str = "primary", provider: str | None = None) -> 
         os.environ.get("PRIMARY_API_KEY", os.environ.get("LLM_API_KEY", "sk-test")),
     )
 
-    # Optional per-provider overrides (so UI provider field can actually route)
     if provider:
         p = provider.upper().replace("-", "_")
         base_url = os.environ.get(f"{p}_BASE_URL", base_url)
         api_key = os.environ.get(f"{p}_API_KEY", api_key)
-        # Common aliases
         if provider.lower() in ("new-api", "new_api", "newapi"):
             base_url = os.environ.get("NEW_API_BASE_URL", os.environ.get("PRIMARY_BASE_URL", base_url))
             api_key = os.environ.get("NEW_API_API_KEY", os.environ.get("PRIMARY_API_KEY", api_key))
@@ -79,13 +100,12 @@ def _get_provider_config(role: str = "primary", provider: str | None = None) -> 
         "base_url": base_url.rstrip("/"),
         "api_key": api_key,
         "connect_timeout": 15,
-        "read_timeout": 600,
+        "read_timeout": int(os.environ.get("LLM_READ_TIMEOUT", "600")),
         "provider": provider or role,
     }
 
 
 def _strip_inline_reasoning(text: str) -> tuple[str, bool]:
-    """Strip inline reasoning tags from content (fallback cleanup)."""
     found = False
     if re.search(r"<reasoning>.*?</reasoning>", text, re.DOTALL):
         found = True
@@ -105,12 +125,7 @@ async def stream_completion_and_collect(
     provider_role: str = "primary",
     provider: str | None = None,
 ) -> StreamResult:
-    """Stream and collect all chunks from a single provider attempt.
-
-    Integrates InlineReasoningParser for cross-chunk tag handling per §11.4.
-    `provider` is the logical binding provider (openrouter/new-api/...).
-    `provider_role` is primary|fallback for credential selection.
-    """
+    """Stream and collect all chunks from a single provider attempt."""
     config = _get_provider_config(provider_role, provider=provider)
 
     headers = {
@@ -128,16 +143,16 @@ async def stream_completion_and_collect(
         "stream": True,
     }
 
-    result = StreamResult(provider_used=provider or provider_role)
+    result = StreamResult(
+        provider_used=provider or provider_role,
+        actual_provider=provider or provider_role,
+        actual_model=model,
+    )
     start_time = time.time()
-
-    # §11.4: InlineReasoningParser for cross-chunk state machine
     inline_parser = InlineReasoningParser()
 
     try:
-        timeout = httpx.Timeout(
-            config["read_timeout"], connect=config["connect_timeout"]
-        )
+        timeout = httpx.Timeout(config["read_timeout"], connect=config["connect_timeout"])
         async with httpx.AsyncClient(timeout=timeout) as client:
             async with client.stream(
                 "POST",
@@ -161,7 +176,6 @@ async def stream_completion_and_collect(
 
                     choices = data.get("choices", [])
                     if not choices:
-                        # Check for usage-only event
                         usage = data.get("usage")
                         if usage:
                             result.prompt_tokens = usage.get("prompt_tokens", 0)
@@ -171,15 +185,12 @@ async def stream_completion_and_collect(
 
                     delta = choices[0].get("delta", {})
 
-                    # C-18: Classify delta by whitelist
-                    # reasoning_content / reasoning / thinking / thought -> REASONING
                     for field_name in REASONING_FIELDS:
                         val = delta.get(field_name)
                         if val:
                             result.reasoning_detected = True
                             result.reasoning_text += val
 
-                    # content -> feed through InlineReasoningParser (§11.4)
                     content_val = delta.get("content")
                     if content_val:
                         events = inline_parser.feed(content_val)
@@ -191,10 +202,8 @@ async def stream_completion_and_collect(
                             elif evt_type == CanonicalEventType.FINAL:
                                 result.final_content += evt_text
                             elif evt_type == CanonicalEventType.UNKNOWN:
-                                # Quarantine unknown events
                                 logger.debug("Unknown event quarantined")
 
-                    # tool_calls -> TOOL (quarantine, never enters prose)
                     if delta.get("tool_calls"):
                         logger.debug("Tool call delta detected, quarantined")
 
@@ -204,13 +213,11 @@ async def stream_completion_and_collect(
                         result.completion_tokens = usage.get("completion_tokens", 0)
                         result.reasoning_tokens = usage.get("reasoning_tokens", 0)
 
-                # §11.4 point 4: Flush remaining carry buffer
                 remaining = inline_parser.flush()
                 for evt_type, evt_text in remaining:
                     if evt_type == CanonicalEventType.FINAL:
                         result.final_content += evt_text
                     elif evt_type == CanonicalEventType.UNKNOWN:
-                        # §11.4 point 6: Unterminated reasoning -> block
                         result.error = "UNTERMINATED_REASONING"
                         logger.warning("Unterminated reasoning tag at stream end")
 
@@ -231,14 +238,12 @@ async def stream_completion_and_collect(
         result.latency_ms = int((time.time() - start_time) * 1000)
         return result
 
-    # Fallback cleanup for any remaining inline tags
     result.final_content, inline_found = _strip_inline_reasoning(result.final_content)
     if inline_found:
         result.inline_leak_detected = True
 
     result.latency_ms = int((time.time() - start_time) * 1000)
 
-    # C-19: final empty + reasoning non-empty = FAILED, do NOT salvage
     if not result.final_content and result.reasoning_text:
         result.error = "final_content_empty"
         logger.warning(
@@ -263,32 +268,31 @@ async def stream_with_retry(
     fallback_model: str | None = None,
     fallback_provider: str | None = None,
 ) -> StreamResult:
-    """§11.11: Retry and fallback logic.
-    - Same model same request: max 2 attempts (primary credentials)
-    - Fallback model/provider: max 1 attempt
-    - Total max 3 attempts
-    - Non-retryable errors break immediately
+    """§11.11 + P0-05: Retry/fallback with full AttemptRecord audit.
 
-    C-21/C-23: `provider` and `fallback_model` come from agent_model_bindings.
+    - Attempts 1-2: primary model (route_type primary / retry)
+    - Attempt 3: fallback model if configured (route_type fallback)
+    - Total max 3 attempts
+    - Never use provider_used != provider as sole fallback detector
     """
-    last_result = None
-    use_model = model
-    use_provider = provider
+    attempts: list[AttemptRecord] = []
+    last_result: StreamResult | None = None
 
     for attempt in range(1, 4):
-        # Attempts 1-2: primary model + primary credentials
-        # Attempt 3: fallback model (if configured) + fallback credentials
         if attempt <= 2:
             provider_role = "primary"
             use_model = model
             use_provider = provider
+            route_type = "primary" if attempt == 1 else "retry"
         else:
             provider_role = "fallback"
             use_model = fallback_model or model
             use_provider = fallback_provider or provider
+            route_type = "fallback" if fallback_model else "retry"
 
+        started = datetime.now(timezone.utc)
         logger.info(
-            f"LLM call attempt {attempt}/3 [{provider_role}] "
+            f"LLM call attempt {attempt}/3 [{route_type}] "
             f"provider={use_provider} model={use_model}"
         )
 
@@ -301,33 +305,59 @@ async def stream_with_retry(
             provider_role=provider_role,
             provider=use_provider,
         )
+        completed = datetime.now(timezone.utc)
+        success = bool(result.final_content and not result.error)
+
+        rec = AttemptRecord(
+            attempt_no=attempt,
+            provider=use_provider or provider_role,
+            model=use_model,
+            route_type=route_type,
+            started_at=started,
+            completed_at=completed,
+            latency_ms=result.latency_ms,
+            success=success,
+            error_code=result.error,
+            prompt_tokens=result.prompt_tokens,
+            completion_tokens=result.completion_tokens,
+        )
+        attempts.append(rec)
+
         result.attempt = attempt
         result.provider_used = use_provider or provider_role
+        result.actual_provider = use_provider or provider_role
+        result.actual_model = use_model
+        result.attempts = list(attempts)
 
-        # Success: got final content with no error
-        if result.final_content and not result.error:
+        if success:
+            result.successful_attempt_no = attempt
             return result
 
         last_result = result
 
-        # Check if error is retryable per §11.11
         if result.error and result.error not in RETRYABLE_ERRORS:
             logger.warning(f"Non-retryable error: {result.error}, stopping")
             break
 
-        # If no fallback model configured, don't bother with attempt 3 model switch noise
         if attempt == 2 and not fallback_model:
             logger.warning(
                 f"Attempt {attempt} failed: {result.error}, no fallback_model configured"
             )
-            # still allow a third try on same model with fallback credentials
         else:
             logger.warning(
                 f"Attempt {attempt} failed: {result.error}, "
                 f"{'will retry' if attempt < 3 else 'all attempts exhausted'}"
             )
 
-    return last_result or StreamResult(error="all_attempts_failed")
+    out = last_result or StreamResult(error="all_attempts_failed")
+    out.attempts = attempts
+    if attempts:
+        last = attempts[-1]
+        out.actual_provider = last.provider
+        out.actual_model = last.model
+        out.provider_used = last.provider
+        out.attempt = last.attempt_no
+    return out
 
 
 async def stream_agent_call(
@@ -339,9 +369,6 @@ async def stream_agent_call(
     provider: str | None = None,
     fallback_model: str | None = None,
 ) -> StreamResult:
-    """Compatibility wrapper for memory_compiler.py and other callers.
-    Routes through stream_with_retry for C-11 compliance.
-    """
     return await stream_with_retry(
         system_prompt=system_prompt,
         user_content=user_content,

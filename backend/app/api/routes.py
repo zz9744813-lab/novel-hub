@@ -57,6 +57,8 @@ class ResourceBlockRequest(BaseModel):
 
 
 # ---- Health ----
+# Live is always up. Ready is driven by app.main lifespan readiness flag
+# (provider + bindings + DB). See app.main.get_readiness().
 @router.get("/health/live")
 @router.get("/api/health/live")
 async def health_live():
@@ -65,12 +67,13 @@ async def health_live():
 
 @router.get("/health/ready")
 @router.get("/api/health/ready")
-async def health_ready(db: AsyncSession = Depends(get_db)):
-    try:
-        result = await db.execute(select(1))
-        return {"status": "ready", "database": "ok"}
-    except Exception as e:
-        raise HTTPException(503, f"Database: {e}")
+async def health_ready():
+    from app.main import get_readiness
+
+    ready, detail = get_readiness()
+    if not ready:
+        raise HTTPException(503, detail={"status": "not_ready", "detail": detail})
+    return {"status": "ready", "detail": detail}
 
 
 @router.get("/metrics")
@@ -819,7 +822,6 @@ async def analyze_reference_sample(
     await db.commit()
 
     profile = await run_reference_analyzer_with_system(
-        db=db,
         book_id=uuid.UUID(book_id),
         reference_text=text,
         genre_hint=sample.genre_hint,
@@ -1039,7 +1041,6 @@ async def create_research_session(book_id: str, payload: dict, db: AsyncSession 
     try:
         from app.agents.caller import call_agent
         run, publishable, meta = await call_agent(
-            db=db,
             book_id=uuid.UUID(book_id),
             agent_role="query_planner",
             user_content=json.dumps(
@@ -1123,7 +1124,6 @@ async def create_research_session(book_id: str, payload: dict, db: AsyncSession 
         try:
             from app.agents.caller import call_agent
             run, pub, meta = await call_agent(
-                db=db,
                 book_id=uuid.UUID(book_id),
                 agent_role="query_planner",
                 user_content=json.dumps(

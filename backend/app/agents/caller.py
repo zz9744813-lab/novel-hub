@@ -1,10 +1,8 @@
-"""Unified Agent caller - v7.4: model bindings + route events + context packages.
+"""Unified Agent caller - v7.4 production P0 fixes.
 
-C-21: Read model from agent_model_bindings (DB), not .env at runtime
-C-22: Record model_route_events per attempt
-C-23: Missing binding fails closed (no silent default for production agents)
-C-35: Persist agent_context_packages per attempt
-§2.5: Short-lived sessions — never hold DB across LLM await
+P0-02: await merge + single short transaction for Run/Output/Usage/Context
+P0-03: no db parameter; never hold session across LLM
+P0-05: persist every AttemptRecord as route event + context package
 """
 from __future__ import annotations
 
@@ -12,8 +10,6 @@ import uuid
 import json
 import logging
 from datetime import datetime, timezone
-
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session_factory
 from app.gateway.model_gateway import stream_with_retry
@@ -28,7 +24,6 @@ from app.v74_utils import (
 
 logger = logging.getLogger("novelforge.agents")
 
-# Roles that MUST have an explicit binding (C-21/C-23). No silent env default.
 STRICT_ROLES = {
     "draft_writer",
     "chapter_planner",
@@ -36,6 +31,10 @@ STRICT_ROLES = {
     "state_extractor",
     "local_rewrite_editor",
     "outline_parser",
+    "query_planner",
+    "evidence_ranker",
+    "aileak_judge",
+    "drift_audit",
 }
 
 
@@ -48,15 +47,9 @@ async def _resolve_model(
     book_id: uuid.UUID,
     overrides: dict | None,
 ) -> tuple[str, str, str | None]:
-    """C-21: Resolve model from DB binding.
-
-    Priority: override > book binding > global binding.
-    Strict roles: missing binding raises (no silent default).
-    Returns (provider, primary_model, fallback_model)
-    """
     if overrides and overrides.get("model"):
         return (
-            overrides.get("provider", "openrouter"),
+            overrides.get("provider", "new-api"),
             overrides["model"],
             overrides.get("fallback_model"),
         )
@@ -67,21 +60,14 @@ async def _resolve_model(
         if binding:
             return binding.provider, binding.primary_model, binding.fallback_model
 
-    if agent_role in STRICT_ROLES:
-        raise ModelBindingMissingError(
-            f"No model binding for agent_role={agent_role} book_id={book_id}. "
-            "Configure it in the Model Binding panel before running production agents."
-        )
-
-    # Non-strict utility roles only: still fail closed rather than invent a model
-    logger.error(f"No DB binding for {agent_role}; refusing silent default")
     raise ModelBindingMissingError(
-        f"No model binding for agent_role={agent_role}"
+        f"No model binding for agent_role={agent_role} book_id={book_id}. "
+        "Configure it in the Model Binding panel before running production agents."
     )
 
 
 async def call_agent(
-    db: AsyncSession,
+    *,
     book_id: uuid.UUID,
     agent_role: str,
     user_content: str,
@@ -96,27 +82,28 @@ async def call_agent(
     l3_refs: list | None = None,
     genre_profile_id: uuid.UUID | None = None,
 ) -> tuple[AgentRun, str | dict | None, dict]:
-    """Call an agent, store outputs, return (run, publishable, metadata).
+    """Call an agent without holding a caller-provided DB session.
 
-    v7.4 flow:
-    1. Resolve model binding from DB (strict)
-    2. Create AgentRun
-    3. Save Context Package (attempt 1)
-    4. Call LLM with provider (no session held)
-    5. Record model_route_event
-    6. Async publish pipeline (incl. Layer-2 AILeakJudge for prose)
-    7. Save outputs + update context package publish_state
+    Returns (run, publishable, metadata). Run is detached ORM after final query.
     """
-    prompt_config = PROMPTS[agent_role]
+    if agent_role not in PROMPTS:
+        # Allow runtime system roles that reuse a nearby prompt template
+        prompt_config = PROMPTS.get("query_planner") or next(iter(PROMPTS.values()))
+        prompt_config = {
+            **prompt_config,
+            "version": f"{agent_role}-v1",
+            "system_prompt": prompt_config.get("system_prompt", ""),
+        }
+    else:
+        prompt_config = PROMPTS[agent_role]
+
     temperature = (overrides or {}).get("temperature", AGENT_TEMPERATURES.get(agent_role, 0.7))
     is_json = AGENT_IS_JSON.get(agent_role, False)
 
-    # C-21/C-23: Resolve from DB binding — fail closed if missing
     try:
         provider, model, fallback_model = await _resolve_model(agent_role, book_id, overrides)
     except ModelBindingMissingError as e:
         logger.error(str(e))
-        # Create a failed run record so the UI can see the misconfiguration
         run_id = uuid.uuid4()
         run = AgentRun(
             id=run_id,
@@ -142,11 +129,8 @@ async def call_agent(
 
     system_prompt = prompt_config["system_prompt"]
     rendered_prompt = f"{system_prompt}\n\n{user_content}"
-    attempt_no = 1
 
-    # Phase 1: Create AgentRun + Context Package + Route Event in short session
     run_id = uuid.uuid4()
-    ctx_pkg_id: uuid.UUID | None = None
     run = AgentRun(
         id=run_id,
         book_id=book_id,
@@ -170,49 +154,12 @@ async def call_agent(
         },
     }
 
+    # Phase 1: create run only (attempt packages written after stream with real audit)
     async with async_session_factory() as db_run:
         db_run.add(run)
-
-        # C-35: Context Package
-        pkg = await save_context_package(
-            db=db_run,
-            run_id=run_id,
-            attempt_no=attempt_no,
-            book_id=book_id,
-            agent_role=agent_role,
-            provider=provider,
-            model=model,
-            prompt_version=prompt_config["version"],
-            system_prompt=system_prompt,
-            rendered_prompt=rendered_prompt,
-            request_params={"temperature": temperature, "is_json": is_json},
-            assembly_manifest=default_manifest,
-            l4_refs=l4_refs or [],
-            l1_refs=l1_refs or [],
-            l2_refs=l2_refs or [],
-            l3_refs=l3_refs or [],
-            genre_profile_id=genre_profile_id,
-            chapter_id=chapter_id,
-            scene_id=scene_id,
-        )
-
-        # C-22: Primary route event
-        await record_model_route(
-            db=db_run,
-            run_id=run_id,
-            attempt_no=attempt_no,
-            agent_role=agent_role,
-            configured_provider=provider,
-            configured_model=model,
-            actual_provider=provider,
-            actual_model=model,
-            route_type="primary",
-            reason=None,
-        )
         await db_run.commit()
-        ctx_pkg_id = pkg.id
 
-    # Phase 2: LLM call — NO session held; pass provider from binding
+    # Phase 2: LLM — no session held
     result = await stream_with_retry(
         system_prompt=system_prompt,
         user_content=user_content,
@@ -222,45 +169,64 @@ async def call_agent(
         fallback_model=fallback_model,
     )
 
-    actual_provider = result.provider_used or provider
-    actual_model = model
-    route_type = "primary"
+    attempts = list(getattr(result, "attempts", None) or [])
+    if not attempts:
+        # single synthetic attempt if gateway returned without records
+        from app.gateway.model_gateway import AttemptRecord
+        attempts = [
+            AttemptRecord(
+                attempt_no=result.attempt or 1,
+                provider=result.actual_provider or result.provider_used or provider,
+                model=result.actual_model or model,
+                route_type="primary",
+                started_at=datetime.now(timezone.utc),
+                completed_at=datetime.now(timezone.utc),
+                latency_ms=result.latency_ms,
+                success=bool(result.final_content and not result.error),
+                error_code=result.error,
+                prompt_tokens=result.prompt_tokens,
+                completion_tokens=result.completion_tokens,
+            )
+        ]
 
-    # If primary exhausted and binding has fallback_model, ensure route event is logged
-    # (stream_with_retry already tried fallback_model on attempt 3)
-    if result.error and fallback_model and result.provider_used and result.provider_used != provider:
-        route_type = "fallback"
-        actual_model = fallback_model
-        attempt_no = max(result.attempt, 2)
+    successful = next((a for a in attempts if a.success), None)
+    final_attempt = successful or attempts[-1]
+    actual_provider = final_attempt.provider
+    actual_model = final_attempt.model
+    attempt_no = final_attempt.attempt_no
+    route_type = final_attempt.route_type
 
-        async with async_session_factory() as db_fb:
+    # Persist every attempt: route event + context package
+    async with async_session_factory() as db_att:
+        for att in attempts:
             await record_model_route(
-                db=db_fb,
+                db=db_att,
                 run_id=run_id,
-                attempt_no=attempt_no,
+                attempt_no=att.attempt_no,
                 agent_role=agent_role,
                 configured_provider=provider,
                 configured_model=model,
-                actual_provider=actual_provider,
-                actual_model=actual_model,
-                route_type="fallback",
-                reason=result.error,
+                actual_provider=att.provider,
+                actual_model=att.model,
+                route_type=att.route_type,
+                reason=att.error_code,
             )
             await save_context_package(
-                db=db_fb,
+                db=db_att,
                 run_id=run_id,
-                attempt_no=attempt_no,
+                attempt_no=att.attempt_no,
                 book_id=book_id,
                 agent_role=agent_role,
-                provider=actual_provider,
-                model=actual_model,
+                provider=att.provider,
+                model=att.model,
                 prompt_version=prompt_config["version"],
                 system_prompt=system_prompt,
                 rendered_prompt=rendered_prompt,
                 request_params={
                     "temperature": temperature,
                     "is_json": is_json,
-                    "fallback": True,
+                    "route_type": att.route_type,
+                    "success": att.success,
                 },
                 assembly_manifest=default_manifest,
                 l4_refs=l4_refs or [],
@@ -271,9 +237,8 @@ async def call_agent(
                 chapter_id=chapter_id,
                 scene_id=scene_id,
             )
-            await db_fb.commit()
+        await db_att.commit()
 
-    # Process through async publish pipeline (Layer-2 for prose)
     publishable, state, meta = await full_pipeline_async(
         result,
         is_json=is_json,
@@ -281,17 +246,34 @@ async def call_agent(
         book_id=book_id,
     )
 
-    # Phase 3: Save outputs + update context package
+    new_status = "completed" if publishable is not None else "failed"
+    completed_at = datetime.now(timezone.utc)
+    publish_state = state.value if publishable is not None else "blocked"
+    block_reason = meta.get("block_reason")
+
     raw_response_summary = {
         "provider": actual_provider,
         "model": actual_model,
         "attempt": attempt_no,
         "route_type": route_type,
+        "successful_attempt_no": result.successful_attempt_no,
         "error": result.error,
         "latency_ms": result.latency_ms,
         "prompt_tokens": result.prompt_tokens,
         "completion_tokens": result.completion_tokens,
         "reasoning_tokens": result.reasoning_tokens,
+        "attempts": [
+            {
+                "attempt_no": a.attempt_no,
+                "provider": a.provider,
+                "model": a.model,
+                "route_type": a.route_type,
+                "success": a.success,
+                "error_code": a.error_code,
+                "latency_ms": a.latency_ms,
+            }
+            for a in attempts
+        ],
     }
 
     output = AgentRunOutput(
@@ -334,22 +316,19 @@ async def call_agent(
             latency_ms=result.latency_ms,
         )
 
-    new_status = "completed" if publishable is not None else "failed"
-    completed_at = datetime.now(timezone.utc)
-    publish_state = state.value if publishable else "blocked"
-    block_reason = meta.get("block_reason")
-
+    # Phase 3: single short transaction for Output + Usage + Run status + package update
     async with async_session_factory() as db_out:
+        from sqlalchemy import select, update
+        from app.models.tables import AgentContextPackage
+
+        managed_run = await db_out.merge(run)
+        managed_run.status = new_status
+        managed_run.completed_at = completed_at
+        managed_run.model_name = actual_model
+
         db_out.add(output)
         if usage:
             db_out.add(usage)
-        run.status = new_status
-        run.completed_at = completed_at
-        run.model_name = actual_model
-        db_out.merge(run)
-
-        from app.models.tables import AgentContextPackage
-        from sqlalchemy import update
 
         await db_out.execute(
             update(AgentContextPackage)
@@ -361,11 +340,35 @@ async def call_agent(
                 publish_state=publish_state,
                 block_reason=block_reason,
                 completed_at=completed_at,
+                provider=actual_provider,
+                model=actual_model,
             )
         )
         await db_out.commit()
 
-    return run, publishable, {
+        # Re-query run so caller sees DB truth
+        refreshed = (
+            await db_out.execute(select(AgentRun).where(AgentRun.id == run_id))
+        ).scalar_one()
+        # Detach attributes we need
+        final_run = AgentRun(
+            id=refreshed.id,
+            book_id=refreshed.book_id,
+            chapter_id=refreshed.chapter_id,
+            scene_id=refreshed.scene_id,
+            agent_role=refreshed.agent_role,
+            status=refreshed.status,
+            prompt_version=refreshed.prompt_version,
+            model_name=refreshed.model_name,
+            started_at=refreshed.started_at,
+            completed_at=refreshed.completed_at,
+            idempotency_key=refreshed.idempotency_key,
+            parent_run_id=refreshed.parent_run_id,
+        )
+        if final_run.status not in ("completed", "failed"):
+            raise RuntimeError(f"AgentRun {run_id} left in invalid status={final_run.status}")
+
+    return final_run, publishable, {
         "reasoning_detected": result.reasoning_detected,
         "inline_leak_detected": result.inline_leak_detected,
         "error": result.error,
@@ -375,6 +378,7 @@ async def call_agent(
         "model_used": actual_model,
         "route_type": route_type,
         "block_reason": block_reason,
-        "context_package_id": str(ctx_pkg_id) if ctx_pkg_id else None,
+        "successful_attempt_no": result.successful_attempt_no,
+        "attempts": raw_response_summary["attempts"],
         **meta,
     }

@@ -1,7 +1,42 @@
 import { useEffect, useState, useMemo, useRef } from "react";
 import { api, OutlineNode } from "../api";
-import { Upload, Loader2, GitGraph, Target, Link2, FileText, CheckCircle2, AlertTriangle } from "lucide-react";
+import {
+  Upload,
+  Loader2,
+  GitGraph,
+  Target,
+  Link2,
+  FileText,
+  CheckCircle2,
+  AlertTriangle,
+} from "lucide-react";
 import clsx from "clsx";
+
+function depLabel(d: any, nodes: OutlineNode[]): string {
+  if (!d) return "?";
+  // Prefer resolve UUID / node_id against known nodes
+  const byId = nodes.find((x) => x.node_id === d.node_id || x.node_id === d);
+  if (byId) return `第${byId.chapter_no}章`;
+  if (typeof d.chapter_no === "number") return `第${d.chapter_no}章`;
+  // Legacy "ch1" style
+  if (typeof d.node_id === "string" && /^ch\d+/i.test(d.node_id)) {
+    return d.node_id.replace(/^ch/i, "第") + "章";
+  }
+  if (typeof d.node_id === "string") return d.node_id.slice(0, 8);
+  return String(d);
+}
+
+function resolveDepChapterNo(d: any, nodes: OutlineNode[]): number {
+  if (!d) return 0;
+  const byId = nodes.find((x) => x.node_id === d.node_id || x.node_id === d);
+  if (byId) return byId.chapter_no;
+  if (typeof d.chapter_no === "number") return d.chapter_no;
+  if (typeof d.node_id === "string") {
+    const m = d.node_id.match(/^ch(\d+)/i);
+    if (m) return parseInt(m[1], 10);
+  }
+  return 0;
+}
 
 export function OutlineGraph({ bookId }: { bookId: string }) {
   const [nodes, setNodes] = useState<OutlineNode[]>([]);
@@ -9,6 +44,7 @@ export function OutlineGraph({ bookId }: { bookId: string }) {
   const [outlineVersion, setOutlineVersion] = useState<number | null>(null);
   const [outlineStatus, setOutlineStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [outline, setOutline] = useState("");
   const [parsing, setParsing] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -18,22 +54,32 @@ export function OutlineGraph({ bookId }: { bookId: string }) {
   const [dragOver, setDragOver] = useState(false);
 
   const fetchGraph = async () => {
+    if (!bookId) return;
     setLoading(true);
+    setLoadError(null);
     try {
       const data = await api.outlines.graph(bookId);
-      setNodes(data.nodes);
+      setNodes(Array.isArray(data.nodes) ? data.nodes : []);
       setOutlineVersionId(data.outline_version_id);
       setOutlineVersion(data.version);
       setOutlineStatus(data.status);
-    } catch (e) { console.error(e); }
+    } catch (e: any) {
+      console.error(e);
+      setLoadError(e?.message || String(e));
+      setNodes([]);
+    }
     setLoading(false);
   };
 
-  useEffect(() => { fetchGraph(); }, [bookId]);
+  useEffect(() => {
+    fetchGraph();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookId]);
 
   const handleParse = async () => {
     if (!outline.trim()) return;
-    setParsing(true); setResult(null);
+    setParsing(true);
+    setResult(null);
     try {
       const r = await api.outlines.parse(bookId, { raw_outline: outline });
       if (r.status === "parsed") {
@@ -61,11 +107,15 @@ export function OutlineGraph({ bookId }: { bookId: string }) {
       setResult({ type: "error", msg: "文件过大，最大支持 2MB" });
       return;
     }
-    setUploading(true); setResult(null);
+    setUploading(true);
+    setResult(null);
     try {
       const r = await api.outlines.upload(bookId, file);
       if (r.status === "parsed") {
-        setResult({ type: "success", msg: `文件「${r.filename}」解析成功 · ${r.chars} 字 · v${r.version}` });
+        setResult({
+          type: "success",
+          msg: `文件「${r.filename}」解析成功 · ${r.chars} 字 · v${r.version}`,
+        });
         fetchGraph();
       } else {
         setResult({ type: "error", msg: r.errors?.join("; ") || r.status });
@@ -91,7 +141,8 @@ export function OutlineGraph({ bookId }: { bookId: string }) {
 
   const handleApprove = async () => {
     if (!outlineVersion) return;
-    setApproving(true); setResult(null);
+    setApproving(true);
+    setResult(null);
     try {
       const r = await api.outlines.approve(bookId, outlineVersion);
       setResult({ type: "success", msg: `大纲 v${outlineVersion} 已批准 · ${r.status}` });
@@ -102,35 +153,72 @@ export function OutlineGraph({ bookId }: { bookId: string }) {
     setApproving(false);
   };
 
+  // Topological-ish levels using real UUID / chapter_no deps (never crash)
   const sortedNodes = useMemo(() => {
     if (!nodes.length) return [];
-    const levels = new Map<number, number>();
-    const getLevel = (n: OutlineNode): number => {
-      if (levels.has(n.chapter_no)) return levels.get(n.chapter_no)!;
-      if (!n.depends_on || n.depends_on.length === 0) {
-        levels.set(n.chapter_no, 0);
-        return 0;
-      }
-      const maxDep = Math.max(...n.depends_on.map((d: any) => {
-        const depChNo = parseInt(d.node_id?.replace("ch", "") || "0");
-        const depNode = nodes.find(x => x.chapter_no === depChNo);
-        return depNode ? getLevel(depNode) : 0;
-      }));
-      levels.set(n.chapter_no, maxDep + 1);
-      return maxDep + 1;
-    };
-    nodes.forEach(n => getLevel(n));
-    return [...nodes].sort((a, b) => (levels.get(a.chapter_no) || 0) - (levels.get(b.chapter_no) || 0));
+    try {
+      const levels = new Map<number, number>();
+      const visiting = new Set<number>();
+      const getLevel = (n: OutlineNode): number => {
+        if (levels.has(n.chapter_no)) return levels.get(n.chapter_no)!;
+        if (visiting.has(n.chapter_no)) return 0; // cycle guard
+        visiting.add(n.chapter_no);
+        const deps = Array.isArray(n.depends_on) ? n.depends_on : [];
+        if (deps.length === 0) {
+          levels.set(n.chapter_no, 0);
+          visiting.delete(n.chapter_no);
+          return 0;
+        }
+        let maxDep = 0;
+        for (const d of deps) {
+          const depChNo = resolveDepChapterNo(d, nodes);
+          const depNode = nodes.find((x) => x.chapter_no === depChNo);
+          if (depNode) maxDep = Math.max(maxDep, getLevel(depNode));
+        }
+        const lv = maxDep + (deps.length ? 1 : 0);
+        levels.set(n.chapter_no, lv);
+        visiting.delete(n.chapter_no);
+        return lv;
+      };
+      nodes.forEach((n) => getLevel(n));
+      return [...nodes].sort((a, b) => {
+        const la = levels.get(a.chapter_no) || 0;
+        const lb = levels.get(b.chapter_no) || 0;
+        if (la !== lb) return la - lb;
+        return a.chapter_no - b.chapter_no;
+      });
+    } catch (e) {
+      console.error("outline sort failed", e);
+      return [...nodes].sort((a, b) => a.chapter_no - b.chapter_no);
+    }
+  }, [nodes]);
+
+  const beatCount = useMemo(() => {
+    try {
+      return new Set(nodes.flatMap((n) => (Array.isArray(n.required_beats) ? n.required_beats : []))).size;
+    } catch {
+      return 0;
+    }
   }, [nodes]);
 
   return (
     <div className="max-w-5xl mx-auto">
-      {/* Header */}
       <div className="flex items-center gap-2 mb-4">
         <GitGraph size={14} className="text-text-disabled" />
-        <h2 className="text-xs text-text-primary uppercase tracking-wider" style={{ fontWeight: 510 }}>大纲依赖图</h2>
+        <h2 className="text-xs text-text-primary uppercase tracking-wider" style={{ fontWeight: 510 }}>
+          大纲依赖图
+        </h2>
         <span className="text-2xs text-text-disabled">上传文件或粘贴文本，AI 解析为结构化 DAG</span>
+        <button onClick={fetchGraph} className="btn-ghost ml-auto text-2xs px-2 py-1 rounded">
+          刷新
+        </button>
       </div>
+
+      {loadError && (
+        <div className="mb-3 text-xs text-red-400 bg-red-400/10 border border-red-400/20 rounded-md px-3 py-2">
+          加载失败：{loadError}
+        </div>
+      )}
 
       {loading ? (
         <div className="flex items-center justify-center py-16">
@@ -138,9 +226,11 @@ export function OutlineGraph({ bookId }: { bookId: string }) {
         </div>
       ) : nodes.length === 0 ? (
         <div className="space-y-3">
-          {/* Upload zone */}
           <div
-            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragOver(true);
+            }}
             onDragLeave={() => setDragOver(false)}
             onDrop={handleDrop}
             onClick={() => fileInputRef.current?.click()}
@@ -149,24 +239,30 @@ export function OutlineGraph({ bookId }: { bookId: string }) {
               dragOver ? "border-brand bg-brand-muted" : "border-border-standard hover:border-text-disabled"
             )}
           >
-            <input ref={fileInputRef} type="file" accept=".txt,.md,.markdown,.text" onChange={handleFileSelect} className="hidden" />
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".txt,.md,.markdown,.text"
+              onChange={handleFileSelect}
+              className="hidden"
+            />
             {uploading ? (
               <Loader2 size={20} className="animate-spin text-brand-accent mx-auto mb-2" />
             ) : (
               <Upload size={20} className="text-text-disabled mx-auto mb-2" />
             )}
-            <p className="text-xs text-text-secondary" style={{ fontWeight: 510 }}>{uploading ? "上传解析中..." : "点击或拖拽文件到此处"}</p>
+            <p className="text-xs text-text-secondary" style={{ fontWeight: 510 }}>
+              {uploading ? "上传解析中..." : "点击或拖拽文件到此处"}
+            </p>
             <p className="text-2xs text-text-disabled mt-1">.txt / .md · max 2MB</p>
           </div>
 
-          {/* Divider */}
           <div className="flex items-center gap-3">
             <div className="flex-1 h-px bg-border" />
             <span className="text-2xs text-text-disabled">或手动粘贴</span>
             <div className="flex-1 h-px bg-border" />
           </div>
 
-          {/* Text input */}
           <div className="panel p-4">
             <textarea
               value={outline}
@@ -193,42 +289,66 @@ export function OutlineGraph({ bookId }: { bookId: string }) {
         </div>
       ) : (
         <>
-          {/* Stats row */}
-          <div className="grid grid-cols-4 gap-2 mb-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
             <div className="stat-card">
-              <div className="stat-label"><GitGraph size={11} /> 节点</div>
+              <div className="stat-label">
+                <GitGraph size={11} /> 节点
+              </div>
               <div className="stat-value text-brand-accent">{nodes.length}</div>
             </div>
             <div className="stat-card">
-              <div className="stat-label"><Link2 size={11} /> 依赖</div>
-              <div className="stat-value">{nodes.filter(n => n.depends_on && n.depends_on.length > 0).length}</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-label"><Target size={11} /> 节拍</div>
-              <div className="stat-value">{new Set(nodes.flatMap(n => n.required_beats || [])).size}</div>
+              <div className="stat-label">
+                <Link2 size={11} /> 依赖
+              </div>
+              <div className="stat-value">
+                {nodes.filter((n) => n.depends_on && n.depends_on.length > 0).length}
+              </div>
             </div>
             <div className="stat-card">
               <div className="stat-label">
-                {outlineStatus === "approved" ? <CheckCircle2 size={11} className="text-success" /> : <AlertTriangle size={11} className="text-warning" />}
+                <Target size={11} /> 节拍
+              </div>
+              <div className="stat-value">{beatCount}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">
+                {outlineStatus === "approved" ? (
+                  <CheckCircle2 size={11} className="text-success" />
+                ) : (
+                  <AlertTriangle size={11} className="text-warning" />
+                )}
                 状态
               </div>
-              <div className={clsx("stat-value text-sm", outlineStatus === "approved" ? "text-success" : "text-warning")}>
+              <div
+                className={clsx(
+                  "stat-value text-sm",
+                  outlineStatus === "approved" ? "text-success" : "text-warning"
+                )}
+              >
                 {outlineStatus === "approved" ? "已批准" : outlineStatus || "未知"}
               </div>
-              <div className="text-2xs text-text-disabled font-mono mt-0.5">v{outlineVersion || "?"}</div>
+              <div className="text-2xs text-text-disabled font-mono mt-0.5">
+                v{outlineVersion || "?"}
+                {outlineVersionId ? ` · ${outlineVersionId.slice(0, 8)}` : ""}
+              </div>
             </div>
           </div>
 
-          {/* Approve banner */}
           {outlineStatus !== "approved" && (
             <div className="flex items-center gap-2 mb-3 p-2.5 bg-warning-muted border border-warning/30 rounded-md text-xs">
               <AlertTriangle size={13} className="text-warning shrink-0" />
-              <span className="text-text-secondary flex-1">大纲尚未批准，需通过 DAG 校验后方可用于章节生成</span>
+              <span className="text-text-secondary flex-1">
+                大纲尚未批准，需通过 DAG 校验后方可用于章节生成
+              </span>
               <button
                 onClick={handleApprove}
                 disabled={approving}
                 className="btn text-2xs shrink-0"
-                style={{ background: "rgba(212,162,78,0.15)", color: "#d4a24e", borderColor: "rgba(212,162,78,0.25)" }}
+                style={{
+                  background: "rgba(212,162,78,0.15)",
+                  color: "#d4a24e",
+                  borderColor: "rgba(212,162,78,0.25)",
+                }}
               >
                 {approving ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle2 size={11} />}
                 {approving ? "校验中..." : "批准大纲"}
@@ -237,37 +357,51 @@ export function OutlineGraph({ bookId }: { bookId: string }) {
           )}
 
           {result && (
-            <div className={clsx(
-              "mb-3 p-2.5 rounded-md text-2xs",
-              result.type === "success" ? "bg-success-muted text-success border border-success/30" : "bg-danger-muted text-danger border border-danger/30"
-            )}>
+            <div
+              className={clsx(
+                "mb-3 p-2.5 rounded-md text-2xs",
+                result.type === "success"
+                  ? "bg-success-muted text-success border border-success/30"
+                  : "bg-danger-muted text-danger border border-danger/30"
+              )}
+            >
               {result.msg}
             </div>
           )}
 
-          {/* DAG node list */}
-          <div className="space-y-1">
+          <div className="space-y-2">
             {sortedNodes.map((n) => {
-              const hasDeps = n.depends_on && n.depends_on.length > 0;
+              const deps = Array.isArray(n.depends_on) ? n.depends_on : [];
+              const beats = Array.isArray(n.required_beats) ? n.required_beats : [];
+              const hasDeps = deps.length > 0;
               return (
-                <div key={n.node_id} className="row-item items-start">
-                  <div className="shrink-0 w-9 h-9 rounded bg-bg-canvas border border-border-standard flex flex-col items-center justify-center">
+                <div key={n.node_id || n.chapter_no} className="row-item items-start">
+                  <div className="shrink-0 w-10 h-10 rounded-md bg-bg-canvas border border-border-standard flex flex-col items-center justify-center">
                     <div className="text-2xs text-text-disabled font-mono leading-none">CH</div>
-                    <div className="text-xs font-bold text-brand-accent leading-none font-mono">{n.chapter_no}</div>
+                    <div className="text-sm font-bold text-brand-accent leading-none font-mono">
+                      {n.chapter_no}
+                    </div>
                   </div>
 
                   <div className="flex-1 min-w-0">
-                    <div className="text-xs text-text-primary" style={{ fontWeight: 510 }}>{n.title || `(第${n.chapter_no}章 · 待定标题)`}</div>
-
-                    <div className="flex items-start gap-1 mt-0.5">
-                      <Target size={10} className="text-text-disabled mt-0.5 shrink-0" />
-                      <p className="text-2xs text-text-tertiary leading-relaxed">{n.goal}</p>
+                    <div className="text-sm text-text-primary" style={{ fontWeight: 510 }}>
+                      {n.title || `第${n.chapter_no}章 · 待定标题`}
                     </div>
 
-                    {n.required_beats && n.required_beats.length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-1">
-                        {n.required_beats.map((beat, i) => (
-                          <span key={i} className="badge bg-bg-surface text-text-tertiary border-border-standard text-2xs">
+                    {n.goal && (
+                      <div className="flex items-start gap-1.5 mt-1">
+                        <Target size={11} className="text-text-disabled mt-0.5 shrink-0" />
+                        <p className="text-xs text-text-tertiary leading-relaxed">{n.goal}</p>
+                      </div>
+                    )}
+
+                    {beats.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mt-2">
+                        {beats.map((beat, i) => (
+                          <span
+                            key={i}
+                            className="badge bg-bg-surface text-text-tertiary border-border-standard text-2xs"
+                          >
                             {beat}
                           </span>
                         ))}
@@ -275,10 +409,17 @@ export function OutlineGraph({ bookId }: { bookId: string }) {
                     )}
 
                     {hasDeps && (
-                      <div className="flex items-center gap-1 text-2xs text-text-disabled mt-1">
-                        <Link2 size={10} className="text-brand" />
-                        dep {n.depends_on.length}
-                        <span className="text-text-disabled">({n.depends_on.map((d: any) => d.node_id || "").filter(Boolean).join(", ")})</span>
+                      <div className="flex flex-wrap items-center gap-1.5 text-2xs text-text-disabled mt-2">
+                        <Link2 size={11} className="text-brand" />
+                        <span>依赖</span>
+                        {deps.map((d: any, i: number) => (
+                          <span
+                            key={i}
+                            className="px-1.5 py-0.5 rounded bg-brand-muted/50 text-brand-accent border border-brand/20"
+                          >
+                            {depLabel(d, nodes)}
+                          </span>
+                        ))}
                       </div>
                     )}
                   </div>
@@ -287,14 +428,16 @@ export function OutlineGraph({ bookId }: { bookId: string }) {
             })}
           </div>
 
-          {/* Re-upload */}
           <details className="mt-4">
             <summary className="cursor-pointer text-2xs text-text-disabled hover:text-text-secondary select-none">
               重新导入大纲
             </summary>
             <div className="mt-2 space-y-2">
               <div
-                onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragOver(true);
+                }}
                 onDragLeave={() => setDragOver(false)}
                 onDrop={handleDrop}
                 onClick={() => fileInputRef.current?.click()}

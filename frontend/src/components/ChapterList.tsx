@@ -11,6 +11,7 @@ import {
   AlertTriangle,
   Pause,
   RotateCcw,
+  Download,
 } from "lucide-react";
 import clsx from "clsx";
 
@@ -61,6 +62,23 @@ const ACTIVE = new Set([
   "running",
 ]);
 
+function formatNovelText(raw: string): string {
+  if (!raw) return "";
+  // Normalize newlines, collapse 3+ blanks, indent paragraphs for CN novel feel
+  let t = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  t = t.replace(/\n{3,}/g, "\n\n").trim();
+  return t
+    .split("\n")
+    .map((line) => {
+      const s = line.trim();
+      if (!s) return "";
+      // Keep markdown-ish headings as-is
+      if (/^#{1,3}\s/.test(s)) return s;
+      return "　　" + s;
+    })
+    .join("\n");
+}
+
 export function ChapterList({ bookId }: { bookId: string }) {
   const [nodes, setNodes] = useState<OutlineNode[]>([]);
   const [chapters, setChapters] = useState<Map<number, Chapter>>(new Map());
@@ -68,6 +86,7 @@ export function ChapterList({ bookId }: { bookId: string }) {
   const [content, setContent] = useState<Chapter | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   const load = async () => {
     if (!bookId) return;
@@ -92,7 +111,6 @@ export function ChapterList({ bookId }: { bookId: string }) {
         });
       }
       setChapters(map);
-      // hydrate active/finalized chapters for content button
       for (const item of list || []) {
         if (item.status === "finalized" || ACTIVE.has(item.status)) {
           api.chapters
@@ -154,6 +172,31 @@ export function ChapterList({ bookId }: { bookId: string }) {
     }
   };
 
+  const downloadChapter = (ch: Chapter) => {
+    const text = formatNovelText(ch.content || "");
+    const blob = new Blob(
+      [`第${ch.chapter_no}章${ch.title ? " · " + ch.title : ""}\n\n${text}\n`],
+      { type: "text/plain;charset=utf-8" }
+    );
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `ch${ch.chapter_no}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadBook = async () => {
+    setExporting(true);
+    try {
+      await api.books.exportDownload(bookId);
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally {
+      setExporting(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
@@ -162,8 +205,12 @@ export function ChapterList({ bookId }: { bookId: string }) {
     );
   }
 
-  // Prefer outline nodes; if missing, fall back to chapter list rows
-  const rows: Array<{ chapter_no: number; title?: string | null; goal?: string; node_id?: string }> =
+  const rows: Array<{
+    chapter_no: number;
+    title?: string | null;
+    goal?: string;
+    node_id?: string;
+  }> =
     nodes.length > 0
       ? nodes.map((n) => ({
           chapter_no: n.chapter_no,
@@ -182,7 +229,7 @@ export function ChapterList({ bookId }: { bookId: string }) {
 
   return (
     <div className="max-w-4xl mx-auto">
-      <div className="flex items-center gap-2 mb-4">
+      <div className="flex items-center gap-2 mb-4 flex-wrap">
         <FileText size={14} className="text-text-disabled" />
         <h2
           className="text-xs text-text-primary uppercase tracking-wider"
@@ -190,15 +237,24 @@ export function ChapterList({ bookId }: { bookId: string }) {
         >
           章节流水线
         </h2>
-        <span className="text-2xs text-text-disabled">
-          13步 Pipeline · 逐章 AI 生成 → 审核 → 定稿
-        </span>
+        <span className="text-2xs text-text-disabled">逐章生成 · 审核 · 定稿</span>
         {rows.length > 0 && (
           <span className="text-2xs text-text-disabled font-mono">{rows.length} ch</span>
         )}
-        <button onClick={load} className="btn-ghost ml-auto text-2xs px-2 py-1 rounded">
-          刷新
-        </button>
+        <div className="ml-auto flex items-center gap-1.5">
+          <button
+            onClick={downloadBook}
+            disabled={exporting}
+            className="btn text-2xs py-1 px-2.5"
+            title="下载整本 .txt"
+          >
+            {exporting ? <Loader2 size={11} className="animate-spin" /> : <Download size={11} />}
+            下载全书
+          </button>
+          <button onClick={load} className="btn-ghost text-2xs px-2 py-1 rounded">
+            刷新
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -213,7 +269,7 @@ export function ChapterList({ bookId }: { bookId: string }) {
           <p className="text-xs">请先在「大纲依赖」中解析大纲</p>
         </div>
       ) : (
-        <div className="space-y-1">
+        <div className="space-y-1.5">
           {rows.map((n) => {
             const ch = chapters.get(n.chapter_no);
             const sc = getStatus(ch?.status);
@@ -233,16 +289,16 @@ export function ChapterList({ bookId }: { bookId: string }) {
                   isActive && "border-brand/20 bg-brand-muted/50"
                 )}
               >
-                <div className="shrink-0 w-8 h-8 rounded bg-bg-canvas border border-border-standard flex items-center justify-center">
-                  <span className="text-xs font-bold text-brand-accent font-mono">
+                <div className="shrink-0 w-9 h-9 rounded-md bg-bg-canvas border border-border-standard flex items-center justify-center">
+                  <span className="text-sm font-bold text-brand-accent font-mono">
                     {n.chapter_no}
                   </span>
                 </div>
 
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-text-primary" style={{ fontWeight: 510 }}>
-                      {n.title || ch?.title || `(第${n.chapter_no}章)`}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm text-text-primary" style={{ fontWeight: 510 }}>
+                      {n.title || ch?.title || `第${n.chapter_no}章`}
                     </span>
                     {ch?.status && (
                       <span className={clsx("badge", sc.bg, sc.color, "text-2xs")}>
@@ -252,24 +308,41 @@ export function ChapterList({ bookId }: { bookId: string }) {
                     )}
                   </div>
                   {n.goal ? (
-                    <p className="text-2xs text-text-tertiary mt-0.5 truncate">{n.goal}</p>
+                    <p className="text-xs text-text-tertiary mt-0.5 truncate">{n.goal}</p>
                   ) : null}
                   {ch?.word_count ? (
                     <span className="text-2xs text-text-disabled font-mono">
-                      {ch.word_count} w
+                      {ch.word_count} 字
                     </span>
                   ) : null}
                 </div>
 
                 <div className="flex items-center gap-1.5 shrink-0">
                   {(ch?.status === "finalized" || ch?.content) && (
-                    <button
-                      onClick={() => ch && openContent(ch)}
-                      className="btn-ghost p-1.5 rounded"
-                      title="阅读内容"
-                    >
-                      <FileText size={13} />
-                    </button>
+                    <>
+                      <button
+                        onClick={() => ch && openContent(ch)}
+                        className="btn-ghost p-1.5 rounded"
+                        title="阅读"
+                      >
+                        <FileText size={13} />
+                      </button>
+                      <button
+                        onClick={async () => {
+                          if (!ch) return;
+                          let full = ch;
+                          if (!ch.content) {
+                            full = await api.chapters.get(ch.chapter_id);
+                            setChapters((prev) => new Map(prev).set(full.chapter_no, full));
+                          }
+                          downloadChapter(full);
+                        }}
+                        className="btn-ghost p-1.5 rounded"
+                        title="下载本章"
+                      >
+                        <Download size={13} />
+                      </button>
+                    </>
                   )}
                   {canRun && !isActive && (
                     <button
@@ -310,30 +383,48 @@ export function ChapterList({ bookId }: { bookId: string }) {
 
       {content && (
         <div
-          className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-6"
+          className="fixed inset-0 bg-black/75 backdrop-blur-[2px] flex items-center justify-center z-50 p-4 sm:p-8"
           onClick={() => setContent(null)}
         >
           <div
-            className="panel-elevated max-w-2xl max-h-[85vh] overflow-hidden w-full animate-slide-up"
+            className="novel-reader panel-elevated w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col animate-slide-up"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between px-5 py-3 border-b border-border">
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-text-primary" style={{ fontWeight: 510 }}>
-                  第 {content.chapter_no} 章{content.title ? ` · ${content.title}` : ""}
-                </span>
-                <span className="text-2xs text-text-disabled font-mono">
-                  {content.word_count} w
-                </span>
+            <div className="flex items-center justify-between px-6 py-3.5 border-b border-border shrink-0">
+              <div className="min-w-0">
+                <div className="text-sm text-text-primary truncate" style={{ fontWeight: 510 }}>
+                  第 {content.chapter_no} 章
+                  {content.title ? ` · ${content.title}` : ""}
+                </div>
+                <div className="text-2xs text-text-disabled font-mono mt-0.5">
+                  {content.word_count || 0} 字 · v{content.finalized_version ?? "?"}
+                </div>
               </div>
-              <button onClick={() => setContent(null)} className="btn-ghost p-1">
-                <XCircle size={14} />
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => downloadChapter(content)}
+                  className="btn-ghost p-1.5 rounded"
+                  title="下载本章"
+                >
+                  <Download size={14} />
+                </button>
+                <button onClick={() => setContent(null)} className="btn-ghost p-1.5 rounded">
+                  <XCircle size={14} />
+                </button>
+              </div>
             </div>
-            <div className="overflow-auto p-5 max-h-[calc(85vh-48px)]">
-              <div className="whitespace-pre-wrap text-xs text-text-secondary leading-relaxed font-serif">
-                {content.content || "(暂无内容)"}
-              </div>
+            <div className="overflow-auto flex-1 novel-reader-body">
+              <article className="novel-prose">
+                {formatNovelText(content.content || "(暂无内容)")
+                  .split("\n")
+                  .map((line, i) =>
+                    line === "" ? (
+                      <div key={i} className="h-4" />
+                    ) : (
+                      <p key={i}>{line}</p>
+                    )
+                  )}
+              </article>
             </div>
           </div>
         </div>

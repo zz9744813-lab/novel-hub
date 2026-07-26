@@ -18,7 +18,9 @@ import {
   getAdminToken,
   setAdminToken,
   verifyAdminToken,
+  api,
 } from "./api";
+import { ArrowLeft, Download, Loader2 } from "lucide-react";
 
 type Tab =
   | "overview"
@@ -32,7 +34,7 @@ type Tab =
   | "research";
 
 export default function App() {
-  const { fetchBooks, books, selectedBookId, error: storeError } = useStore();
+  const { fetchBooks, books, selectedBookId, selectBook, error: storeError } = useStore();
   const [tab, setTab] = useState<Tab>("overview");
   const [showCreate, setShowCreate] = useState(false);
   const [tabKey, setTabKey] = useState(0);
@@ -40,6 +42,8 @@ export default function App() {
   const [tokenInput, setTokenInput] = useState("");
   const [authError, setAuthError] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportMsg, setExportMsg] = useState<string | null>(null);
 
   useEffect(() => {
     const onUnauth = () => setAuthed(false);
@@ -62,11 +66,33 @@ export default function App() {
   }, []);
 
   const handleOpenBook = useCallback((bookId: string) => {
-    // Clicking a project should open its pipeline, not look like a no-op
     void bookId;
     setTab("chapters");
     setTabKey((k) => k + 1);
   }, []);
+
+  const handleBackToBooks = useCallback(() => {
+    selectBook("");
+    // store uses string — empty means clear
+    useStore.setState({ selectedBookId: null });
+    setTab("overview");
+    setTabKey((k) => k + 1);
+  }, [selectBook]);
+
+  const handleExport = async () => {
+    if (!selectedBookId) return;
+    setExporting(true);
+    setExportMsg(null);
+    try {
+      await api.books.exportDownload(selectedBookId, (selectedBook as any)?.title);
+      setExportMsg("已开始下载");
+    } catch (e: any) {
+      setExportMsg(e?.message || "导出失败");
+    } finally {
+      setExporting(false);
+      setTimeout(() => setExportMsg(null), 4000);
+    }
+  };
 
   const handleLogin = async () => {
     setAuthBusy(true);
@@ -156,10 +182,7 @@ export default function App() {
     }
     if (tab === "overview") {
       return (
-        <BookList
-          onNewBook={() => setShowCreate(true)}
-          onOpenBook={handleOpenBook}
-        />
+        <BookList onNewBook={() => setShowCreate(true)} onOpenBook={handleOpenBook} />
       );
     }
     if (!selectedBookId) {
@@ -182,10 +205,7 @@ export default function App() {
         return <DriftAuditPanel bookId={selectedBookId} />;
       default:
         return (
-          <BookList
-            onNewBook={() => setShowCreate(true)}
-            onOpenBook={handleOpenBook}
-          />
+          <BookList onNewBook={() => setShowCreate(true)} onOpenBook={handleOpenBook} />
         );
     }
   };
@@ -196,12 +216,23 @@ export default function App() {
         tab={tab}
         setTab={handleTabChange}
         onNewBook={() => setShowCreate(true)}
+        onBackToBooks={handleBackToBooks}
         selectedBookId={selectedBookId}
+        selectedBookTitle={(selectedBook as any)?.title}
       />
 
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-        <header className="flex items-center justify-between px-5 h-11 border-b border-border shrink-0 bg-bg-panel">
+        <header className="flex items-center justify-between px-5 h-12 border-b border-border shrink-0 bg-bg-panel gap-3">
           <div className="flex items-center gap-2 text-xs min-w-0">
+            {selectedBookId && tab !== "overview" && (
+              <button
+                onClick={handleBackToBooks}
+                className="btn-ghost p-1.5 rounded shrink-0"
+                title="返回项目总览"
+              >
+                <ArrowLeft size={14} />
+              </button>
+            )}
             <span
               className="font-semibold text-text-primary tracking-wide shrink-0"
               style={{ fontWeight: 510 }}
@@ -222,12 +253,30 @@ export default function App() {
                 API: {storeError}
               </span>
             )}
+            {exportMsg && (
+              <span className="text-2xs text-brand-accent truncate ml-2">{exportMsg}</span>
+            )}
           </div>
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-2 shrink-0">
+            {selectedBookId && (
+              <button
+                onClick={handleExport}
+                disabled={exporting}
+                className="btn text-2xs py-1.5 px-2.5"
+                title="下载整本小说 .txt"
+              >
+                {exporting ? (
+                  <Loader2 size={12} className="animate-spin" />
+                ) : (
+                  <Download size={12} />
+                )}
+                下载小说
+              </button>
+            )}
             <ResourceBar />
             <button
               onClick={handleLogout}
-              className="text-2xs text-text-tertiary hover:text-text-primary"
+              className="text-2xs text-text-tertiary hover:text-text-primary px-1"
             >
               退出
             </button>

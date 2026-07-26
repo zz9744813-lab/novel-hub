@@ -339,3 +339,34 @@ button, a, .row-item, .panel, .stat-card {
 .animate-slide-up {
   animation: slideUp 0.2s ease-out;
 }
+
+/* ── Novel reader typography ── */
+.novel-reader {
+  background: #0e0f12;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 12px;
+  box-shadow: 0 24px 64px rgba(0,0,0,0.55);
+}
+.novel-reader-body {
+  background:
+    radial-gradient(ellipse at top, rgba(94,106,210,0.06), transparent 55%),
+    #0c0d10;
+}
+.novel-prose {
+  max-width: 42rem;
+  margin: 0 auto;
+  padding: 2rem 1.75rem 3rem;
+  font-family: "Noto Serif SC", "Songti SC", "SimSun", Georgia, serif;
+  font-size: 16px;
+  line-height: 1.95;
+  color: #e6e4dc;
+  letter-spacing: 0.02em;
+}
+.novel-prose p {
+  margin: 0 0 0.85em;
+  text-indent: 0; /* already fullwidth-space indented in content */
+  word-break: break-word;
+}
+.novel-prose p:last-child {
+  margin-bottom: 0;
+}

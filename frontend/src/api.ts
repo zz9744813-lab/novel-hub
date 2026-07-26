@@ -68,6 +68,29 @@ export const api = {
     create: (data: { title: string; description?: string; target_chapters?: number }) =>
       fetchJSON<{ book_id: string }>("/api/books", { method: "POST", body: JSON.stringify(data) }),
     get: (id: string) => fetchJSON<Book>(`/api/books/${id}`),
+    exportDownload: async (bookId: string, filenameHint?: string) => {
+      const r = await fetch(BASE + `/api/books/${bookId}/export`, {
+        headers: authHeaders(),
+      });
+      if (r.status === 401) {
+        clearAdminToken();
+        window.dispatchEvent(new CustomEvent("novelforge:unauthorized"));
+        throw new Error("401: unauthorized");
+      }
+      if (!r.ok) throw new Error(`${r.status}: ${await r.text()}`);
+      const blob = await r.blob();
+      const cd = r.headers.get("Content-Disposition") || "";
+      const m = cd.match(/filename="?([^";]+)"?/);
+      const name = m?.[1] || `${filenameHint || "novel"}.txt`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    },
   },
   outlines: {
     parse: (bookId: string, data: { raw_outline: string; target_chapter_count?: number }) =>

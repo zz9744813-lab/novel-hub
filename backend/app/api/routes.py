@@ -1355,3 +1355,72 @@ async def list_chapters(book_id: str, db: AsyncSession = Depends(get_db)):
         }
         for c in rows
     ]
+
+
+@router.get("/api/books/{book_id}/export")
+async def export_book(book_id: str, db: AsyncSession = Depends(get_db)):
+    """Export finalized (or latest) chapter texts as a single plain-text novel."""
+    from fastapi.responses import PlainTextResponse
+
+    book = (
+        await db.execute(select(Book).where(Book.id == uuid.UUID(book_id)))
+    ).scalar_one_or_none()
+    if not book:
+        raise HTTPException(404, "Book not found")
+
+    chapters = (
+        await db.execute(
+            select(Chapter)
+            .where(Chapter.book_id == book.id)
+            .order_by(Chapter.chapter_no)
+        )
+    ).scalars().all()
+
+    parts: list[str] = [f"# {book.title}", ""]
+    exported = 0
+    for ch in chapters:
+        # Prefer finalized version pointer, else latest version
+        version = None
+        if ch.finalized_version is not None:
+            version = (
+                await db.execute(
+                    select(ChapterVersion).where(
+                        ChapterVersion.chapter_id == ch.id,
+                        ChapterVersion.version == ch.finalized_version,
+                    )
+                )
+            ).scalar_one_or_none()
+        if version is None:
+            version = (
+                await db.execute(
+                    select(ChapterVersion)
+                    .where(ChapterVersion.chapter_id == ch.id)
+                    .order_by(ChapterVersion.version.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+        content = (version.content if version else None) or ""
+        if not content.strip():
+            continue
+        title = ch.title or f"第{ch.chapter_no}章"
+        parts.append(f"## 第{ch.chapter_no}章 · {title}")
+        parts.append("")
+        parts.append(content.strip())
+        parts.append("")
+        parts.append("")
+        exported += 1
+
+    if exported == 0:
+        raise HTTPException(404, "No chapter content available to export")
+
+    body = "\n".join(parts)
+    # Content-Disposition must be latin-1 safe; use RFC5987 filename*
+    safe_name = "".join(c if (c.isascii() and (c.isalnum() or c in "-_")) else "_" for c in (book.title or "novel"))[:40]
+    if not safe_name or set(safe_name) == {"_"}:
+        safe_name = "novel"
+    from urllib.parse import quote
+    encoded = quote(f"{book.title or 'novel'}.txt")
+    headers = {
+        "Content-Disposition": f"attachment; filename=\"{safe_name}.txt\"; filename*=UTF-8''{encoded}",
+    }
+    return PlainTextResponse(content=body, media_type="text/plain; charset=utf-8", headers=headers)

@@ -29,6 +29,7 @@ from app.state_machine import ChapterState
 from app.models import Chapter, ChapterTask, ChapterRun
 from app.engine.pipeline import execute_pipeline
 from app.engine.outcomes import PipelineOutcome, PipelineResult
+from app.engine.step_runner import acquire_run_lease, release_run_lease
 from sqlalchemy import select, update, text
 
 logger = logging.getLogger("novelforge.worker")
@@ -78,7 +79,7 @@ async def check_resources() -> tuple[bool, dict]:
         return True, {}
 
 
-async def _heartbeat_loop(task_id: uuid.UUID, stop: asyncio.Event):
+async def _heartbeat_loop(task_id: uuid.UUID, stop: asyncio.Event, run_id: uuid.UUID | None = None):
     while not stop.is_set():
         try:
             async with async_session_factory() as db:
@@ -91,6 +92,18 @@ async def _heartbeat_loop(task_id: uuid.UUID, stop: asyncio.Event):
                         lease_expires_at=now + timedelta(seconds=90),
                     )
                 )
+                if run_id:
+                    await db.execute(
+                        update(ChapterRun)
+                        .where(
+                            ChapterRun.id == run_id,
+                            ChapterRun.lease_owner == WORKER_ID,
+                        )
+                        .values(
+                            heartbeat_at=now,
+                            lease_expires_at=now + timedelta(seconds=90),
+                        )
+                    )
                 await db.commit()
         except Exception as e:
             logger.warning(f"heartbeat failed: {e}")
@@ -120,22 +133,52 @@ async def run_chapter_pipeline(ctx, chapter_id: str, book_id: str, chapter_no: i
 
     lock_key = advisory_lock_key(book_id, int(chapter_no))
     task_row_id = None
+    chapter_run_id = None
     stop = asyncio.Event()
     hb_task = None
+    advisory_held = False
 
     try:
+        # Resolve ChapterRun first (B-03: prefer DB lease CAS over session advisory)
         async with async_session_factory() as db:
-            # Advisory lock for chapter uniqueness
-            got = (
-                await db.execute(
-                    text("SELECT pg_try_advisory_lock(:k)"),
-                    {"k": lock_key},
-                )
-            ).scalar()
-            if not got:
-                logger.warning(f"Could not acquire advisory lock for ch {chapter_no}")
-                return
+            ch0 = (
+                await db.execute(select(Chapter).where(Chapter.id == uuid.UUID(chapter_id)))
+            ).scalar_one_or_none()
+            if ch0 and getattr(ch0, "active_run_id", None):
+                chapter_run_id = ch0.active_run_id
+            else:
+                run0 = (
+                    await db.execute(
+                        select(ChapterRun)
+                        .where(ChapterRun.chapter_id == uuid.UUID(chapter_id))
+                        .order_by(ChapterRun.created_at.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if run0:
+                    chapter_run_id = run0.id
 
+        if chapter_run_id:
+            leased = await acquire_run_lease(chapter_run_id, WORKER_ID)
+            if not leased:
+                logger.info(f"Could not acquire chapter_run lease for ch {chapter_no}")
+                return
+        else:
+            # Legacy path: short advisory only for task lease setup (not held across LLM)
+            async with async_session_factory() as db:
+                got = (
+                    await db.execute(
+                        text("SELECT pg_try_advisory_lock(:k)"),
+                        {"k": lock_key},
+                    )
+                ).scalar()
+                if not got:
+                    logger.warning(f"Could not acquire advisory lock for ch {chapter_no}")
+                    return
+                pass  # advisory no longer held across LLM (B-03)
+                await db.commit()
+
+        async with async_session_factory() as db:
             # Find/create chapter task lease (latest row — API may create duplicates)
             result = await db.execute(
                 select(ChapterTask)
@@ -177,7 +220,7 @@ async def run_chapter_pipeline(ctx, chapter_id: str, book_id: str, chapter_no: i
                 and task.lease_expires_at > now
             ):
                 logger.info(f"Lease held by {task.lease_owner}, skip")
-                await db.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": lock_key})
+                pass  # advisory no longer held across LLM (B-03)
                 await db.commit()
                 return
 
@@ -189,7 +232,7 @@ async def run_chapter_pipeline(ctx, chapter_id: str, book_id: str, chapter_no: i
                 if ch.status == ChapterState.FINALIZED.value and ch.finalized_version:
                     task.status = "completed"
                     await db.commit()
-                    await db.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": lock_key})
+                    pass  # advisory no longer held across LLM (B-03)
                     return
                 if ch.status in {
                     ChapterState.NEEDS_HUMAN.value,
@@ -207,7 +250,7 @@ async def run_chapter_pipeline(ctx, chapter_id: str, book_id: str, chapter_no: i
                     logger.info(
                         f"Skip chapter {chapter_no}: status={ch.status} not re-runnable"
                     )
-                    await db.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": lock_key})
+                    pass  # advisory no longer held across LLM (B-03)
                     await db.commit()
                     return
                 if ch.status not in {
@@ -219,7 +262,7 @@ async def run_chapter_pipeline(ctx, chapter_id: str, book_id: str, chapter_no: i
                     ChapterState.RESOURCE_BLOCKED.value if hasattr(ChapterState, "RESOURCE_BLOCKED") else "resource_blocked",
                 }:
                     logger.info(f"Skip chapter {chapter_no}: unexpected status={ch.status}")
-                    await db.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": lock_key})
+                    pass  # advisory no longer held across LLM (B-03)
                     await db.commit()
                     return
 
@@ -233,29 +276,11 @@ async def run_chapter_pipeline(ctx, chapter_id: str, book_id: str, chapter_no: i
             task_row_id = task.id
             await db.commit()
 
-        hb_task = asyncio.create_task(_heartbeat_loop(task_row_id, stop))
+        hb_task = asyncio.create_task(_heartbeat_loop(task_row_id, stop, chapter_run_id))
 
-        logger.info(f"Starting chapter {chapter_no} pipeline (chapter_id={chapter_id})")
-        # Best-effort: pick active/latest chapter_run for this chapter
-        chapter_run_id = None
-        async with async_session_factory() as db:
-            ch = (
-                await db.execute(select(Chapter).where(Chapter.id == uuid.UUID(chapter_id)))
-            ).scalar_one_or_none()
-            if ch and getattr(ch, "active_run_id", None):
-                chapter_run_id = ch.active_run_id
-            else:
-                run = (
-                    await db.execute(
-                        select(ChapterRun)
-                        .where(ChapterRun.chapter_id == uuid.UUID(chapter_id))
-                        .order_by(ChapterRun.created_at.desc())
-                        .limit(1)
-                    )
-                ).scalar_one_or_none()
-                if run:
-                    chapter_run_id = run.id
-
+        logger.info(
+            f"Starting chapter {chapter_no} pipeline (chapter_id={chapter_id} run_id={chapter_run_id})"
+        )
         result = await execute_pipeline(
             uuid.UUID(book_id),
             uuid.UUID(chapter_id),
@@ -342,7 +367,7 @@ async def run_chapter_pipeline(ctx, chapter_id: str, book_id: str, chapter_no: i
                         error_detail=result.detail or None,
                     )
                 )
-            await db.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": lock_key})
+            pass  # advisory no longer held across LLM (B-03)
             await db.commit()
         logger.info(
             "chapter %s pipeline outcome=%s task=%s run=%s",
@@ -373,7 +398,7 @@ async def run_chapter_pipeline(ctx, chapter_id: str, book_id: str, chapter_no: i
                             lease_expires_at=None,
                         )
                     )
-                await db.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": lock_key})
+                pass  # advisory no longer held across LLM (B-03)
                 await db.commit()
         except Exception as mark_err:
             logger.error(f"Failed to mark chapter as failed: {mark_err}")
@@ -384,6 +409,11 @@ async def run_chapter_pipeline(ctx, chapter_id: str, book_id: str, chapter_no: i
                 await hb_task
             except Exception:
                 pass
+        if chapter_run_id:
+            try:
+                await release_run_lease(chapter_run_id, WORKER_ID)
+            except Exception as e:
+                logger.warning(f"release_run_lease failed: {e}")
 
 
 async def on_startup(ctx):

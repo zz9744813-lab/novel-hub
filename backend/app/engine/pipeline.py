@@ -28,6 +28,12 @@ from app.agents.state_extractor import extract_and_commit
 from app.agents.drift_audit import run_drift_audit
 from app.engine.memory_compiler import generate_l2
 from app.engine.outcomes import PipelineOutcome, PipelineResult
+from app.engine.step_runner import (
+    RunContext, run_step, canonical_hash, content_hash,
+    ControlRequestedError, LeaseLostError, RetryableStepError, PermanentStepError,
+    PIPELINE_VERSION,
+)
+import os, socket
 
 logger = logging.getLogger("novelforge.pipeline")
 
@@ -78,6 +84,16 @@ async def execute_pipeline(
             **kw,
         )
 
+    worker_id = os.environ.get("WORKER_ID") or f"{socket.gethostname()}:{os.getpid()}"
+    ctx = RunContext(
+        book_id=book_id,
+        chapter_id=chapter_id,
+        chapter_no=chapter_no,
+        run_id=chapter_run_id,
+        worker_id=worker_id,
+        pipeline_version=PIPELINE_VERSION,
+    )
+
     # === Phase 1: Setup + DependencyGate ===
     async with async_session_factory() as db:
         chapter = (await db.execute(
@@ -100,7 +116,7 @@ async def execute_pipeline(
 
         await db.commit()
 
-    await _set_chapter_status(chapter_id, ChapterState.DEPENDENCY_CHECK.value, "enter dependency_check")
+    await _set_chapter_status(chapter_id, ChapterState.DEPENDENCY_CHECK.value, "enter dependency_check", chapter_run_id)
 
     async with async_session_factory() as db:
         outline_node = (await db.execute(
@@ -156,37 +172,65 @@ async def execute_pipeline(
             "title": outline_node.title,
         }
 
-    # === Phase 2: QueryPlanner (LLM call — no session held) ===
-    query_plan = await query_planner_agent(
-        book_id=book_id,
-        outline_node={
-            "chapter_no": outline_data["chapter_no"],
-            "involved_character_ids": outline_data["involved_character_ids"],
-            "plot_thread_ids": outline_data["plot_thread_ids"],
-            "depends_on": outline_data["depends_on"],
-        },
-        scene_plan={},
-        required_deps=forced_deps,
-        l4_summary=json.dumps(l4_summary, ensure_ascii=False)[:2000],
-        chapter_id=chapter_id,
-        l4_refs=[{"entity_id": k} for k in l4_summary.keys()],
-    )
-
-    if query_plan is None:
-        query_plan = deterministic_query_template(
+    # === Phase 2: QueryPlanner (checkpointed) ===
+    async def _do_query_plan(_payload):
+        qp = await query_planner_agent(
+            book_id=book_id,
             outline_node={
+                "chapter_no": outline_data["chapter_no"],
                 "involved_character_ids": outline_data["involved_character_ids"],
                 "plot_thread_ids": outline_data["plot_thread_ids"],
+                "depends_on": outline_data["depends_on"],
             },
             scene_plan={},
             required_deps=forced_deps,
-            l4_st=l4_summary,
-            current_chapter=chapter_no,
+            l4_summary=json.dumps(l4_summary, ensure_ascii=False)[:2000],
+            chapter_id=chapter_id,
+            l4_refs=[{"entity_id": k} for k in l4_summary.keys()],
         )
-        logger.info(f"QueryPlanner degraded for chapter {chapter_no}")
+        if qp is None:
+            qp = deterministic_query_template(
+                outline_node={
+                    "involved_character_ids": outline_data["involved_character_ids"],
+                    "plot_thread_ids": outline_data["plot_thread_ids"],
+                },
+                scene_plan={},
+                required_deps=forced_deps,
+                l4_st=l4_summary,
+                current_chapter=chapter_no,
+            )
+            if isinstance(qp, dict):
+                qp = {**qp, "source": "deterministic_fallback"}
+            logger.info(f"QueryPlanner degraded for chapter {chapter_no}")
+        return qp
+
+    try:
+        qp_art = await run_step(
+            ctx=ctx,
+            step_name="query_plan",
+            step_key="query_plan",
+            input_payload={
+                "outline_version_id": str(outline_version_id),
+                "outline_node_id": outline_data["id"],
+                "forced_deps": forced_deps,
+                "l4_keys": sorted(l4_summary.keys()),
+            },
+            execute_fn=_do_query_plan,
+        )
+        query_plan = qp_art.output if isinstance(qp_art.output, dict) else {}
+        if qp_art.reused:
+            logger.info(f"query_plan reused for chapter {chapter_no}")
+    except ControlRequestedError as e:
+        await _set_chapter_status(chapter_id, ChapterState.NEEDS_HUMAN.value if e.control == "pause" else ChapterState.FAILED.value, f"control:{e.control}", chapter_run_id)
+        return _result(PipelineOutcome.PAUSED if e.control == "pause" else PipelineOutcome.PERMANENT_FAILURE, error_code=f"control_{e.control}")
+    except LeaseLostError:
+        return _result(PipelineOutcome.RETRYABLE_FAILURE, error_code="lease_lost")
+    except RetryableStepError as e:
+        await _set_chapter_status(chapter_id, ChapterState.FAILED.value, e.code, chapter_run_id)
+        return _result(PipelineOutcome.RETRYABLE_FAILURE, error_code=e.code, detail=e.detail)
 
     # === Phase 3: Retrieval (SQL-first 9-step) ===
-    await _set_chapter_status(chapter_id, ChapterState.CONTEXT_BUILDING.value)
+    await _set_chapter_status(chapter_id, ChapterState.CONTEXT_BUILDING.value, "enter context_building", chapter_run_id)
 
     async with async_session_factory() as db:
         char_ids = [uuid.UUID(c) if isinstance(c, str) else c
@@ -251,21 +295,51 @@ async def execute_pipeline(
             retrieved_evidence, "", chapter_no
         )
 
-    # === Phase 5: ChapterPlanner ===
-    await _set_chapter_status(chapter_id, ChapterState.PLANNING.value)
+    # === Phase 5: ChapterPlanner (checkpointed) ===
+    await _set_chapter_status(chapter_id, ChapterState.PLANNING.value, "enter planning", chapter_run_id)
 
-    scene_plan = await plan_chapter(
-        book_id=book_id,
-        chapter_id=chapter_id,
-        outline_node_id=uuid.UUID(outline_data["id"]),
-        forced_dependencies=forced_deps,
-        l4_states=l4_states,
-        retrieved_evidence=retrieved_evidence,
-        target_word_count=3000,
-    )
+    async def _do_plan(_payload):
+        return await plan_chapter(
+            book_id=book_id,
+            chapter_id=chapter_id,
+            outline_node_id=uuid.UUID(outline_data["id"]),
+            forced_dependencies=forced_deps,
+            l4_states=l4_states,
+            retrieved_evidence=retrieved_evidence,
+            target_word_count=3000,
+        )
+
+    try:
+        plan_art = await run_step(
+            ctx=ctx,
+            step_name="chapter_plan",
+            step_key="chapter_plan",
+            input_payload={
+                "outline_node_id": outline_data["id"],
+                "outline_version_id": str(outline_version_id),
+                "evidence_ids": [
+                    (e.get("id") or e.get("event_id") or e.get("paragraph_key") or str(i))
+                    for i, e in enumerate(retrieved_evidence[:16])
+                    if isinstance(e, dict)
+                ],
+                "target_word_count": 3000,
+            },
+            execute_fn=_do_plan,
+        )
+        scene_plan = plan_art.output if isinstance(plan_art.output, dict) else None
+        if plan_art.reused:
+            logger.info(f"chapter_plan reused for chapter {chapter_no}")
+    except ControlRequestedError as e:
+        await _set_chapter_status(chapter_id, ChapterState.NEEDS_HUMAN.value if e.control == "pause" else ChapterState.FAILED.value, f"control:{e.control}", chapter_run_id)
+        return _result(PipelineOutcome.PAUSED if e.control == "pause" else PipelineOutcome.PERMANENT_FAILURE, error_code=f"control_{e.control}")
+    except LeaseLostError:
+        return _result(PipelineOutcome.RETRYABLE_FAILURE, error_code="lease_lost")
+    except RetryableStepError as e:
+        await _set_chapter_status(chapter_id, ChapterState.FAILED.value, e.code, chapter_run_id)
+        return _result(PipelineOutcome.RETRYABLE_FAILURE, error_code=e.code)
 
     if not scene_plan:
-        await _set_chapter_status(chapter_id, ChapterState.FAILED.value, "planner empty")
+        await _set_chapter_status(chapter_id, ChapterState.FAILED.value, "planner empty", chapter_run_id)
         return _result(PipelineOutcome.PERMANENT_FAILURE, error_code="planner_empty")
 
     # Normalize scene_no to unique sequential 1..N (planner often returns all scene_no=1)
@@ -283,55 +357,102 @@ async def execute_pipeline(
         normalized.append(sc)
     scene_plan = {**scene_plan, "scenes": normalized}
 
-    # === Phase 6: DraftWriter (per scene) ===
-    await _set_chapter_status(chapter_id, ChapterState.DRAFTING.value)
+    # === Phase 6: DraftWriter (per scene, checkpointed) ===
+    await _set_chapter_status(chapter_id, ChapterState.DRAFTING.value, "enter drafting", chapter_run_id)
 
     scene_contents = []
     previous_tail = ""
+    previous_tail_hash = content_hash("")
     for scene_def in scene_plan.get("scenes", []):
+        scene_no = int(scene_def.get("scene_no") or len(scene_contents) + 1)
         target_wc = scene_def.get("target_word_count", 2000)
-        content, error = await write_scene(
-            book_id=book_id,
-            chapter_id=chapter_id,
-            scene_plan=scene_def,
-            context_package=context_pkg,
-            previous_scene_tail=previous_tail,
-            target_word_count=target_wc,
-        )
+        step_key = f"draft_scene:{scene_no}"
 
-        if error:
-            if error.startswith("PIPELINE_BLOCKED"):
-                logger.error(f"DraftWriter blocked: {error}")
-                await _set_chapter_status(chapter_id, ChapterState.FAILED.value, error)
-                return _result(PipelineOutcome.PERMANENT_FAILURE, error_code="draft_blocked", detail={"error": error})
-            logger.warning(f"Scene failed, retrying: {error}")
+        async def _do_draft(_payload, _sd=scene_def, _twc=target_wc, _pt=previous_tail):
             content, error = await write_scene(
                 book_id=book_id,
                 chapter_id=chapter_id,
-                scene_plan=scene_def,
+                scene_plan=_sd,
                 context_package=context_pkg,
-                previous_scene_tail=previous_tail,
-                target_word_count=target_wc,
+                previous_scene_tail=_pt,
+                target_word_count=_twc,
             )
+            if error and not error.startswith("PIPELINE_BLOCKED"):
+                logger.warning(f"Scene failed, retrying: {error}")
+                content, error = await write_scene(
+                    book_id=book_id,
+                    chapter_id=chapter_id,
+                    scene_plan=_sd,
+                    context_package=context_pkg,
+                    previous_scene_tail=_pt,
+                    target_word_count=_twc,
+                )
+            if error and error.startswith("PIPELINE_BLOCKED"):
+                raise PermanentStepError("draft_blocked", {"error": error})
+            if not content or error:
+                raise RetryableStepError("scene_generation_failed", {"error": str(error), "scene_no": scene_no})
+            return {
+                "content": content,
+                "scene_no": scene_no,
+                "summary": _sd.get("goal", ""),
+                "pov_character_id": _sd.get("pov_character_id"),
+                "content_hash": content_hash(content),
+            }
 
-        if not content or error:
-            # P0: never continue with [FAILED] placeholders into finalization
-            logger.error(
-                f"Scene generation failed for chapter {chapter_no} "
-                f"scene={scene_def.get('scene_no')}: {error}"
+        try:
+            art = await run_step(
+                ctx=ctx,
+                step_name="draft_scene",
+                step_key=step_key,
+                input_payload={
+                    "scene_no": scene_no,
+                    "scene_plan": scene_def,
+                    "previous_scene_tail_hash": previous_tail_hash,
+                    "target_word_count": target_wc,
+                    "outline_node_id": outline_data["id"],
+                },
+                execute_fn=_do_draft,
             )
-            await _set_chapter_status(chapter_id, ChapterState.FAILED.value, f"scene fail: {error}")
-            return _result(PipelineOutcome.RETRYABLE_FAILURE, error_code="scene_generation_failed", detail={"error": str(error)})
+        except ControlRequestedError as e:
+            await _set_chapter_status(
+                chapter_id,
+                ChapterState.NEEDS_HUMAN.value if e.control == "pause" else ChapterState.FAILED.value,
+                f"control:{e.control}",
+                chapter_run_id,
+            )
+            return _result(
+                PipelineOutcome.PAUSED if e.control == "pause" else PipelineOutcome.PERMANENT_FAILURE,
+                error_code=f"control_{e.control}",
+            )
+        except LeaseLostError:
+            return _result(PipelineOutcome.RETRYABLE_FAILURE, error_code="lease_lost")
+        except PermanentStepError as e:
+            await _set_chapter_status(chapter_id, ChapterState.FAILED.value, e.code, chapter_run_id)
+            return _result(PipelineOutcome.PERMANENT_FAILURE, error_code=e.code, detail=e.detail)
+        except RetryableStepError as e:
+            await _set_chapter_status(chapter_id, ChapterState.FAILED.value, e.code, chapter_run_id)
+            return _result(PipelineOutcome.RETRYABLE_FAILURE, error_code=e.code, detail=e.detail)
+
+        payload = art.output if isinstance(art.output, dict) else {"content": art.output}
+        content = payload.get("content") or ""
+        if not content:
+            await _set_chapter_status(chapter_id, ChapterState.FAILED.value, "empty scene content", chapter_run_id)
+            return _result(PipelineOutcome.RETRYABLE_FAILURE, error_code="empty_scene")
+        if art.reused:
+            logger.info(f"draft_scene:{scene_no} reused for chapter {chapter_no}")
 
         scene_id = uuid.uuid4()
         scene_contents.append({
-            "scene_no": int(scene_def.get("scene_no") or len(scene_contents) + 1),
+            "scene_no": scene_no,
             "content": content,
             "scene_id": str(scene_id),
-            "summary": scene_def.get("goal", ""),
-            "pov_character_id": scene_def.get("pov_character_id"),
+            "summary": payload.get("summary") or scene_def.get("goal", ""),
+            "pov_character_id": payload.get("pov_character_id") or scene_def.get("pov_character_id"),
+            "step_reused": art.reused,
+            "step_run_id": str(art.step_run_id) if art.step_run_id else None,
         })
         previous_tail = content[-500:]
+        previous_tail_hash = content_hash(previous_tail)
 
     # Final safety: re-index scene_no uniquely
     for idx, sc in enumerate(scene_contents, start=1):
@@ -426,15 +547,41 @@ async def execute_pipeline(
         db.add(ch_version)
         await db.commit()
 
-    await _set_chapter_status(chapter_id, ChapterState.REVIEWING.value)
+    await _set_chapter_status(chapter_id, ChapterState.REVIEWING.value, "enter reviewing", chapter_run_id)
 
-    passed, issues = await review_chapter(
-        book_id=book_id,
-        chapter_id=chapter_id,
-        chapter_content=chapter_content,
-        outline_data=outline_data,
-        outline_node_id=uuid.UUID(outline_data["id"]),
-    )
+    async def _do_review(_payload):
+        p, iss = await review_chapter(
+            book_id=book_id,
+            chapter_id=chapter_id,
+            chapter_content=chapter_content,
+            outline_data=outline_data,
+            outline_node_id=uuid.UUID(outline_data["id"]),
+        )
+        return {"passed": bool(p), "issues": iss or []}
+
+    try:
+        rev_art = await run_step(
+            ctx=ctx,
+            step_name="review",
+            step_key=f"review:0:{content_hash(chapter_content)[:16]}",
+            input_payload={
+                "content_hash": content_hash(chapter_content),
+                "outline_node_id": outline_data["id"],
+                "word_count": word_count,
+            },
+            execute_fn=_do_review,
+        )
+        rev = rev_art.output if isinstance(rev_art.output, dict) else {}
+        passed = bool(rev.get("passed"))
+        issues = rev.get("issues") or []
+    except ControlRequestedError as e:
+        await _set_chapter_status(chapter_id, ChapterState.NEEDS_HUMAN.value if e.control == "pause" else ChapterState.FAILED.value, f"control:{e.control}", chapter_run_id)
+        return _result(PipelineOutcome.PAUSED if e.control == "pause" else PipelineOutcome.PERMANENT_FAILURE, error_code=f"control_{e.control}")
+    except LeaseLostError:
+        return _result(PipelineOutcome.RETRYABLE_FAILURE, error_code="lease_lost")
+    except RetryableStepError as e:
+        await _set_chapter_status(chapter_id, ChapterState.FAILED.value, e.code, chapter_run_id)
+        return _result(PipelineOutcome.RETRYABLE_FAILURE, error_code=e.code)
 
     # === Phase 8: Patching (if issues) ===
     # P1 QA-001: drafts may be kept; finalize is never soft-passed.

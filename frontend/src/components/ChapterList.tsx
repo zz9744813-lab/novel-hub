@@ -89,6 +89,7 @@ export function ChapterList({ bookId }: { bookId: string }) {
   const [exporting, setExporting] = useState(false);
   const [humanDetail, setHumanDetail] = useState<any | null>(null);
   const [runDetail, setRunDetail] = useState<any | null>(null);
+  const [writingNext, setWritingNext] = useState(false);
 
   const load = async () => {
     if (!bookId) return;
@@ -141,11 +142,26 @@ export function ChapterList({ bookId }: { bookId: string }) {
     try {
       const r = await api.chapters.run(bookId, no);
       pollChapter(r.chapter_id);
+      await load();
     } catch (e) {
       console.error(e);
       setError(e instanceof Error ? e.message : String(e));
     }
     setRunning(null);
+  };
+
+  const handleWriteNext = async () => {
+    setWritingNext(true);
+    setError(null);
+    try {
+      const r = await api.chapters.runNext(bookId);
+      await load();
+      if (r.chapter_id) pollChapter(r.chapter_id);
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally {
+      setWritingNext(false);
+    }
   };
 
   const pollChapter = async (id: string) => {
@@ -282,6 +298,15 @@ export function ChapterList({ bookId }: { bookId: string }) {
           <span className="text-2xs text-text-disabled font-mono">{rows.length} ch</span>
         )}
         <div className="ml-auto flex items-center gap-1.5">
+          <button
+            onClick={handleWriteNext}
+            disabled={writingNext}
+            className="btn-primary text-2xs py-1.5 px-3 flex items-center gap-1.5"
+            title="自动写下一章（没有大纲节点会自动补一条）"
+          >
+            {writingNext ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
+            开始写下一章
+          </button>
           <button
             onClick={downloadBook}
             disabled={exporting}

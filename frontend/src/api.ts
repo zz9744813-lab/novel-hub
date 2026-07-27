@@ -134,7 +134,15 @@ export const api = {
   chapters: {
     list: (bookId: string) => fetchJSON<ChapterListItem[]>(`/api/books/${bookId}/chapters`),
     run: (bookId: string, chapterNo: number) =>
-      fetchJSON<{ chapter_id: string; status: string }>(`/api/books/${bookId}/chapters/${chapterNo}/run`, { method: "POST" }),
+      fetchJSON<{ chapter_id: string; status: string; chapter_no?: number; run_id?: string }>(
+        `/api/books/${bookId}/chapters/${chapterNo}/run`,
+        { method: "POST" }
+      ),
+    runNext: (bookId: string) =>
+      fetchJSON<{ chapter_id: string; status: string; chapter_no?: number; run_id?: string }>(
+        `/api/books/${bookId}/chapters/next/run`,
+        { method: "POST" }
+      ),
     get: (id: string) => fetchJSON<Chapter>(`/api/chapters/${id}`),
     pause: (id: string) => fetchJSON<void>(`/api/chapters/${id}/pause`, { method: "POST" }),
     resume: (id: string) => fetchJSON<void>(`/api/chapters/${id}/resume`, { method: "POST" }),

@@ -248,6 +248,133 @@ async def get_outline_graph(book_id: str, db: AsyncSession = Depends(get_db)):
 
 
 # ---- Chapter operations ----
+
+async def _ensure_outline_node(
+    db: AsyncSession,
+    bid: uuid.UUID,
+    chapter_no: int,
+    *,
+    title: str | None = None,
+    goal: str | None = None,
+) -> OutlineNode:
+    """Create a minimal outline node if missing so user can keep writing."""
+    from app.models import OutlineVersion
+
+    ov = (
+        await db.execute(
+            select(OutlineVersion)
+            .where(OutlineVersion.book_id == bid, OutlineVersion.status == "approved")
+            .order_by(OutlineVersion.version.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if not ov:
+        ov = (
+            await db.execute(
+                select(OutlineVersion)
+                .where(OutlineVersion.book_id == bid)
+                .order_by(OutlineVersion.version.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    if not ov:
+        raise HTTPException(400, "请先上传并批准大纲（大纲依赖页）")
+
+    node = (
+        await db.execute(
+            select(OutlineNode).where(
+                OutlineNode.book_id == bid,
+                OutlineNode.outline_version_id == ov.id,
+                OutlineNode.chapter_no == chapter_no,
+            )
+        )
+    ).scalar_one_or_none()
+    if node:
+        return node
+
+    prev = (
+        await db.execute(
+            select(OutlineNode).where(
+                OutlineNode.book_id == bid,
+                OutlineNode.outline_version_id == ov.id,
+                OutlineNode.chapter_no == chapter_no - 1,
+            )
+        )
+    ).scalar_one_or_none()
+    depends = []
+    if prev:
+        depends = [{"node_id": str(prev.id), "chapter_no": prev.chapter_no, "required": True}]
+    default_goal = goal or (
+        f"承接第{chapter_no - 1}章，推进主线与人物状态；保持与已定稿一致。"
+        if chapter_no > 1
+        else "开篇建立设定与主角动机。"
+    )
+    node = OutlineNode(
+        id=gen_uuid(),
+        book_id=bid,
+        outline_version_id=ov.id,
+        node_type="chapter",
+        volume_no=1,
+        chapter_no=chapter_no,
+        title=title or f"第{chapter_no}章",
+        goal=default_goal,
+        required_beats=[],
+        forbidden_outcomes=[],
+        involved_character_ids=[],
+        plot_thread_ids=[],
+        depends_on=depends,
+        expected_state_changes=[],
+    )
+    db.add(node)
+    await db.flush()
+    return node
+
+
+
+@router.post("/api/books/{book_id}/chapters/next/run")
+async def run_next_chapter(book_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Primary write button: find next chapter_no, ensure outline node, enqueue run."""
+    bid = uuid.UUID(book_id)
+    max_outline = (
+        await db.execute(
+            select(func.coalesce(func.max(OutlineNode.chapter_no), 0)).where(OutlineNode.book_id == bid)
+        )
+    ).scalar() or 0
+    max_final = (
+        await db.execute(
+            select(func.coalesce(func.max(Chapter.chapter_no), 0)).where(
+                Chapter.book_id == bid,
+                Chapter.status == ChapterState.FINALIZED.value,
+            )
+        )
+    ).scalar() or 0
+    max_any = (
+        await db.execute(
+            select(func.coalesce(func.max(Chapter.chapter_no), 0)).where(Chapter.book_id == bid)
+        )
+    ).scalar() or 0
+    # next after highest finalized among real story chapters (ignore huge test nos > max_outline+50)
+    story_max = max(max_outline, max_final if max_final <= max_outline + 20 else max_outline)
+    if story_max == 0:
+        next_no = 1
+    else:
+        next_no = int(story_max) + 1
+
+    # if next already exists unfinished, run that; if finalized, keep +1
+    existing = (
+        await db.execute(
+            select(Chapter).where(Chapter.book_id == bid, Chapter.chapter_no == next_no)
+        )
+    ).scalar_one_or_none()
+    if existing and existing.status == ChapterState.FINALIZED.value:
+        next_no = next_no + 1
+
+    await _ensure_outline_node(db, bid, next_no)
+    await db.commit()
+    # reuse run_chapter
+    return await run_chapter(book_id, next_no, request, db)
+
+
 @router.post("/api/books/{book_id}/chapters/{chapter_no}/run")
 async def run_chapter(
     book_id: str,
@@ -303,7 +430,8 @@ async def run_chapter(
             )
         ).scalar_one_or_none()
     if not node:
-        raise HTTPException(404, f"Outline node for chapter {chapter_no} not found")
+        # UX: allow continuing past short outlines by auto-creating next nodes
+        node = await _ensure_outline_node(db, bid, chapter_no)
 
     # Idempotency: same chapter + request_id returns existing run
     existing_run = (

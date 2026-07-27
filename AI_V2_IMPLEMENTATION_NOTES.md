@@ -61,3 +61,9 @@
 - 模块：`app/token_estimate.py`（角色 P95 倍率 + 1.15）
 - 接入：`v74_utils.save_context_package`、`call_agent` budget
 - 样例：naive 1000 → review 3450 / query_planner 2070
+
+
+## 变更：备份功能已移除（用户要求 2026-07-27）
+- 已删除 `deploy/scripts/backup.sh`、`restore_drill.sh`
+- 已移除相关 crontab
+- 历史备份目录 `data/backups/` 未自动删除（如需清空再说）

@@ -163,13 +163,16 @@ async def call_agent(
         parent_run_id=parent_run_id,
     )
 
+    # P1 COST-001: Chinese-safe token estimate
+    from app.token_estimate import safe_token_estimate
+
     default_manifest = assembly_manifest or {
         "entries": [],
         "excluded_entries": [],
         "budget": {
             "max_context": 128000,
             "reserved_output": 10000,
-            "used": len(rendered_prompt) // 4,
+            "used": safe_token_estimate(rendered_prompt, agent_role=agent_role),
         },
     }
 

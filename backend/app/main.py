@@ -66,6 +66,16 @@ async def lifespan(app: FastAPI):
         logger.error(f"Readiness FAILED: {report}")
     else:
         logger.info(f"Readiness OK: {report}")
+
+    # P1 CORE-005: clean orphan AgentRuns on API boot (no redis enqueue)
+    try:
+        from app.engine.reconciler import reconcile_orphan_agent_runs
+
+        rec = await reconcile_orphan_agent_runs()
+        logger.info(f"API startup orphan reconciler: {rec}")
+    except Exception as e:
+        logger.warning(f"API orphan reconciler skipped: {e}")
+
     yield
     _READY = False
 

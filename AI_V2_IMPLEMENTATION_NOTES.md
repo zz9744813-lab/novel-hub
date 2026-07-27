@@ -43,3 +43,21 @@
 ## 部署
 - 重建 api/worker 镜像并 force-recreate；`/health/ready` → db/provider/bindings ok
 - 代码推送见 git log（本文件提交时）
+
+
+## 续作（2026-07-27 第二批）
+
+### BKP-003 恢复演练
+- 脚本：`deploy/scripts/restore_drill.sh`
+- 结果：`RESULT=PASS` — public_tables=50, books=2, finalized=2, versions=4, sqlite_integrity=ok
+- 报告：`data/backups/20260727T122846Z/RESTORE_DRILL.txt`
+- Cron：每月 1 日 04:30 UTC
+
+### CORE-005 孤儿 Run 回收
+- 模块：`app/engine/reconciler.py`
+- Worker/API 启动调用；2 条 21h+ `running` → `abandoned`（现场 count abandoned=2, running=0）
+
+### COST-001 Token 估算
+- 模块：`app/token_estimate.py`（角色 P95 倍率 + 1.15）
+- 接入：`v74_utils.save_context_package`、`call_agent` budget
+- 样例：naive 1000 → review 3450 / query_planner 2070

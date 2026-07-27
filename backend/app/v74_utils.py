@@ -439,8 +439,11 @@ async def save_context_package(
     template_hash = compute_template_hash(system_prompt)
     rendered_hash = compute_rendered_hash(rendered_prompt)
     
-    # Estimate tokens (rough: 1 token ≈ 4 chars for Chinese)
-    token_estimate = len(rendered_prompt) // 4
+    # Estimate tokens for Chinese-heavy prompts (v2.0 COST-001).
+    # Measured ratio actual/naive(//4) was 1.60–2.87x; use role-aware safe estimate.
+    from app.token_estimate import safe_token_estimate
+
+    token_estimate = safe_token_estimate(rendered_prompt, agent_role=agent_role)
     
     pkg = AgentContextPackage(
         id=uuid.uuid4(),

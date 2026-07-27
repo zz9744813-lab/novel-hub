@@ -301,7 +301,16 @@ async def on_startup(ctx):
         os.environ["WORKER_READY"] = "0"
         logger.error(f"Readiness check failed: {e}")
 
-    # Recover only expired leases
+    # P1 CORE-005: abandon stale AgentRuns + recover expired leases
+    try:
+        from app.engine.reconciler import run_reconciler
+
+        report = await run_reconciler(redis=ctx.get("redis"))
+        logger.info(f"Startup reconciler: {report}")
+    except Exception as e:
+        logger.error(f"Startup reconciler failed: {e}")
+
+    # Recover only expired leases (legacy path kept as safety net)
     async with async_session_factory() as db:
         now = datetime.now(timezone.utc)
         result = await db.execute(
@@ -324,7 +333,7 @@ async def on_startup(ctx):
             if chapter and chapter.status == ChapterState.FINALIZED.value:
                 task.status = "completed"
                 continue
-            if chapter:
+            if chapter and task.status == "running" and expired:
                 logger.info(
                     f"Recovering expired lease: chapter {task.chapter_no}, chapter_id={chapter.id}"
                 )
@@ -337,7 +346,7 @@ async def on_startup(ctx):
                     str(task.book_id),
                     task.chapter_no,
                 )
-            else:
+            elif not chapter and task.status == "running":
                 task.status = "failed"
         await db.commit()
 

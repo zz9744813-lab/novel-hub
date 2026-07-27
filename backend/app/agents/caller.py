@@ -409,20 +409,26 @@ async def call_agent(
         output_integrity=state.value if publishable else "blocked",
     )
 
-    usage = None
-    if result.prompt_tokens or result.completion_tokens:
-        usage = LlmUsageEvent(
-            id=uuid.uuid4(),
-            book_id=book_id,
-            run_id=run_id,
-            provider=actual_provider,
-            model_name=actual_model,
-            prompt_tokens=result.prompt_tokens,
-            completion_tokens=result.completion_tokens,
-            reasoning_tokens=result.reasoning_tokens,
-            total_tokens=result.prompt_tokens + result.completion_tokens,
-            latency_ms=result.latency_ms,
-        )
+    # INV-10: every real attempt records Usage; missing provider counters => unknown (not fake 0 cost)
+    pt_u = int(result.prompt_tokens or 0)
+    ct_u = int(result.completion_tokens or 0)
+    rt_u = int(result.reasoning_tokens or 0)
+    tokens_unknown = not (result.prompt_tokens or result.completion_tokens)
+    usage = LlmUsageEvent(
+        id=uuid.uuid4(),
+        book_id=book_id,
+        run_id=run_id,
+        provider=actual_provider or provider or "unknown",
+        model_name=actual_model or model or "unknown",
+        prompt_tokens=pt_u,
+        completion_tokens=ct_u,
+        reasoning_tokens=rt_u,
+        total_tokens=pt_u + ct_u,
+        latency_ms=int(result.latency_ms or 0),
+    )
+    # stash unknown flag on raw_response_summary for UI/audit (column may not exist)
+    raw_response_summary["usage_status"] = "unknown" if tokens_unknown else "known"
+    raw_response_summary["usage_unknown"] = tokens_unknown
 
     # Phase 3: single short transaction for Output + Usage + Run status + package update
     async with async_session_factory() as db_out:
@@ -435,7 +441,7 @@ async def call_agent(
         managed_run.model_name = actual_model
 
         db_out.add(output)
-        if usage:
+        if usage is not None:
             db_out.add(usage)
 
         await db_out.execute(
@@ -488,5 +494,7 @@ async def call_agent(
         "block_reason": block_reason,
         "successful_attempt_no": result.successful_attempt_no,
         "attempts": raw_response_summary["attempts"],
+        "usage_status": raw_response_summary.get("usage_status"),
+        "usage_unknown": raw_response_summary.get("usage_unknown"),
         **meta,
     }

@@ -607,7 +607,7 @@ async def execute_pipeline(
             )
             return _result(PipelineOutcome.RETRYABLE_FAILURE, error_code="review_service_error")
 
-        await _set_chapter_status(chapter_id, ChapterState.PATCHING.value, "enter patching")
+        await _set_chapter_status(chapter_id, ChapterState.PATCHING.value, "enter patching", chapter_run_id)
 
         clusters = {}
         for issue in issues:
@@ -617,35 +617,75 @@ async def execute_pipeline(
         remaining = issues
         for _cluster_id, cluster_issues in clusters.items():
             for retry_round in range(1, 3):  # max 2 auto patch rounds (v2.0)
-                patches = []
-                for issue in cluster_issues:
-                    if issue.get("severity") == "critical":
-                        continue  # Critical issues go to NEEDS_HUMAN
-                    patch = await generate_patch(
-                        book_id=book_id,
-                        chapter_id=chapter_id,
-                        issue=issue,
-                        chapter_content=chapter_content,
-                        retry_round=retry_round,
-                    )
-                    if patch:
-                        patches.append(patch)
+                # INV-12: pause/cancel at patch step boundary
+                async def _do_patch_round(_payload, _issues=cluster_issues, _round=retry_round, _content=chapter_content):
+                    patches = []
+                    for issue in _issues:
+                        if issue.get("severity") == "critical":
+                            continue
+                        patch = await generate_patch(
+                            book_id=book_id,
+                            chapter_id=chapter_id,
+                            issue=issue,
+                            chapter_content=_content,
+                            retry_round=_round,
+                        )
+                        if patch:
+                            patches.append(patch)
+                    new_content = _content
+                    applied = 0
+                    if patches:
+                        try:
+                            new_content = await apply_patches(_content, patches)
+                            applied = len(patches)
+                        except PatchStaleError as e:
+                            raise PermanentStepError("PATCH_STALE", {"message": str(e)})
+                    return {
+                        "chapter_content": new_content,
+                        "applied": applied,
+                        "patch_count": len(patches),
+                        "content_hash": content_hash(new_content),
+                    }
 
-                if patches:
-                    try:
-                        chapter_content = await apply_patches(chapter_content, patches)
-                    except PatchStaleError as e:
-                        logger.error(f"PATCH_STALE chapter {chapter_no}: {e}")
+                try:
+                    patch_art = await run_step(
+                        ctx=ctx,
+                        step_name="patch_round",
+                        step_key=f"patch:r{retry_round}:{content_hash(chapter_content)[:12]}:{str(_cluster_id)[:20]}",
+                        input_payload={
+                            "round": retry_round,
+                            "cluster_id": str(_cluster_id),
+                            "content_hash": content_hash(chapter_content),
+                            "issue_ids": [i.get("issue_id") for i in cluster_issues],
+                        },
+                        execute_fn=_do_patch_round,
+                    )
+                except ControlRequestedError as e:
+                    await _set_chapter_status(
+                        chapter_id,
+                        ChapterState.NEEDS_HUMAN.value if e.control == "pause" else ChapterState.FAILED.value,
+                        f"control:{e.control}",
+                        chapter_run_id,
+                    )
+                    return _result(
+                        PipelineOutcome.PAUSED if e.control == "pause" else PipelineOutcome.PERMANENT_FAILURE,
+                        error_code=f"control_{e.control}",
+                    )
+                except LeaseLostError:
+                    return _result(PipelineOutcome.RETRYABLE_FAILURE, error_code="lease_lost")
+                except PermanentStepError as e:
+                    if e.code == "PATCH_STALE":
                         await _set_chapter_status(
-                            chapter_id,
-                            ChapterState.NEEDS_HUMAN.value,
-                            f"PATCH_STALE: {e}",
+                            chapter_id, ChapterState.NEEDS_HUMAN.value, f"PATCH_STALE: {e.detail}", chapter_run_id
                         )
-                        return _result(
-                            PipelineOutcome.NEEDS_HUMAN,
-                            error_code="PATCH_STALE",
-                            detail={"message": str(e)},
-                        )
+                        return _result(PipelineOutcome.NEEDS_HUMAN, error_code="PATCH_STALE", detail=e.detail)
+                    await _set_chapter_status(chapter_id, ChapterState.FAILED.value, e.code, chapter_run_id)
+                    return _result(PipelineOutcome.PERMANENT_FAILURE, error_code=e.code, detail=e.detail)
+
+                payload = patch_art.output if isinstance(patch_art.output, dict) else {}
+                new_content = payload.get("chapter_content") or chapter_content
+                if new_content != chapter_content:
+                    chapter_content = new_content
                     word_count = len(chapter_content)
                     current_version += 1
                     import hashlib as _hl
@@ -665,14 +705,46 @@ async def execute_pipeline(
                         db.add(patched_ver)
                         await db.commit()
 
-                # Re-review after patch (no session held during LLM)
-                passed, remaining = await review_chapter(
-                    book_id=book_id,
-                    chapter_id=chapter_id,
-                    chapter_content=chapter_content,
-                    outline_data=outline_data,
-                    outline_node_id=uuid.UUID(outline_data["id"]),
-                )
+                # Re-review after patch (checkpointed)
+                async def _do_rereview(_payload, _content=chapter_content):
+                    p, iss = await review_chapter(
+                        book_id=book_id,
+                        chapter_id=chapter_id,
+                        chapter_content=_content,
+                        outline_data=outline_data,
+                        outline_node_id=uuid.UUID(outline_data["id"]),
+                    )
+                    return {"passed": bool(p), "issues": iss or []}
+
+                try:
+                    rr_art = await run_step(
+                        ctx=ctx,
+                        step_name="review",
+                        step_key=f"review:r{retry_round}:{content_hash(chapter_content)[:16]}",
+                        input_payload={
+                            "content_hash": content_hash(chapter_content),
+                            "round": retry_round,
+                            "after_patch": True,
+                        },
+                        execute_fn=_do_rereview,
+                    )
+                except ControlRequestedError as e:
+                    await _set_chapter_status(
+                        chapter_id,
+                        ChapterState.NEEDS_HUMAN.value if e.control == "pause" else ChapterState.FAILED.value,
+                        f"control:{e.control}",
+                        chapter_run_id,
+                    )
+                    return _result(
+                        PipelineOutcome.PAUSED if e.control == "pause" else PipelineOutcome.PERMANENT_FAILURE,
+                        error_code=f"control_{e.control}",
+                    )
+                except LeaseLostError:
+                    return _result(PipelineOutcome.RETRYABLE_FAILURE, error_code="lease_lost")
+
+                rev = rr_art.output if isinstance(rr_art.output, dict) else {}
+                passed = bool(rev.get("passed"))
+                remaining = rev.get("issues") or []
                 if passed or not remaining:
                     break
                 if _has_service_error(remaining):
@@ -683,6 +755,7 @@ async def execute_pipeline(
                         chapter_id,
                         ChapterState.FAILED.value,
                         "re-review service_error fail-closed",
+                        chapter_run_id,
                     )
                     return _result(PipelineOutcome.RETRYABLE_FAILURE, error_code="review_service_error")
 

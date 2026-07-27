@@ -768,6 +768,160 @@ async def create_gold_sample(book_id: str, req: dict, db: AsyncSession = Depends
 
 
 # ---- Agent run events ----
+
+@router.get("/api/chapter-runs/{run_id}")
+async def get_chapter_run(run_id: str, db: AsyncSession = Depends(get_db)):
+    """PR-07: ChapterRun detail for UI (status vs chapter.status)."""
+    from app.models.tables import ChapterRun, ChapterStepRun, Chapter
+    rid = uuid.UUID(run_id)
+    run = (await db.execute(select(ChapterRun).where(ChapterRun.id == rid))).scalar_one_or_none()
+    if not run:
+        raise HTTPException(404, "run not found")
+    ch = (await db.execute(select(Chapter).where(Chapter.id == run.chapter_id))).scalar_one_or_none()
+    steps = (
+        await db.execute(
+            select(ChapterStepRun)
+            .where(ChapterStepRun.chapter_run_id == rid)
+            .order_by(ChapterStepRun.created_at.asc())
+        )
+    ).scalars().all()
+    return {
+        "run_id": str(run.id),
+        "book_id": str(run.book_id),
+        "chapter_id": str(run.chapter_id),
+        "chapter_no": ch.chapter_no if ch else None,
+        "chapter_status": ch.status if ch else None,
+        "run_status": run.status,
+        "current_step": run.current_step,
+        "control_requested": run.control_requested,
+        "error_code": run.error_code,
+        "error_detail": run.error_detail,
+        "lease_owner": run.lease_owner,
+        "lease_expires_at": run.lease_expires_at.isoformat() if run.lease_expires_at else None,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        "pipeline_version": run.pipeline_version,
+        "steps": [
+            {
+                "step_run_id": str(s.id),
+                "step_name": s.step_name,
+                "step_key": s.step_key,
+                "status": s.status,
+                "attempt_no": s.attempt_no,
+                "input_hash": s.input_hash,
+                "error_code": s.error_code,
+                "created_at": s.created_at.isoformat() if s.created_at else None,
+                "finished_at": s.completed_at.isoformat() if getattr(s, "completed_at", None) else (
+                    s.finished_at.isoformat() if getattr(s, "finished_at", None) else None
+                ),
+            }
+            for s in steps
+        ],
+    }
+
+
+@router.get("/api/chapters/{chapter_id}/runs")
+async def list_chapter_runs(chapter_id: str, db: AsyncSession = Depends(get_db)):
+    from app.models.tables import ChapterRun
+    cid = uuid.UUID(chapter_id)
+    runs = (
+        await db.execute(
+            select(ChapterRun)
+            .where(ChapterRun.chapter_id == cid)
+            .order_by(ChapterRun.created_at.desc())
+            .limit(20)
+        )
+    ).scalars().all()
+    return [
+        {
+            "run_id": str(r.id),
+            "status": r.status,
+            "current_step": r.current_step,
+            "control_requested": r.control_requested,
+            "error_code": r.error_code,
+            "error_detail": r.error_detail,
+            "started_at": r.started_at.isoformat() if r.started_at else None,
+            "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+        }
+        for r in runs
+    ]
+
+
+@router.get("/api/chapters/{chapter_id}/needs-human")
+async def chapter_needs_human_detail(chapter_id: str, db: AsyncSession = Depends(get_db)):
+    """PR-07: evidence for needs_human — last transition reason + failed steps + active run."""
+    from app.models.tables import Chapter, ChapterRun, ChapterStepRun, ChapterStateEvent
+    cid = uuid.UUID(chapter_id)
+    ch = (await db.execute(select(Chapter).where(Chapter.id == cid))).scalar_one_or_none()
+    if not ch:
+        raise HTTPException(404, "chapter not found")
+    run = None
+    if ch.active_run_id:
+        run = (await db.execute(select(ChapterRun).where(ChapterRun.id == ch.active_run_id))).scalar_one_or_none()
+    if not run:
+        run = (
+            await db.execute(
+                select(ChapterRun)
+                .where(ChapterRun.chapter_id == cid)
+                .order_by(ChapterRun.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    steps = []
+    if run:
+        steps = (
+            await db.execute(
+                select(ChapterStepRun)
+                .where(ChapterStepRun.chapter_run_id == run.id, ChapterStepRun.status.in_(("failed", "succeeded")))
+                .order_by(ChapterStepRun.created_at.desc())
+                .limit(30)
+            )
+        ).scalars().all()
+    events = (
+        await db.execute(
+            select(ChapterStateEvent)
+            .where(ChapterStateEvent.chapter_id == cid)
+            .order_by(ChapterStateEvent.created_at.desc())
+            .limit(10)
+        )
+    ).scalars().all()
+    return {
+        "chapter_id": str(ch.id),
+        "chapter_no": ch.chapter_no,
+        "status": ch.status,
+        "last_transition_reason": getattr(ch, "last_transition_reason", None),
+        "active_run_id": str(ch.active_run_id) if ch.active_run_id else None,
+        "run": {
+            "run_id": str(run.id),
+            "status": run.status,
+            "current_step": run.current_step,
+            "error_code": run.error_code,
+            "error_detail": run.error_detail,
+            "control_requested": run.control_requested,
+        } if run else None,
+        "recent_steps": [
+            {
+                "step_name": s.step_name,
+                "step_key": s.step_key,
+                "status": s.status,
+                "error_code": s.error_code,
+                "error_detail": s.error_detail if hasattr(s, "error_detail") else None,
+            }
+            for s in steps
+        ],
+        "recent_state_events": [
+            {
+                "from_state": e.from_state,
+                "to_state": e.to_state,
+                "reason": e.reason,
+                "actor": e.actor,
+                "created_at": e.created_at.isoformat() if e.created_at else None,
+            }
+            for e in events
+        ],
+    }
+
+
 @router.get("/api/runs/{run_id}/events")
 async def get_run_events(run_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(AgentRun).where(AgentRun.id == uuid.UUID(run_id)))

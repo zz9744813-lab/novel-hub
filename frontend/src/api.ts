@@ -140,6 +140,13 @@ export const api = {
     resume: (id: string) => fetchJSON<void>(`/api/chapters/${id}/resume`, { method: "POST" }),
     contextPackages: (chapterId: string) =>
       fetchJSON<ContextPackageSummary[]>(`/api/chapters/${chapterId}/context-packages`),
+    runs: (chapterId: string) =>
+      fetchJSON<ChapterRunSummary[]>(`/api/chapters/${chapterId}/runs`),
+    needsHuman: (chapterId: string) =>
+      fetchJSON<NeedsHumanDetail>(`/api/chapters/${chapterId}/needs-human`),
+  },
+  chapterRuns: {
+    get: (runId: string) => fetchJSON<ChapterRunDetail>(`/api/chapter-runs/${runId}`),
   },
   context: {
     get: (id: string) => fetchJSON<ContextPackageDetail>(`/api/context-packages/${id}`),

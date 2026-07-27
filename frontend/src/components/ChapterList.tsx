@@ -87,6 +87,8 @@ export function ChapterList({ bookId }: { bookId: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [humanDetail, setHumanDetail] = useState<any | null>(null);
+  const [runDetail, setRunDetail] = useState<any | null>(null);
 
   const load = async () => {
     if (!bookId) return;
@@ -194,6 +196,44 @@ export function ChapterList({ bookId }: { bookId: string }) {
       setError(e?.message || String(e));
     } finally {
       setExporting(false);
+    }
+  };
+
+  const handlePause = async (ch: Chapter) => {
+    if (!ch.chapter_id) return;
+    try {
+      await api.chapters.pause(ch.chapter_id);
+      pollChapter(ch.chapter_id);
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    }
+  };
+
+  const handleResume = async (ch: Chapter) => {
+    if (!ch.chapter_id) return;
+    try {
+      await api.chapters.resume(ch.chapter_id);
+      pollChapter(ch.chapter_id);
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    }
+  };
+
+  const openNeedsHuman = async (ch: Chapter) => {
+    if (!ch.chapter_id) return;
+    try {
+      const d = await api.chapters.needsHuman(ch.chapter_id);
+      setHumanDetail(d);
+      setRunDetail(null);
+      if (d?.run?.run_id || d?.active_run_id) {
+        const rid = d.active_run_id || d.run?.run_id;
+        if (rid) {
+          const rd = await api.chapterRuns.get(rid);
+          setRunDetail(rd);
+        }
+      }
+    } catch (e: any) {
+      setError(e?.message || String(e));
     }
   };
 
@@ -368,6 +408,33 @@ export function ChapterList({ bookId }: { bookId: string }) {
                       <RotateCcw size={12} />
                     </button>
                   )}
+                  {ch && (ch.status === "needs_human" || ch.status === "paused" || ch.status === "failed") && (
+                    <button
+                      onClick={() => openNeedsHuman(ch)}
+                      className="btn-ghost p-1.5 rounded"
+                      title="Run / 待人工详情"
+                    >
+                      <AlertTriangle size={12} />
+                    </button>
+                  )}
+                  {ch && isActive && (
+                    <button
+                      onClick={() => handlePause(ch)}
+                      className="btn-ghost p-1.5 rounded"
+                      title="暂停"
+                    >
+                      <Pause size={12} />
+                    </button>
+                  )}
+                  {ch && (ch.status === "paused" || ch.status === "needs_human") && (
+                    <button
+                      onClick={() => handleResume(ch)}
+                      className="btn-ghost p-1.5 rounded"
+                      title="恢复"
+                    >
+                      <Play size={12} />
+                    </button>
+                  )}
                   {isActive && (
                     <span className="flex items-center gap-1 text-2xs text-brand-accent">
                       <Loader2 size={11} className="animate-spin" />
@@ -378,6 +445,50 @@ export function ChapterList({ bookId }: { bookId: string }) {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {(humanDetail || runDetail) && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => { setHumanDetail(null); setRunDetail(null); }}>
+          <div className="bg-bg-elevated border border-border rounded-lg max-w-lg w-full max-h-[80vh] overflow-auto p-4 space-y-3" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm text-text-primary" style={{ fontWeight: 510 }}>Run / 待人工</h3>
+              <button className="text-2xs text-text-disabled" onClick={() => { setHumanDetail(null); setRunDetail(null); }}>关闭</button>
+            </div>
+            {humanDetail && (
+              <div className="space-y-1 text-2xs font-mono text-text-secondary">
+                <div>chapter: {humanDetail.chapter_no} · {humanDetail.status}</div>
+                <div>reason: {humanDetail.last_transition_reason || "—"}</div>
+                {humanDetail.run && (
+                  <div>run: {humanDetail.run.status} · step={humanDetail.run.current_step || "—"} · err={humanDetail.run.error_code || "—"}</div>
+                )}
+                <div className="pt-2 text-text-disabled">recent steps</div>
+                <ul className="space-y-1 max-h-40 overflow-auto">
+                  {(humanDetail.recent_steps || []).map((s: any, i: number) => (
+                    <li key={i}>{s.step_name}/{s.step_key} · {s.status} · {s.error_code || ""}</li>
+                  ))}
+                </ul>
+                <div className="pt-2 text-text-disabled">state events</div>
+                <ul className="space-y-1 max-h-32 overflow-auto">
+                  {(humanDetail.recent_state_events || []).map((e: any, i: number) => (
+                    <li key={i}>{e.from_state}→{e.to_state} · {e.reason || ""}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {runDetail && (
+              <div className="space-y-1 text-2xs font-mono text-text-secondary border-t border-border pt-2">
+                <div>run_status: {runDetail.run_status || runDetail.status} · chapter_status: {runDetail.chapter_status}</div>
+                <div>control: {runDetail.control_requested || "none"} · lease: {runDetail.lease_owner || "—"}</div>
+                <div className="text-text-disabled">steps ({(runDetail.steps || []).length})</div>
+                <ul className="space-y-1 max-h-48 overflow-auto">
+                  {(runDetail.steps || []).map((s: any) => (
+                    <li key={s.step_run_id}>{s.step_name} · {s.status} · {s.step_key}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

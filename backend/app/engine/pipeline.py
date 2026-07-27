@@ -24,7 +24,7 @@ from app.agents.chapter_planner import plan_chapter
 from app.agents.draft_writer import write_scene
 from app.agents.review_agent import review_chapter
 from app.agents.patch_editor import generate_patch, apply_patches, PatchStaleError
-from app.agents.state_extractor import extract_and_commit
+from app.agents.state_extractor import extract_candidates
 from app.agents.drift_audit import run_drift_audit
 from app.engine.memory_compiler import generate_l2
 from app.engine.outcomes import PipelineOutcome, PipelineResult
@@ -729,82 +729,123 @@ async def execute_pipeline(
             if snap:
                 current_l4[str(char_id)] = snap.state
 
-    # Write phase: extract_and_commit does LLM session-free then writes with db
-    async with async_session_factory() as db:
-        success, conflicts = await extract_and_commit(
-            db=db,
+    # Phase 9b: Extractor candidates ONLY (B-06) — no canon writes here
+    from app.engine.final_artifact import build_final_artifact, SCENE_JOIN
+    from app.engine.step_runner import run_step as _run_step, ControlRequestedError as _Ctrl, LeaseLostError as _Lease, RetryableStepError as _Retry
+
+    # Rebuild scene list if patch flattened content with scene join
+    scenes_for_final = list(scene_contents)
+    if scene_contents and chapter_content:
+        parts = chapter_content.split(SCENE_JOIN)
+        if len(parts) == len(scene_contents):
+            scenes_for_final = [
+                {**sc, "content": parts[i]} for i, sc in enumerate(scene_contents)
+            ]
+        elif len(scene_contents) == 1:
+            scenes_for_final = [{**scene_contents[0], "content": chapter_content}]
+        # else keep original scene contents; integrity check will fail closed if mismatch
+
+    # Attach paragraph keys for extractor evidence
+    art_preview = build_final_artifact(scenes_for_final)
+    scenes_with_paras = []
+    for sc_art in art_preview.scenes:
+        scenes_with_paras.append({
+            "scene_no": sc_art.scene_no,
+            "content": sc_art.content,
+            "summary": sc_art.summary,
+            "paragraphs": [
+                {"paragraph_key": p.paragraph_key, "content": p.content}
+                for p in sc_art.paragraphs
+            ],
+        })
+
+    async def _do_extract(_payload):
+        ok, events, errors = await extract_candidates(
             book_id=book_id,
             chapter_id=chapter_id,
             chapter_no=chapter_no,
             chapter_content=chapter_content,
-            scenes=scene_contents,
+            scenes=scenes_with_paras,
             outline_node=outline_data,
             current_l4=current_l4,
-            source_run_id=source_run,
         )
+        if not ok:
+            raise _Retry("state_extract_failed", {"errors": errors})
+        return {"events": events, "errors": errors}
 
-        if not success:
-            logger.error(f"State extraction failed for chapter {chapter_no}: {conflicts}")
-            await _set_chapter_status(chapter_id, ChapterState.FAILED.value, "state extract failed")
-            return _result(
-                PipelineOutcome.PERMANENT_FAILURE,
-                error_code="state_extract_failed",
-                detail={"conflicts": conflicts},
-            )
+    try:
+        from app.engine.final_artifact import sha256_text as _sha
+        extract_art = await _run_step(
+            ctx=ctx,
+            step_name="canon_extract",
+            step_key=f"canon_extract:{_sha(chapter_content)[:16]}",
+            input_payload={
+                "content_hash": _sha(chapter_content),
+                "outline_node_id": outline_data["id"],
+                "scene_count": len(scenes_for_final),
+            },
+            execute_fn=_do_extract,
+        )
+        extract_payload = extract_art.output if isinstance(extract_art.output, dict) else {}
+        candidate_events = extract_payload.get("events") or []
+    except _Ctrl as e:
+        await _set_chapter_status(
+            chapter_id,
+            ChapterState.NEEDS_HUMAN.value if e.control == "pause" else ChapterState.FAILED.value,
+            f"control:{e.control}",
+            chapter_run_id,
+        )
+        return _result(
+            PipelineOutcome.PAUSED if e.control == "pause" else PipelineOutcome.PERMANENT_FAILURE,
+            error_code=f"control_{e.control}",
+        )
+    except _Lease:
+        return _result(PipelineOutcome.RETRYABLE_FAILURE, error_code="lease_lost")
+    except _Retry as e:
+        await _set_chapter_status(chapter_id, ChapterState.FAILED.value, e.code, chapter_run_id)
+        return _result(PipelineOutcome.PERMANENT_FAILURE, error_code=e.code, detail=e.detail)
 
-    # === Phase 10: Finalization via atomic snapshot service ===
+    # === Phase 10: Atomic Finalize + Canon (single transaction) ===
     from app.engine.chapter_finalizer import commit_final_chapter_snapshot, FinalScene
+    from app.engine.final_artifact import build_final_artifact as _bfa
+
+    final_artifact = _bfa(scenes_for_final, joined_content=None)
+    # If pipeline chapter_content is the joined form with SCENE_JOIN, prefer it only when equal
+    if chapter_content == final_artifact.joined_content:
+        pass
+    elif len(scenes_for_final) == 1:
+        final_artifact = _bfa(
+            [{**scenes_for_final[0], "content": chapter_content}],
+        )
+    # else: multi-scene must match join; do not squash (B-06 / §8.2)
 
     final_scenes = [
         FinalScene(
-            scene_no=sc["scene_no"],
-            content=sc["content"],
-            scene_id=uuid.UUID(sc["scene_id"]) if isinstance(sc["scene_id"], str) else sc["scene_id"],
-            summary=sc.get("summary", ""),
-            pov_character_id=(
-                uuid.UUID(sc["pov_character_id"])
-                if sc.get("pov_character_id") and isinstance(sc["pov_character_id"], str)
-                else sc.get("pov_character_id")
-            ),
+            scene_no=sc.scene_no,
+            content=sc.content,
+            scene_id=uuid.UUID(sc.scene_id) if sc.scene_id else None,
+            summary=sc.summary or "",
+            pov_character_id=uuid.UUID(sc.pov_character_id) if sc.pov_character_id else None,
         )
-        for sc in scene_contents
+        for sc in final_artifact.scenes
     ]
-    # After patch, rebuild scenes from final chapter_content if version > 1
-    if current_version > 1 and scene_contents:
-        # Prefer joined content integrity: re-split chapter into scene slots by original counts
-        parts = chapter_content.split("\n\n\n")
-        if len(parts) == len(scene_contents):
-            for i, sc in enumerate(scene_contents):
-                final_scenes[i] = FinalScene(
-                    scene_no=sc["scene_no"],
-                    content=parts[i],
-                    scene_id=uuid.UUID(sc["scene_id"]) if isinstance(sc["scene_id"], str) else sc["scene_id"],
-                    summary=sc.get("summary", ""),
-                )
-        else:
-            # Single-scene fallback: put full content in first scene
-            final_scenes = [
-                FinalScene(
-                    scene_no=1,
-                    content=chapter_content,
-                    scene_id=uuid.UUID(scene_contents[0]["scene_id"])
-                    if isinstance(scene_contents[0]["scene_id"], str)
-                    else scene_contents[0]["scene_id"],
-                    summary=scene_contents[0].get("summary", ""),
-                )
-            ]
 
     snap = await commit_final_chapter_snapshot(
         book_id=book_id,
         chapter_id=chapter_id,
-        # Draft already persisted at current_version; final must be a new version
         expected_previous_version=current_version,
-        final_content=chapter_content,
+        final_artifact=final_artifact,
+        final_content=final_artifact.joined_content,
         final_scenes=final_scenes,
+        validated_events=candidate_events,
         source_run_ids=[source_run],
+        chapter_run_id=chapter_run_id,
         outline_node_id=uuid.UUID(outline_data["id"]),
+        outline_version_id=outline_version_id,
         title=outline_data.get("title") or f"Chapter {chapter_no}",
         chapter_no=chapter_no,
+        pipeline_version=PIPELINE_VERSION,
+        worker_id=worker_id,
     )
     if not snap.ok:
         logger.error(f"Final snapshot failed for chapter {chapter_no}: {snap.error}")

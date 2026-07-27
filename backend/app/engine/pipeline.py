@@ -292,7 +292,8 @@ async def execute_pipeline(
 
         context_pkg = await assemble_context(
             db, book_id, outline_node, {}, forced_deps,
-            retrieved_evidence, "", chapter_no
+            retrieved_evidence, "", chapter_no,
+            agent_role="draft_writer",
         )
 
     # === Phase 5: ChapterPlanner (checkpointed) ===
@@ -711,9 +712,65 @@ async def execute_pipeline(
         )
         return _result(PipelineOutcome.PERMANENT_FAILURE, error_code="review_empty_fail")
 
-    # === Phase 9: ContinuityCheck + StateExtractor ===
-    await _set_chapter_status(chapter_id, ChapterState.CONSISTENCY_CHECK.value)
-    await _set_chapter_status(chapter_id, ChapterState.STATE_EXTRACTING.value)
+    # === Phase 9: Mechanical consistency gate (B-08) + StateExtractor ===
+    await _set_chapter_status(chapter_id, ChapterState.CONSISTENCY_CHECK.value, "mechanical consistency", chapter_run_id)
+    from app.engine.mechanical_gate import run_mechanical_consistency
+
+    async def _do_consistency(_payload):
+        res = run_mechanical_consistency(
+            chapter_content=chapter_content,
+            scenes=scene_contents,
+            outline_data=outline_data,
+            scene_plan=scene_plan if isinstance(scene_plan, dict) else {},
+        )
+        return res.as_dict()
+
+    try:
+        cons_art = await run_step(
+            ctx=ctx,
+            step_name="consistency_check",
+            step_key=f"consistency:{content_hash(chapter_content)[:16]}",
+            input_payload={
+                "content_hash": content_hash(chapter_content),
+                "scene_count": len(scene_contents),
+                "word_count": word_count,
+            },
+            execute_fn=_do_consistency,
+        )
+        cons = cons_art.output if isinstance(cons_art.output, dict) else {}
+        if not cons.get("ok", False):
+            hard = [f for f in (cons.get("findings") or []) if f.get("severity") in ("blocker", "major")]
+            logger.error("consistency_check failed chapter %s: %s", chapter_no, hard[:5])
+            await _set_chapter_status(
+                chapter_id,
+                ChapterState.NEEDS_HUMAN.value if hard else ChapterState.FAILED.value,
+                "consistency_failed",
+                chapter_run_id,
+            )
+            return _result(
+                PipelineOutcome.NEEDS_HUMAN if hard else PipelineOutcome.PERMANENT_FAILURE,
+                error_code="consistency_failed",
+                detail={"findings": cons.get("findings") or []},
+            )
+    except ControlRequestedError as e:
+        await _set_chapter_status(
+            chapter_id,
+            ChapterState.NEEDS_HUMAN.value if e.control == "pause" else ChapterState.FAILED.value,
+            f"control:{e.control}",
+            chapter_run_id,
+        )
+        return _result(
+            PipelineOutcome.PAUSED if e.control == "pause" else PipelineOutcome.PERMANENT_FAILURE,
+            error_code=f"control_{e.control}",
+        )
+    except LeaseLostError:
+        return _result(PipelineOutcome.RETRYABLE_FAILURE, error_code="lease_lost")
+    except Exception as e:
+        logger.exception("consistency_check error")
+        await _set_chapter_status(chapter_id, ChapterState.FAILED.value, f"consistency_error:{e}", chapter_run_id)
+        return _result(PipelineOutcome.PERMANENT_FAILURE, error_code="consistency_error", detail={"error": str(e)})
+
+    await _set_chapter_status(chapter_id, ChapterState.STATE_EXTRACTING.value, "enter extract", chapter_run_id)
 
     # Load L4 DTOs in short session
     async with async_session_factory() as db:

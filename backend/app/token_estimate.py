@@ -37,7 +37,7 @@ def naive_char_tokens(text: str) -> int:
 
 
 def safe_token_estimate(text: str, agent_role: str | None = None) -> int:
-    """Return conservative token estimate for budget checks."""
+    """Return conservative token estimate for budget *recording* (not hard limits)."""
     base = naive_char_tokens(text)
     if base == 0:
         return 0

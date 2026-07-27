@@ -175,15 +175,36 @@ async def call_agent(
     # P1 COST-001: Chinese-safe token estimate
     from app.token_estimate import safe_token_estimate
 
-    default_manifest = assembly_manifest or {
-        "entries": [],
-        "excluded_entries": [],
-        "budget": {
-            "max_context": 128000,
-            "reserved_output": 10000,
-            "used": safe_token_estimate(rendered_prompt, agent_role=agent_role),
-        },
-    }
+    used_est = safe_token_estimate(rendered_prompt, agent_role=agent_role)
+    if assembly_manifest:
+        default_manifest = dict(assembly_manifest)
+        # Always stamp measured used for this attempt; never block on budget
+        budget = dict(default_manifest.get("budget") or {})
+        budget.setdefault("mode", "record_only")
+        budget["used"] = used_est
+        budget.setdefault("input_budget", budget.get("max_context", 128000) - budget.get("reserved_output", 10000))
+        if budget.get("input_budget") and used_est > int(budget["input_budget"]):
+            budget["overflow_advisory"] = True
+        else:
+            budget.setdefault("overflow_advisory", False)
+        default_manifest["budget"] = budget
+        default_manifest["used_tokens"] = used_est
+        default_manifest["budget_mode"] = "record_only"
+    else:
+        default_manifest = {
+            "entries": [],
+            "excluded_entries": [],
+            "used_tokens": used_est,
+            "budget_mode": "record_only",
+            "budget": {
+                "max_context": 128000,
+                "reserved_output": 10000,
+                "input_budget": 118000,
+                "used": used_est,
+                "mode": "record_only",
+                "overflow_advisory": False,
+            },
+        }
 
     # Phase 1: create run only (attempt packages written after stream with real audit)
     async with async_session_factory() as db_run:

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, ModelBinding, ModelChangeLogEntry, AvailableModel } from "../api";
 import { Cpu, History, Save, RefreshCw } from "lucide-react";
+import { agentRoleLabel } from "../agentLabels";
 
 export function ModelBindingPanel() {
   const [bindings, setBindings] = useState<ModelBinding[]>([]);
@@ -54,7 +55,7 @@ export function ModelBindingPanel() {
         reasoning_mode: patch.reasoning_mode ?? b.reasoning_mode,
         reason: patch.reason || "UI update",
       });
-      setMsg(`已更新 ${b.agent_role}`);
+      setMsg(`已更新 ${agentRoleLabel(b.agent_role)}`);
       setEditing((prev) => {
         const n = { ...prev };
         delete n[b.id];
@@ -94,7 +95,7 @@ export function ModelBindingPanel() {
       <div className="panel-elevated rounded-lg overflow-hidden">
         <div className="px-3 py-2 border-b border-border flex items-center gap-2">
           <Cpu size={13} className="text-brand-accent" />
-          <span className="text-xs text-text-secondary" style={{ fontWeight: 510 }}>Global Bindings</span>
+          <span className="text-xs text-text-secondary" style={{ fontWeight: 510 }}>全局绑定</span>
           <span className="ml-auto text-2xs font-mono text-text-disabled">{bindings.length}</span>
         </div>
 
@@ -105,12 +106,12 @@ export function ModelBindingPanel() {
             <table className="w-full text-xs">
               <thead>
                 <tr className="text-left text-2xs text-text-disabled border-b border-border">
-                  <th className="px-3 py-2 font-normal">Agent</th>
-                  <th className="px-3 py-2 font-normal">Provider</th>
-                  <th className="px-3 py-2 font-normal">Primary</th>
-                  <th className="px-3 py-2 font-normal">Fallback</th>
-                  <th className="px-3 py-2 font-normal">Reason</th>
-                  <th className="px-3 py-2 font-normal">Ver</th>
+                  <th className="px-3 py-2 font-normal">角色</th>
+                  <th className="px-3 py-2 font-normal">提供商</th>
+                  <th className="px-3 py-2 font-normal">主模型</th>
+                  <th className="px-3 py-2 font-normal">备用模型</th>
+                  <th className="px-3 py-2 font-normal">变更原因</th>
+                  <th className="px-3 py-2 font-normal">版本</th>
                   <th className="px-3 py-2 font-normal"></th>
                 </tr>
               </thead>
@@ -122,7 +123,9 @@ export function ModelBindingPanel() {
                   const fallback = e.fallback_model ?? b.fallback_model ?? "";
                   return (
                     <tr key={b.id} className="hover:bg-bg-hover/50">
-                      <td className="px-3 py-2 text-text-primary" style={{ fontWeight: 510 }}>{b.agent_role}</td>
+                      <td className="px-3 py-2 text-text-primary" style={{ fontWeight: 510 }} title={b.agent_role}>
+                        {agentRoleLabel(b.agent_role)}
+                      </td>
                       <td className="px-3 py-2">
                         <select
                           className="w-28 bg-bg-canvas border border-border rounded px-1.5 py-1 text-2xs font-mono text-text-secondary focus:outline-none focus:border-brand"
@@ -155,7 +158,7 @@ export function ModelBindingPanel() {
                           value={fallback}
                           onChange={(ev) => setField(b.id, "fallback_model", ev.target.value)}
                         >
-                          <option value="">— 无 fallback —</option>
+                          <option value="">— 无备用 —</option>
                           {modelOptions(fallback || null).map((id) => (
                             <option key={id} value={id}>{id}</option>
                           ))}
@@ -191,7 +194,7 @@ export function ModelBindingPanel() {
       <div className="panel-elevated rounded-lg overflow-hidden">
         <div className="px-3 py-2 border-b border-border flex items-center gap-2">
           <History size={13} className="text-brand-accent" />
-          <span className="text-xs text-text-secondary" style={{ fontWeight: 510 }}>Change Log</span>
+          <span className="text-xs text-text-secondary" style={{ fontWeight: 510 }}>变更记录</span>
         </div>
         <div className="max-h-48 overflow-auto divide-y divide-border">
           {logs.length === 0 ? (
@@ -200,7 +203,7 @@ export function ModelBindingPanel() {
             logs.slice(0, 20).map((l) => (
               <div key={l.id} className="px-3 py-2 text-2xs flex gap-3">
                 <span className="text-text-disabled font-mono w-36 shrink-0">{new Date(l.changed_at).toLocaleString()}</span>
-                <span className="text-text-primary" style={{ fontWeight: 510 }}>{l.agent_role}</span>
+                <span className="text-text-primary" style={{ fontWeight: 510 }} title={l.agent_role}>{agentRoleLabel(l.agent_role)}</span>
                 <span className="font-mono text-text-tertiary truncate">
                   {l.old_model || "∅"} → {l.new_model}
                 </span>

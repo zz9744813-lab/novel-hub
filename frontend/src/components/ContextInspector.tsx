@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, ContextPackageSummary, ContextPackageDetail, ChapterListItem } from "../api";
 import { Search, Package, ChevronRight, AlertCircle, CheckCircle2, XCircle, FileText } from "lucide-react";
+import { agentRoleLabel } from "../agentLabels";
 
 interface Props {
   bookId: string;
@@ -139,7 +140,7 @@ export function ContextInspector({ bookId }: Props) {
                   {stateIcon(p.publish_state)}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 text-xs">
-                      <span className="text-text-primary" style={{ fontWeight: 510 }}>{p.agent_role}</span>
+                      <span className="text-text-primary" style={{ fontWeight: 510 }} title={p.agent_role}>{agentRoleLabel(p.agent_role)}</span>
                       <span className="text-2xs font-mono text-text-disabled">#{p.attempt_no}</span>
                     </div>
                     <div className="text-2xs text-text-tertiary font-mono truncate mt-0.5">
@@ -158,7 +159,7 @@ export function ContextInspector({ bookId }: Props) {
 
         <div className="panel-elevated rounded-lg overflow-hidden">
           <div className="px-3 py-2 border-b border-border flex items-center justify-between">
-            <span className="text-xs text-text-secondary" style={{ fontWeight: 510 }}>Package Detail</span>
+            <span className="text-xs text-text-secondary" style={{ fontWeight: 510 }}>包详情</span>
             {selected && (
               <button
                 className="btn-ghost px-2 py-1 text-2xs rounded flex items-center gap-1"
@@ -174,17 +175,17 @@ export function ContextInspector({ bookId }: Props) {
             <div className="p-3 space-y-3 text-xs max-h-[420px] overflow-auto">
               <Row label="ID" value={selected.id} mono />
               <Row label="Run" value={selected.run_id} mono />
-              <Row label="Agent" value={selected.agent_role} />
-              <Row label="Model" value={`${selected.provider} / ${selected.model}`} mono />
-              <Row label="Attempt" value={String(selected.attempt_no)} />
-              <Row label="Publish" value={selected.publish_state} />
-              {selected.block_reason && <Row label="Block" value={selected.block_reason} />}
-              <Row label="Prompt Ver" value={selected.prompt_version} mono />
-              <Row label="Template Hash" value={(selected.prompt_template_hash || "").slice(0, 16) + "…"} mono />
-              <Row label="Rendered Hash" value={(selected.rendered_prompt_hash || "").slice(0, 16) + "…"} mono />
-              <Row label="Token Est." value={String(selected.assembled_token_estimate ?? "—")} mono />
+              <Row label="角色" value={agentRoleLabel(selected.agent_role)} />
+              <Row label="模型" value={`${selected.provider} / ${selected.model}`} mono />
+              <Row label="尝试" value={String(selected.attempt_no)} />
+              <Row label="发布状态" value={selected.publish_state} />
+              {selected.block_reason && <Row label="阻断原因" value={selected.block_reason} />}
+              <Row label="Prompt 版本" value={selected.prompt_version} mono />
+              <Row label="模板哈希" value={(selected.prompt_template_hash || "").slice(0, 16) + "…"} mono />
+              <Row label="渲染哈希" value={(selected.rendered_prompt_hash || "").slice(0, 16) + "…"} mono />
+              <Row label="Token 估算" value={String(selected.assembled_token_estimate ?? "—")} mono />
               <div>
-                <div className="text-2xs text-text-disabled mb-1">Assembly Manifest</div>
+                <div className="text-2xs text-text-disabled mb-1">装配清单 Manifest</div>
                 <pre className="bg-bg-canvas border border-border rounded p-2 text-2xs font-mono text-text-tertiary overflow-auto max-h-40">
                   {JSON.stringify(selected.assembly_manifest, null, 2)}
                 </pre>

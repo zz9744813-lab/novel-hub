@@ -9,30 +9,31 @@
 
 ### PR-03 Step Runner
 - `step_runner.py` input_hash 复用 + Run lease CAS
-- Pipeline：query_plan / chapter_plan / draft_scene / review
+- Pipeline：query_plan / chapter_plan / draft_scene / review / canon_extract
 
-### PR-04 Final Artifact + 原子 Finalize（本轮）
-- `final_artifact.py`：FinalArtifact / 场景拼接完整性 / finalization_key
-- `state_extractor.py`：**只产候选**，不再写 StoryEvent/L1/L4
-- `chapter_finalizer.py`：单事务
-  - FOR UPDATE + xact advisory
-  - finalization_key 幂等
-  - immutable final ChapterVersion
-  - Scene/Paragraph/Search + StoryEvent + L1 + L4 + finalized 指针
-- Pipeline：`canon_extract` checkpoint → `commit_final_chapter_snapshot(..., validated_events=...)`
-- **禁止** hash 不一致时压成单场景
+### PR-04 Atomic Finalize
+- Extractor 只产候选；Finalizer 单事务 Finalize+Canon；finalization_key 幂等；禁多场景压扁
+
+### PR-05 Strict Schema（本轮）
+- `backend/app/contracts/agents.py`：Pydantic v2 `extra=forbid` + `strict=True`
+- 角色契约：review / chapter_planner / patch / state_extractor / query_planner / evidence_ranker / outline_parser / drift_audit
+- `call_agent`：`response_format=json_schema`（schema 来自 `model_json_schema()`）
+- `full_pipeline_async`：解析后 **Pydantic 校验 fail-closed**
+- Schema 失败：**1 次 repair 请求**，仍失败则 blocked
+- `normalize_json`：**移除尾逗号软成功**；仅 fence strip + 合法 JSON
+- `prompts.PROMPTS[*].output_schema` 由 contracts 注入，不再手写分叉
 
 ## 验证
-- `ARTIFACT_OK` / `EXTRACT_EMPTY_OK`
-- Finalize + Canon：`se=1 l1=1 scenes=2 finals=1`
-- 重放：`idempotent=True` 仍只有 1 个 final version
-- `NO_SQUASH_OK` / `ALL_PR04_OK`
+- `ROLES_OK` 8 契约
+- `VALIDATE_OK`（extra forbid、strict 不强制 coerce、planner scenes min 1）
+- `NORMALIZE_OK`（`{"a":1,}` → None）
+- `PIPE_GOOD` / `PIPE_EXTRA_BLOCKED` / `PIPE_TRAIL_BLOCKED`
 - `/health/ready` ready
 
 ## 未完
-- PR-05 全量 strict Schema / PR-06 Context 硬预算
-- retrieval/patch 全步骤 checkpoint
+- PR-06 Context 硬预算
+- retrieval/patch 全步骤 checkpoint 深化
 - §14 故障注入 + 10 章 Go/No-Go
-- B-08 consistency 真实现 / B-12 pause 全边界深化
+- B-08 consistency 真实现
 
 **不得宣称** 12 不变量全绿或无人值守 10 章。

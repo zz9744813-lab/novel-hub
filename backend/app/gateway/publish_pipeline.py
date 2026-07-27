@@ -27,10 +27,6 @@ def _normalize(final: str, is_json: bool, meta: dict):
     if is_json:
         publishable = normalize_json(final)
         if publishable is None:
-            fixed = re.sub(r"```json\s*", "", final)
-            fixed = re.sub(r"```\s*$", "", fixed)
-            publishable = normalize_json(fixed)
-        if publishable is None:
             return None, PublishState.BLOCKED, {
                 **meta,
                 "block_reason": "json_parse_failed",
@@ -105,8 +101,9 @@ async def full_pipeline_async(
     is_json: bool = False,
     agent_role: str = "draft_writer",
     book_id=None,
+    response_contract=None,
 ):
-    """Async pipeline with Layer-2 AILeakJudge for prose content."""
+    """Async pipeline with Layer-2 AILeakJudge for prose + optional Pydantic contract."""
     meta = {
         "reasoning_detected": result.reasoning_detected,
         "inline_leak_detected": result.inline_leak_detected,
@@ -127,6 +124,54 @@ async def full_pipeline_async(
     publishable, state, meta = _normalize(final, is_json, meta)
     if state == PublishState.BLOCKED:
         return publishable, state, meta
+
+    # PR-05: strict contract validation (fail closed)
+    if is_json and response_contract is not None:
+        from app.contracts.agents import validate_payload
+        role = agent_role
+        # allow passing contract class or role string
+        if not isinstance(response_contract, str):
+            # class or instance — validate via model
+            try:
+                if isinstance(publishable, dict):
+                    obj = response_contract.model_validate(publishable)
+                    publishable = obj.model_dump(mode="json")
+                    meta["contract"] = getattr(response_contract, "__name__", "contract")
+                else:
+                    return None, PublishState.BLOCKED, {
+                        **meta,
+                        "block_reason": "contract_non_object",
+                    }
+            except Exception as e:
+                return None, PublishState.BLOCKED, {
+                    **meta,
+                    "block_reason": f"pydantic_validation_failed:{e}",
+                    "raw": str(final)[:200],
+                }
+        else:
+            validated, err = validate_payload(response_contract, publishable)
+            if err:
+                return None, PublishState.BLOCKED, {
+                    **meta,
+                    "block_reason": err,
+                    "raw": str(final)[:200],
+                }
+            publishable = validated
+            meta["contract"] = response_contract
+
+    elif is_json and response_contract is None:
+        # default: role-based contract if registered
+        from app.contracts.agents import get_contract, validate_payload
+        if get_contract(agent_role) is not None:
+            validated, err = validate_payload(agent_role, publishable)
+            if err:
+                return None, PublishState.BLOCKED, {
+                    **meta,
+                    "block_reason": err,
+                    "raw": str(final)[:200],
+                }
+            publishable = validated
+            meta["contract"] = agent_role
 
     if not is_json:
         text_body = publishable if isinstance(publishable, str) else str(publishable)

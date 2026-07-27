@@ -100,24 +100,33 @@ async def call_agent(
     temperature = (overrides or {}).get("temperature", AGENT_TEMPERATURES.get(agent_role, 0.7))
     is_json = AGENT_IS_JSON.get(agent_role, False)
 
-    # P1 LLM-003: pass JSON Schema to gateway when role is structured
+    # PR-05 / B-09: structured roles use Pydantic contract → json_schema (strict)
     response_format = None
-    output_schema = prompt_config.get("output_schema") if isinstance(prompt_config, dict) else None
-    if is_json and isinstance(output_schema, dict) and output_schema:
-        # Ensure schema is a proper object schema for OpenAI-compatible strict mode
-        schema = dict(output_schema)
-        schema.setdefault("type", "object")
-        # Many gateways require additionalProperties for strict json_schema
-        if schema.get("type") == "object" and "additionalProperties" not in schema:
-            schema["additionalProperties"] = True
-        response_format = {
-            "type": "json_schema",
-            "json_schema": {
-                "name": f"{agent_role}_v1".replace("-", "_")[:64],
-                "strict": False,
-                "schema": schema,
-            },
-        }
+    response_contract = None
+    if is_json:
+        from app.contracts.agents import (
+            get_contract,
+            response_format_for_role,
+            schema_for_role,
+        )
+        response_contract = get_contract(agent_role)
+        response_format = response_format_for_role(agent_role, strict=True)
+        if response_format is None:
+            # fallback to prompt output_schema if no contract registered
+            output_schema = prompt_config.get("output_schema") if isinstance(prompt_config, dict) else None
+            if isinstance(output_schema, dict) and output_schema:
+                schema = dict(output_schema)
+                schema.setdefault("type", "object")
+                if schema.get("type") == "object" and "additionalProperties" not in schema:
+                    schema["additionalProperties"] = False
+                response_format = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": f"{agent_role}_v1".replace("-", "_")[:64],
+                        "strict": True,
+                        "schema": schema,
+                    },
+                }
 
     try:
         provider, model, fallback_model = await _resolve_model(agent_role, book_id, overrides)
@@ -268,7 +277,61 @@ async def call_agent(
         is_json=is_json,
         agent_role=agent_role,
         book_id=book_id,
+        response_contract=(response_contract or agent_role) if is_json else None,
     )
+
+    # PR-05 §9.3: one repair attempt on schema/pydantic failure (same model)
+    br = (meta or {}).get("block_reason") or ""
+    if (
+        is_json
+        and publishable is None
+        and (
+            br.startswith("pydantic_validation_failed")
+            or br == "json_parse_failed"
+            or br == "contract_non_object"
+        )
+        and result.final_content
+    ):
+        logger.warning("schema fail for %s (%s); one repair attempt", agent_role, br)
+        repair_user = (
+            user_content
+            + "\n\n[SCHEMA_REPAIR]\n"
+            + "Previous output failed validation:\n"
+            + br
+            + "\nRaw (truncated):\n"
+            + (result.final_content or "")[:2000]
+            + "\nReturn ONLY valid JSON matching the required schema. No markdown."
+        )
+        repair_result = await stream_with_retry(
+            system_prompt=system_prompt,
+            user_content=repair_user,
+            model=model,
+            temperature=min(float(temperature), 0.2),
+            provider=provider,
+            fallback_model=fallback_model,
+            response_format=response_format,
+        )
+        # append repair attempts to audit list
+        if getattr(repair_result, "attempts", None):
+            attempts = list(attempts) + list(repair_result.attempts)
+            successful = next((a for a in attempts if a.success), None)
+            final_attempt = successful or attempts[-1]
+            actual_provider = final_attempt.provider
+            actual_model = final_attempt.model
+            attempt_no = final_attempt.attempt_no
+            route_type = final_attempt.route_type
+        result = repair_result
+        publishable, state, meta = await full_pipeline_async(
+            result,
+            is_json=is_json,
+            agent_role=agent_role,
+            book_id=book_id,
+            response_contract=response_contract or agent_role,
+        )
+        if publishable is None:
+            meta = {**(meta or {}), "schema_repair_attempted": True}
+        else:
+            meta = {**(meta or {}), "schema_repair_succeeded": True}
 
     new_status = "completed" if publishable is not None else "failed"
     completed_at = datetime.now(timezone.utc)

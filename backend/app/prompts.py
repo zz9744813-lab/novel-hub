@@ -183,3 +183,16 @@ AGENT_IS_JSON = {
     "query_planner": True,
     "evidence_ranker": True,
 }
+
+
+# PR-05: single source of truth for structured schemas (Pydantic contracts)
+try:
+    from app.contracts.agents import schema_for_role as _schema_for_role
+
+    for _role, _cfg in PROMPTS.items():
+        _sch = _schema_for_role(_role)
+        if _sch is not None:
+            _cfg["output_schema"] = _sch
+except Exception as _e:  # pragma: no cover
+    import logging as _logging
+    _logging.getLogger("novelforge.prompts").warning("contract schema attach failed: %s", _e)

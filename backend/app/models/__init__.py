@@ -3,6 +3,7 @@ from app.models.base import Base
 from app.models.tables import (
     Book, BookSetting, OutlineVersion, OutlineNode, OutlineDependency,
     ChapterTask, Chapter, ChapterVersion, Scene, Paragraph, ChapterStateEvent,
+    ChapterRun, ChapterStepRun, ChapterDispatchOutbox,
     CharacterCard, CharacterStateEvent, CharacterStateSnapshot,
     WorldRule, PlotThread, RelationshipEvent, ItemEvent, TimelineEvent,
     StoryEvent, EntityAlias, SceneSearchDocument,
@@ -21,6 +22,7 @@ __all__ = [
     "Base",
     "Book", "BookSetting", "OutlineVersion", "OutlineNode", "OutlineDependency",
     "ChapterTask", "Chapter", "ChapterVersion", "Scene", "Paragraph", "ChapterStateEvent",
+    "ChapterRun", "ChapterStepRun", "ChapterDispatchOutbox",
     "CharacterCard", "CharacterStateEvent", "CharacterStateSnapshot",
     "WorldRule", "PlotThread", "RelationshipEvent", "ItemEvent", "TimelineEvent",
     "StoryEvent", "EntityAlias", "SceneSearchDocument",

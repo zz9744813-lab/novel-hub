@@ -74,6 +74,7 @@ async def commit_l4_with_events(
     as_of_chapter: int,
     events: list[dict],
     source_run_id: uuid.UUID,
+    finalized_version: int | None = None,
 ) -> None:
     """§5.5 + §7.4: Finalization atomic transaction with advisory lock.
 
@@ -83,6 +84,29 @@ async def commit_l4_with_events(
     from app.v74_utils import advisory_lock_key
     lock_key = advisory_lock_key(book_id)
     await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key})
+
+    # Resolve real finalized_version when available (B-06)
+    if finalized_version is None:
+        from app.models import Chapter
+
+        ch = (
+            await db.execute(select(Chapter).where(Chapter.id == chapter_id))
+        ).scalar_one_or_none()
+        if ch and ch.finalized_version is not None:
+            finalized_version = int(ch.finalized_version)
+        else:
+            # Prefer max chapter_versions; never hardcode 1 forever
+            from app.models import ChapterVersion
+            from sqlalchemy import func as sa_func
+
+            mv = (
+                await db.execute(
+                    select(sa_func.coalesce(sa_func.max(ChapterVersion.version), 0)).where(
+                        ChapterVersion.chapter_id == chapter_id
+                    )
+                )
+            ).scalar()
+            finalized_version = int(mv or 0) or 1
 
     # Merge buffer: entity_id -> merged state
     merged: dict[uuid.UUID, dict] = {}
@@ -148,7 +172,7 @@ async def commit_l4_with_events(
         id=uuid.uuid4(),
         book_id=book_id,
         chapter_id=chapter_id,
-        finalized_version=1,
+        finalized_version=int(finalized_version),
         source_hash=compute_source_hash(str(events)),
         status="generated",
         ledger_json={"events": events},

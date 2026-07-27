@@ -23,10 +23,12 @@ async def _patched_on_connect(self, *args, **kwargs):
 _redis_conn.AbstractConnection.on_connect = _patched_on_connect
 
 from arq.connections import RedisSettings
+from arq import cron
 from app.database import async_session_factory
 from app.state_machine import ChapterState
-from app.models import Chapter, ChapterTask
+from app.models import Chapter, ChapterTask, ChapterRun
 from app.engine.pipeline import execute_pipeline
+from app.engine.outcomes import PipelineOutcome, PipelineResult
 from sqlalchemy import select, update, text
 
 logger = logging.getLogger("novelforge.worker")
@@ -234,16 +236,121 @@ async def run_chapter_pipeline(ctx, chapter_id: str, book_id: str, chapter_no: i
         hb_task = asyncio.create_task(_heartbeat_loop(task_row_id, stop))
 
         logger.info(f"Starting chapter {chapter_no} pipeline (chapter_id={chapter_id})")
-        await execute_pipeline(uuid.UUID(book_id), uuid.UUID(chapter_id), chapter_no)
+        # Best-effort: pick active/latest chapter_run for this chapter
+        chapter_run_id = None
+        async with async_session_factory() as db:
+            ch = (
+                await db.execute(select(Chapter).where(Chapter.id == uuid.UUID(chapter_id)))
+            ).scalar_one_or_none()
+            if ch and getattr(ch, "active_run_id", None):
+                chapter_run_id = ch.active_run_id
+            else:
+                run = (
+                    await db.execute(
+                        select(ChapterRun)
+                        .where(ChapterRun.chapter_id == uuid.UUID(chapter_id))
+                        .order_by(ChapterRun.created_at.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if run:
+                    chapter_run_id = run.id
+
+        result = await execute_pipeline(
+            uuid.UUID(book_id),
+            uuid.UUID(chapter_id),
+            chapter_no,
+            chapter_run_id=chapter_run_id,
+        )
+        if not isinstance(result, PipelineResult):
+            result = PipelineResult(
+                outcome=PipelineOutcome.PERMANENT_FAILURE,
+                chapter_id=uuid.UUID(chapter_id),
+                error_code="missing_pipeline_result",
+            )
+
+        task_status = "failed"
+        run_status = "failed"
+        now = datetime.now(timezone.utc)
+        match result.outcome:
+            case PipelineOutcome.FINALIZED:
+                # INV-05: only succeed after final pointer check
+                async with async_session_factory() as db:
+                    ch = (
+                        await db.execute(
+                            select(Chapter).where(Chapter.id == uuid.UUID(chapter_id))
+                        )
+                    ).scalar_one_or_none()
+                    if (
+                        ch
+                        and ch.status == ChapterState.FINALIZED.value
+                        and ch.finalized_version is not None
+                    ):
+                        task_status = "completed"
+                        run_status = "succeeded"
+                    else:
+                        task_status = "failed"
+                        run_status = "failed"
+                        result = PipelineResult(
+                            outcome=PipelineOutcome.PERMANENT_FAILURE,
+                            chapter_id=uuid.UUID(chapter_id),
+                            chapter_run_id=chapter_run_id,
+                            error_code="final_pointer_missing",
+                            detail={"chapter_status": getattr(ch, "status", None)},
+                        )
+            case PipelineOutcome.BLOCKED_DEPENDENCY:
+                task_status = "waiting_dependency"
+                run_status = "waiting_dependency"
+            case PipelineOutcome.RESOURCE_BLOCKED:
+                task_status = "resource_blocked"
+                run_status = "retryable"
+            case PipelineOutcome.PAUSED:
+                task_status = "paused"
+                run_status = "paused"
+            case PipelineOutcome.NEEDS_HUMAN:
+                task_status = "needs_human"
+                run_status = "needs_human"
+            case PipelineOutcome.RETRYABLE_FAILURE:
+                task_status = "failed"
+                run_status = "retryable"
+            case PipelineOutcome.PERMANENT_FAILURE:
+                task_status = "failed"
+                run_status = "failed"
 
         async with async_session_factory() as db:
             await db.execute(
                 update(ChapterTask)
                 .where(ChapterTask.id == task_row_id)
-                .values(status="completed", lease_owner=None, lease_expires_at=None)
+                .values(
+                    status=task_status,
+                    lease_owner=None,
+                    lease_expires_at=None,
+                    last_error_code=result.error_code,
+                    last_error_detail=(str(result.detail)[:2000] if result.detail else None),
+                )
             )
+            if chapter_run_id:
+                await db.execute(
+                    update(ChapterRun)
+                    .where(ChapterRun.id == chapter_run_id)
+                    .values(
+                        status=run_status,
+                        lease_owner=None,
+                        lease_expires_at=None,
+                        finished_at=now if run_status in ("succeeded", "failed", "needs_human", "cancelled") else None,
+                        error_code=result.error_code,
+                        error_detail=result.detail or None,
+                    )
+                )
             await db.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": lock_key})
             await db.commit()
+        logger.info(
+            "chapter %s pipeline outcome=%s task=%s run=%s",
+            chapter_no,
+            result.outcome.value,
+            task_status,
+            run_status,
+        )
 
     except Exception as e:
         logger.error(f"Pipeline failed for chapter {chapter_no}: {e}", exc_info=True)
@@ -310,6 +417,15 @@ async def on_startup(ctx):
     except Exception as e:
         logger.error(f"Startup reconciler failed: {e}")
 
+    # B-11: drain transactional outbox
+    try:
+        from app.workers.outbox_dispatcher import dispatch_once
+
+        out = await dispatch_once()
+        logger.info(f"Startup outbox dispatch: {out}")
+    except Exception as e:
+        logger.error(f"Startup outbox dispatch failed: {e}")
+
     # Recover only expired leases (legacy path kept as safety net)
     async with async_session_factory() as db:
         now = datetime.now(timezone.utc)
@@ -359,8 +475,24 @@ _redis_host = os.environ.get("REDIS_HOST", "redis")
 _redis_port = int(os.environ.get("REDIS_PORT", "6379"))
 
 
+
+
+async def outbox_tick(ctx):
+    """Periodic outbox drain (every ~minute via cron)."""
+    try:
+        from app.workers.outbox_dispatcher import dispatch_once
+        report = await dispatch_once()
+        if report.get("dispatched") or report.get("backfilled") or report.get("failed"):
+            logger.info(f"outbox_tick: {report}")
+    except Exception as e:
+        logger.warning(f"outbox_tick failed: {e}")
+
+
 class WorkerSettings:
-    functions = [run_chapter_pipeline]
+    # arq cron: minute-level outbox drain (B-11)
+    cron_jobs = [cron(outbox_tick, second={0, 30})]
+
+    functions = [run_chapter_pipeline, outbox_tick]
     on_startup = on_startup
     on_shutdown = on_shutdown
     redis_settings = RedisSettings(

@@ -3,7 +3,7 @@ import uuid
 import json
 import asyncio
 from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException, Depends, WebSocket, WebSocketDisconnect, UploadFile, File, Form
+from fastapi import Request, APIRouter, HTTPException, Depends, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from sqlalchemy import select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, async_session_factory
@@ -249,26 +249,162 @@ async def get_outline_graph(book_id: str, db: AsyncSession = Depends(get_db)):
 
 # ---- Chapter operations ----
 @router.post("/api/books/{book_id}/chapters/{chapter_no}/run")
-async def run_chapter(book_id: str, chapter_no: int, db: AsyncSession = Depends(get_db)):
+async def run_chapter(
+    book_id: str,
+    chapter_no: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Create ChapterRun + Outbox atomically (B-11 / INV-11). Redis is best-effort."""
+    from app.models import ChapterRun, OutlineVersion
+    from app.workers.outbox_dispatcher import create_run_and_outbox
+    from app.engine.state_transition import transition_chapter, IllegalTransitionError, StateConflictError
+
     bid = uuid.UUID(book_id)
-    # Get outline node for this chapter
-    node = (await db.execute(
-        select(OutlineNode).where(OutlineNode.book_id == bid, OutlineNode.chapter_no == chapter_no)
-    )).scalar_one_or_none()
+    request_id = request.headers.get("Idempotency-Key") or request.headers.get("idempotency-key") or str(gen_uuid())
+
+    # Prefer approved outline version; fall back to latest
+    ov = (
+        await db.execute(
+            select(OutlineVersion)
+            .where(OutlineVersion.book_id == bid, OutlineVersion.status == "approved")
+            .order_by(OutlineVersion.version.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if not ov:
+        ov = (
+            await db.execute(
+                select(OutlineVersion)
+                .where(OutlineVersion.book_id == bid)
+                .order_by(OutlineVersion.version.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    if not ov:
+        raise HTTPException(404, "Outline version not found")
+
+    node = (
+        await db.execute(
+            select(OutlineNode).where(
+                OutlineNode.book_id == bid,
+                OutlineNode.chapter_no == chapter_no,
+                OutlineNode.outline_version_id == ov.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not node:
+        # fallback without version filter for legacy data
+        node = (
+            await db.execute(
+                select(OutlineNode).where(
+                    OutlineNode.book_id == bid, OutlineNode.chapter_no == chapter_no
+                )
+            )
+        ).scalar_one_or_none()
     if not node:
         raise HTTPException(404, f"Outline node for chapter {chapter_no} not found")
 
-    # Create or update chapter
-    existing = await db.execute(select(Chapter).where(Chapter.book_id == bid, Chapter.chapter_no == chapter_no))
-    chapter = existing.scalar_one_or_none()
-    if not chapter:
-        chapter = Chapter(id=gen_uuid(), book_id=bid, chapter_no=chapter_no,
-                           outline_node_id=node.id, status=ChapterState.QUEUED.value, title=node.title)
-        db.add(chapter)
-    else:
-        chapter.status = ChapterState.QUEUED.value
+    # Idempotency: same chapter + request_id returns existing run
+    existing_run = (
+        await db.execute(
+            select(ChapterRun).where(
+                ChapterRun.chapter_id.in_(
+                    select(Chapter.id).where(Chapter.book_id == bid, Chapter.chapter_no == chapter_no)
+                ),
+                ChapterRun.request_id == request_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing_run:
+        return {
+            "chapter_id": str(existing_run.chapter_id),
+            "run_id": str(existing_run.id),
+            "status": existing_run.status,
+            "chapter_no": chapter_no,
+            "status_url": f"/api/chapter-runs/{existing_run.id}",
+        }
 
-    # Reuse latest ChapterTask for this book/chapter instead of always inserting
+    # Active run conflict (INV-04)
+    chapter = (
+        await db.execute(
+            select(Chapter).where(Chapter.book_id == bid, Chapter.chapter_no == chapter_no)
+        )
+    ).scalar_one_or_none()
+    if chapter:
+        active = (
+            await db.execute(
+                select(ChapterRun).where(
+                    ChapterRun.chapter_id == chapter.id,
+                    ChapterRun.status.in_(
+                        ("queued", "running", "paused", "waiting_dependency", "retryable")
+                    ),
+                )
+            )
+        ).scalar_one_or_none()
+        if active:
+            raise HTTPException(
+                409,
+                detail={
+                    "message": "active run exists",
+                    "existing_run_id": str(active.id),
+                },
+            )
+        if chapter.status == ChapterState.FINALIZED.value:
+            raise HTTPException(409, "Chapter already finalized; mode=normal cannot overwrite final")
+
+    if not chapter:
+        chapter = Chapter(
+            id=gen_uuid(),
+            book_id=bid,
+            chapter_no=chapter_no,
+            outline_node_id=node.id,
+            status=ChapterState.QUEUED.value,
+            title=node.title,
+        )
+        db.add(chapter)
+        await db.flush()
+    else:
+        # transition to queued via service when not already queued
+        if chapter.status != ChapterState.QUEUED.value:
+            try:
+                await transition_chapter(
+                    chapter.id,
+                    ChapterState.QUEUED.value,
+                    reason="api run request",
+                    actor="api",
+                    db=db,
+                )
+            except (IllegalTransitionError, StateConflictError, ValueError) as e:
+                # force for failed/needs_human/resource_blocked via state machine rules
+                if chapter.status in (
+                    ChapterState.FAILED.value,
+                    ChapterState.NEEDS_HUMAN.value,
+                    ChapterState.RESOURCE_BLOCKED.value,
+                    ChapterState.BLOCKED_BY_DEPENDENCY.value,
+                ):
+                    await transition_chapter(
+                        chapter.id,
+                        ChapterState.QUEUED.value,
+                        reason="api requeue",
+                        actor="api",
+                        db=db,
+                    )
+                else:
+                    raise HTTPException(409, str(e))
+
+    run = await create_run_and_outbox(
+        db,
+        book_id=bid,
+        chapter_id=chapter.id,
+        chapter_no=chapter_no,
+        outline_version_id=ov.id if ov else node.outline_version_id,
+        request_id=request_id,
+        created_by="api",
+    )
+    chapter.active_run_id = run.id
+
+    # Compat ChapterTask for old worker path
     existing_task = (
         await db.execute(
             select(ChapterTask)
@@ -278,78 +414,164 @@ async def run_chapter(book_id: str, chapter_no: int, db: AsyncSession = Depends(
         )
     ).scalar_one_or_none()
     if existing_task:
-        task = existing_task
-        task.status = ChapterState.QUEUED.value
-        task.lease_owner = None
-        task.lease_expires_at = None
-        task.heartbeat_at = None
-        task.last_error_code = None
-        task.last_error_detail = None
+        existing_task.status = ChapterState.QUEUED.value
+        existing_task.lease_owner = None
+        existing_task.lease_expires_at = None
+        existing_task.heartbeat_at = None
+        existing_task.last_error_code = None
+        existing_task.last_error_detail = None
     else:
-        task = ChapterTask(id=gen_uuid(), book_id=bid, chapter_no=chapter_no, status=ChapterState.QUEUED.value)
-        db.add(task)
-    await db.flush()
-    # Commit before enqueuing ARQ job - worker uses a separate DB connection
-    # and cannot see uncommitted data
+        db.add(
+            ChapterTask(
+                id=gen_uuid(),
+                book_id=bid,
+                chapter_no=chapter_no,
+                status=ChapterState.QUEUED.value,
+            )
+        )
+
     await db.commit()
 
-    # Enqueue via ARQ
+    # Best-effort immediate dispatch; outbox recovers on failure (INV-11)
     try:
-        from arq import create_pool
-        from arq.connections import RedisSettings
-        import redis.asyncio.connection as _rc
-        _rc.AbstractConnection.lib_name = None
-        _rc.AbstractConnection.lib_version = None
-        redis_url = os.environ.get("REDIS_URL", "redis://redis:6379/0")
-        redis_parts = redis_url.replace("redis://", "").split(":")
-        r_host = redis_parts[0]
-        r_port = int(redis_parts[1].split("/")[0]) if len(redis_parts) > 1 else 6379
-        pool = await create_pool(RedisSettings(host=r_host, port=r_port))
-        await pool.enqueue_job("run_chapter_pipeline", str(chapter.id), str(bid), chapter_no)
-    except Exception as e:
-        pass  # Worker will pick up on recovery
+        from app.workers.outbox_dispatcher import dispatch_once
 
-    return {"chapter_id": str(chapter.id), "status": "queued", "chapter_no": chapter_no}
+        await dispatch_once(limit=5)
+    except Exception:
+        pass
+
+    return {
+        "chapter_id": str(chapter.id),
+        "run_id": str(run.id),
+        "status": "queued",
+        "chapter_no": chapter_no,
+        "status_url": f"/api/chapter-runs/{run.id}",
+    }
 
 
 @router.post("/api/chapters/{chapter_id}/pause")
 async def pause_chapter(chapter_id: str, db: AsyncSession = Depends(get_db)):
+    """B-12: collaborative pause via control_requested + needs_human for compat."""
+    from app.models import ChapterRun
+    from app.engine.state_transition import transition_chapter
+
     result = await db.execute(select(Chapter).where(Chapter.id == uuid.UUID(chapter_id)))
     chapter = result.scalar_one_or_none()
     if not chapter:
         raise HTTPException(404, "Chapter not found")
-    chapter.status = ChapterState.NEEDS_HUMAN.value
+    # Mark active run control_requested=pause
+    if chapter.active_run_id:
+        run = (
+            await db.execute(select(ChapterRun).where(ChapterRun.id == chapter.active_run_id))
+        ).scalar_one_or_none()
+        if run and run.status in ("queued", "running", "retryable", "waiting_dependency"):
+            run.control_requested = "pause"
+    try:
+        await transition_chapter(
+            chapter.id,
+            ChapterState.NEEDS_HUMAN.value,
+            reason="api pause",
+            actor="api",
+            db=db,
+        )
+    except Exception as e:
+        raise HTTPException(409, str(e))
     await db.flush()
     return {"chapter_id": str(chapter.id), "status": "paused"}
 
 
 @router.post("/api/chapters/{chapter_id}/resume")
 async def resume_chapter(chapter_id: str, db: AsyncSession = Depends(get_db)):
+    """B-12: clear control, requeue chapter, write outbox for active/new run."""
+    from app.models import ChapterRun
+    from app.engine.state_transition import transition_chapter
+    from app.workers.outbox_dispatcher import create_run_and_outbox
+
     result = await db.execute(select(Chapter).where(Chapter.id == uuid.UUID(chapter_id)))
     chapter = result.scalar_one_or_none()
     if not chapter:
         raise HTTPException(404, "Chapter not found")
-    chapter.status = ChapterState.QUEUED.value
-    await db.flush()
-    return {"chapter_id": str(chapter.id), "status": "queued"}
+    try:
+        await transition_chapter(
+            chapter.id,
+            ChapterState.QUEUED.value,
+            reason="api resume",
+            actor="api",
+            db=db,
+        )
+    except Exception as e:
+        raise HTTPException(409, str(e))
+
+    run = None
+    if chapter.active_run_id:
+        run = (
+            await db.execute(select(ChapterRun).where(ChapterRun.id == chapter.active_run_id))
+        ).scalar_one_or_none()
+        if run and run.status in ("paused", "needs_human", "retryable", "failed", "waiting_dependency"):
+            run.status = "queued"
+            run.control_requested = "none"
+            run.lease_owner = None
+            run.lease_expires_at = None
+            # ensure outbox
+            from app.models import ChapterDispatchOutbox
+            from datetime import datetime, timezone
+            dedupe = f"dispatch:{run.id}:resume:{uuid.uuid4().hex[:8]}"
+            db.add(
+                ChapterDispatchOutbox(
+                    id=gen_uuid(),
+                    chapter_run_id=run.id,
+                    dedupe_key=dedupe,
+                    event_type="dispatch_chapter_run",
+                    payload={
+                        "chapter_id": str(chapter.id),
+                        "book_id": str(chapter.book_id),
+                        "chapter_no": chapter.chapter_no,
+                        "run_id": str(run.id),
+                        "job_id": f"chapter-run:{run.id}:{dedupe}",
+                    },
+                    status="pending",
+                    available_at=datetime.now(timezone.utc),
+                )
+            )
+    await db.commit()
+    try:
+        from app.workers.outbox_dispatcher import dispatch_once
+        await dispatch_once(limit=5)
+    except Exception:
+        pass
+    return {
+        "chapter_id": str(chapter.id),
+        "status": "queued",
+        "run_id": str(run.id) if run else None,
+    }
 
 
 @router.get("/api/chapters/{chapter_id}")
 async def get_chapter(chapter_id: str, db: AsyncSession = Depends(get_db)):
+    """B-13 / INV-02: default read returns finalized content only."""
     result = await db.execute(select(Chapter).where(Chapter.id == uuid.UUID(chapter_id)))
     chapter = result.scalar_one_or_none()
     if not chapter:
         raise HTTPException(404, "Chapter not found")
-    # Get latest version
-    cv = await db.execute(
-        select(ChapterVersion).where(ChapterVersion.chapter_id == chapter.id).order_by(ChapterVersion.version.desc()).limit(1)
-    )
-    version = cv.scalar_one_or_none()
-    return {"chapter_id": str(chapter.id), "chapter_no": chapter.chapter_no,
-            "status": chapter.status, "title": chapter.title,
-            "finalized_version": chapter.finalized_version,
-            "content": version.content if version else None,
-            "word_count": version.word_count if version else 0}
+    version = None
+    if chapter.finalized_version is not None:
+        version = (
+            await db.execute(
+                select(ChapterVersion).where(
+                    ChapterVersion.chapter_id == chapter.id,
+                    ChapterVersion.version == chapter.finalized_version,
+                )
+            )
+        ).scalar_one_or_none()
+    return {
+        "chapter_id": str(chapter.id),
+        "chapter_no": chapter.chapter_no,
+        "status": chapter.status,
+        "title": chapter.title,
+        "finalized_version": chapter.finalized_version,
+        "content": version.content if version else None,
+        "word_count": version.word_count if version else 0,
+    }
 
 
 @router.get("/api/chapters/{chapter_id}/context-package")
@@ -1379,26 +1601,17 @@ async def export_book(book_id: str, db: AsyncSession = Depends(get_db)):
     parts: list[str] = [f"# {book.title}", ""]
     exported = 0
     for ch in chapters:
-        # Prefer finalized version pointer, else latest version
-        version = None
-        if ch.finalized_version is not None:
-            version = (
-                await db.execute(
-                    select(ChapterVersion).where(
-                        ChapterVersion.chapter_id == ch.id,
-                        ChapterVersion.version == ch.finalized_version,
-                    )
+        # B-13 / INV-02: export ONLY finalized chapters with final pointer
+        if ch.status != "finalized" or ch.finalized_version is None:
+            continue
+        version = (
+            await db.execute(
+                select(ChapterVersion).where(
+                    ChapterVersion.chapter_id == ch.id,
+                    ChapterVersion.version == ch.finalized_version,
                 )
-            ).scalar_one_or_none()
-        if version is None:
-            version = (
-                await db.execute(
-                    select(ChapterVersion)
-                    .where(ChapterVersion.chapter_id == ch.id)
-                    .order_by(ChapterVersion.version.desc())
-                    .limit(1)
-                )
-            ).scalar_one_or_none()
+            )
+        ).scalar_one_or_none()
         content = (version.content if version else None) or ""
         if not content.strip():
             continue

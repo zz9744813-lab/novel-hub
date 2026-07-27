@@ -137,19 +137,39 @@ async def generate_patch(
     }
 
 
+class PatchStaleError(Exception):
+    """B-10 / INV-08: expected_hash mismatch — zero mutation."""
+
+    def __init__(self, paragraph_key: str | None = None, expected_hash: str | None = None):
+        self.paragraph_key = paragraph_key
+        self.expected_hash = expected_hash
+        super().__init__(f"PATCH_STALE key={paragraph_key} expected={expected_hash}")
+
+
 async def apply_patches(chapter_content: str, patches: list[dict]) -> str:
+    """Apply patches with strict CAS (AI__.md v3.0 §11.3).
+
+    Hash mismatch raises PatchStaleError and leaves content unchanged.
+    No silent fallback to first non-empty paragraph.
+    """
+    if not patches:
+        return chapter_content
     paragraphs = chapter_content.split("\n\n")
     for patch in patches:
+        expected = patch.get("expected_hash")
+        replacement = patch.get("replacement_text")
+        if not expected or replacement is None:
+            raise PatchStaleError(patch.get("paragraph_key") or patch.get("target_paragraph_key"), expected)
         applied = False
         for i, para in enumerate(paragraphs):
-            if compute_hash(para) == patch.get("expected_hash"):
-                paragraphs[i] = patch["replacement_text"]
+            if compute_hash(para) == expected:
+                paragraphs[i] = replacement
                 applied = True
                 break
-        if not applied and patch.get("replacement_text"):
-            # fallback: replace first non-empty paragraph
-            for i, para in enumerate(paragraphs):
-                if para.strip():
-                    paragraphs[i] = patch["replacement_text"]
-                    break
+        if not applied:
+            # B-10: never mutate unrelated paragraphs
+            raise PatchStaleError(
+                patch.get("paragraph_key") or patch.get("target_paragraph_key"),
+                expected,
+            )
     return "\n\n".join(paragraphs)

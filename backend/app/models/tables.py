@@ -110,6 +110,7 @@ class Chapter(Base, TimestampMixin):
     state_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     state_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_transition_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    active_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     __table_args__ = (UniqueConstraint("book_id", "chapter_no"),)
 
 
@@ -129,6 +130,10 @@ class ChapterStateEvent(Base, TimestampMixin):
     actor: Mapped[str] = mapped_column(String(100), nullable=False, default="system")
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    chapter_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    step_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reason_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    detail: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     __table_args__ = (UniqueConstraint("chapter_id", "state_version"),)
 
 
@@ -141,7 +146,83 @@ class ChapterVersion(Base, TimestampMixin):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     word_count: Mapped[int] = mapped_column(Integer, default=0)
     source_run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    version_kind: Mapped[str | None] = mapped_column(Text, nullable=True)  # draft|patched|final|human_revision
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    chapter_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    finalization_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     __table_args__ = (UniqueConstraint("chapter_id", "version"),)
+
+
+class ChapterRun(Base, TimestampMixin):
+    """One recoverable production run for a chapter (AI__.md v3.0 §4.1.2)."""
+    __tablename__ = "chapter_runs"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=False, index=True)
+    chapter_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("chapters.id"), nullable=False, index=True)
+    chapter_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    outline_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("outline_versions.id"), nullable=False
+    )
+    pipeline_version: Mapped[str] = mapped_column(Text, nullable=False, default="pipeline-v2")
+    status: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    current_step: Mapped[str | None] = mapped_column(Text, nullable=True)
+    control_requested: Mapped[str] = mapped_column(Text, nullable=False, default="none")
+    request_id: Mapped[str] = mapped_column(Text, nullable=False)
+    resume_from_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    model_binding_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    budget_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    lease_owner: Mapped[str | None] = mapped_column(Text, nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_detail: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    created_by: Mapped[str] = mapped_column(Text, nullable=False, default="api")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    __table_args__ = (UniqueConstraint("chapter_id", "request_id"),)
+
+
+class ChapterStepRun(Base, TimestampMixin):
+    """Step execution / checkpoint row (AI__.md v3.0 §4.1.4)."""
+    __tablename__ = "chapter_step_runs"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    chapter_run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chapter_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    step_name: Mapped[str] = mapped_column(Text, nullable=False)
+    step_key: Mapped[str] = mapped_column(Text, nullable=False)
+    attempt_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    output_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    output_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    output_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    artifact_ref: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    reused_from_step_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_detail: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    __table_args__ = (UniqueConstraint("chapter_run_id", "step_key", "attempt_no"),)
+
+
+class ChapterDispatchOutbox(Base, TimestampMixin):
+    """Transactional outbox for chapter run dispatch (AI__.md v3.0 §4.1.5)."""
+    __tablename__ = "chapter_dispatch_outbox"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    chapter_run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chapter_runs.id"), nullable=False
+    )
+    dedupe_key: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    event_type: Mapped[str] = mapped_column(Text, nullable=False, default="dispatch_chapter_run")
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    locked_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 # ---- Scene & paragraph tables ----
@@ -548,6 +629,9 @@ class AgentRun(Base, TimestampMixin):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     idempotency_key: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     parent_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    chapter_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    step_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(Text, nullable=True)
     __table_args__ = (Index("idx_agent_runs_idempotency", "idempotency_key"),)
 
 

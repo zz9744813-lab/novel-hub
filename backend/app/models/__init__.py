@@ -2,7 +2,7 @@
 from app.models.base import Base
 from app.models.tables import (
     Book, BookSetting, OutlineVersion, OutlineNode, OutlineDependency,
-    ChapterTask, Chapter, ChapterVersion, Scene, Paragraph,
+    ChapterTask, Chapter, ChapterVersion, Scene, Paragraph, ChapterStateEvent,
     CharacterCard, CharacterStateEvent, CharacterStateSnapshot,
     WorldRule, PlotThread, RelationshipEvent, ItemEvent, TimelineEvent,
     StoryEvent, EntityAlias, SceneSearchDocument,
@@ -20,7 +20,7 @@ from app.models.tables import (
 __all__ = [
     "Base",
     "Book", "BookSetting", "OutlineVersion", "OutlineNode", "OutlineDependency",
-    "ChapterTask", "Chapter", "ChapterVersion", "Scene", "Paragraph",
+    "ChapterTask", "Chapter", "ChapterVersion", "Scene", "Paragraph", "ChapterStateEvent",
     "CharacterCard", "CharacterStateEvent", "CharacterStateSnapshot",
     "WorldRule", "PlotThread", "RelationshipEvent", "ItemEvent", "TimelineEvent",
     "StoryEvent", "EntityAlias", "SceneSearchDocument",

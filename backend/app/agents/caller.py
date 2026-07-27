@@ -100,6 +100,25 @@ async def call_agent(
     temperature = (overrides or {}).get("temperature", AGENT_TEMPERATURES.get(agent_role, 0.7))
     is_json = AGENT_IS_JSON.get(agent_role, False)
 
+    # P1 LLM-003: pass JSON Schema to gateway when role is structured
+    response_format = None
+    output_schema = prompt_config.get("output_schema") if isinstance(prompt_config, dict) else None
+    if is_json and isinstance(output_schema, dict) and output_schema:
+        # Ensure schema is a proper object schema for OpenAI-compatible strict mode
+        schema = dict(output_schema)
+        schema.setdefault("type", "object")
+        # Many gateways require additionalProperties for strict json_schema
+        if schema.get("type") == "object" and "additionalProperties" not in schema:
+            schema["additionalProperties"] = True
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": f"{agent_role}_v1".replace("-", "_")[:64],
+                "strict": False,
+                "schema": schema,
+            },
+        }
+
     try:
         provider, model, fallback_model = await _resolve_model(agent_role, book_id, overrides)
     except ModelBindingMissingError as e:
@@ -167,6 +186,7 @@ async def call_agent(
         temperature=temperature,
         provider=provider,
         fallback_model=fallback_model,
+        response_format=response_format,
     )
 
     attempts = list(getattr(result, "attempts", None) or [])
@@ -227,6 +247,7 @@ async def call_agent(
                     "is_json": is_json,
                     "route_type": att.route_type,
                     "success": att.success,
+                    "response_format": bool(response_format),
                 },
                 assembly_manifest=default_manifest,
                 l4_refs=l4_refs or [],

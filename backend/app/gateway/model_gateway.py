@@ -127,6 +127,7 @@ async def stream_completion_and_collect(
     max_tokens: int = 16384,
     provider_role: str = "primary",
     provider: str | None = None,
+    response_format: dict | None = None,
 ) -> StreamResult:
     """Stream and collect all chunks from a single provider attempt."""
     config = _get_provider_config(provider_role, provider=provider)
@@ -145,6 +146,8 @@ async def stream_completion_and_collect(
         "max_tokens": max_tokens,
         "stream": True,
     }
+    if response_format:
+        payload["response_format"] = response_format
 
     result = StreamResult(
         provider_used=provider or provider_role,
@@ -283,6 +286,7 @@ async def stream_with_retry(
     provider: str | None = None,
     fallback_model: str | None = None,
     fallback_provider: str | None = None,
+    response_format: dict | None = None,
 ) -> StreamResult:
     """§11.11 + P0-05: Retry/fallback with full AttemptRecord audit.
 
@@ -320,6 +324,7 @@ async def stream_with_retry(
             max_tokens=max_tokens,
             provider_role=provider_role,
             provider=use_provider,
+            response_format=response_format,
         )
         completed = datetime.now(timezone.utc)
         success = bool(result.final_content and not result.error)

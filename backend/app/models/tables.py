@@ -106,7 +106,30 @@ class Chapter(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(50), default="queued", nullable=False, index=True)
     finalized_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     title: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # P1 CORE-001: CAS / audit fields for State Transition Service
+    state_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    state_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_transition_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     __table_args__ = (UniqueConstraint("book_id", "chapter_no"),)
+
+
+class ChapterStateEvent(Base, TimestampMixin):
+    """Immutable audit log for chapter status transitions (P1 CORE-002)."""
+    __tablename__ = "chapter_state_events"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    chapter_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chapters.id"), nullable=False, index=True
+    )
+    book_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("books.id"), nullable=False, index=True
+    )
+    from_state: Mapped[str] = mapped_column(String(50), nullable=False)
+    to_state: Mapped[str] = mapped_column(String(50), nullable=False)
+    state_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    actor: Mapped[str] = mapped_column(String(100), nullable=False, default="system")
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    __table_args__ = (UniqueConstraint("chapter_id", "state_version"),)
 
 
 class ChapterVersion(Base, TimestampMixin):

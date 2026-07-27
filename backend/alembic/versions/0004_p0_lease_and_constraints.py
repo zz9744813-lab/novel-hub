@@ -9,17 +9,49 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("chapter_tasks", sa.Column("lease_owner", sa.String(200), nullable=True))
-    op.add_column("chapter_tasks", sa.Column("lease_expires_at", sa.DateTime(timezone=True), nullable=True))
-    op.add_column("chapter_tasks", sa.Column("heartbeat_at", sa.DateTime(timezone=True), nullable=True))
-    op.add_column(
-        "chapter_tasks",
-        sa.Column("attempt_no", sa.Integer(), nullable=False, server_default="0"),
+    # Idempotent: columns may already exist from earlier manual/partial upgrades
+    op.execute(
+        """
+        DO $$ BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='chapter_tasks' AND column_name='lease_owner'
+          ) THEN
+            ALTER TABLE chapter_tasks ADD COLUMN lease_owner VARCHAR(200);
+          END IF;
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='chapter_tasks' AND column_name='lease_expires_at'
+          ) THEN
+            ALTER TABLE chapter_tasks ADD COLUMN lease_expires_at TIMESTAMPTZ;
+          END IF;
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='chapter_tasks' AND column_name='heartbeat_at'
+          ) THEN
+            ALTER TABLE chapter_tasks ADD COLUMN heartbeat_at TIMESTAMPTZ;
+          END IF;
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='chapter_tasks' AND column_name='attempt_no'
+          ) THEN
+            ALTER TABLE chapter_tasks ADD COLUMN attempt_no INTEGER NOT NULL DEFAULT 0;
+          END IF;
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='chapter_tasks' AND column_name='last_error_code'
+          ) THEN
+            ALTER TABLE chapter_tasks ADD COLUMN last_error_code VARCHAR(100);
+          END IF;
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='chapter_tasks' AND column_name='last_error_detail'
+          ) THEN
+            ALTER TABLE chapter_tasks ADD COLUMN last_error_detail TEXT;
+          END IF;
+        END $$;
+        """
     )
-    op.add_column("chapter_tasks", sa.Column("last_error_code", sa.String(100), nullable=True))
-    op.add_column("chapter_tasks", sa.Column("last_error_detail", sa.Text(), nullable=True))
-
-    # Unique constraints if not present (best-effort)
     op.execute(
         """
         DO $$ BEGIN
@@ -35,9 +67,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column("chapter_tasks", "last_error_detail")
-    op.drop_column("chapter_tasks", "last_error_code")
-    op.drop_column("chapter_tasks", "attempt_no")
-    op.drop_column("chapter_tasks", "heartbeat_at")
-    op.drop_column("chapter_tasks", "lease_expires_at")
-    op.drop_column("chapter_tasks", "lease_owner")
+    # Best-effort; leave columns if already used in production
+    pass

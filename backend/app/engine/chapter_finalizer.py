@@ -132,6 +132,28 @@ async def commit_final_chapter_snapshot(
             )
 
         chapter.status = ChapterState.FINALIZING.value
+        if hasattr(chapter, "state_version"):
+            chapter.state_version = int(getattr(chapter, "state_version", 0) or 0) + 1
+            chapter.last_transition_reason = "finalizer->finalizing"
+        # audit event (same transaction as finalize)
+        try:
+            from app.models.tables import ChapterStateEvent
+            from datetime import datetime, timezone as _tz
+
+            db.add(
+                ChapterStateEvent(
+                    id=uuid.uuid4(),
+                    chapter_id=chapter_id,
+                    book_id=book_id,
+                    from_state=ChapterState.STATE_EXTRACTING.value,
+                    to_state=ChapterState.FINALIZING.value,
+                    state_version=int(getattr(chapter, "state_version", 1) or 1),
+                    actor="finalizer",
+                    reason="enter finalizing",
+                )
+            )
+        except Exception:
+            pass
 
         # Supersede all prior scenes for this chapter (draft + canon)
         await db.execute(
@@ -292,6 +314,26 @@ async def commit_final_chapter_snapshot(
         chapter.status = ChapterState.FINALIZED.value
         chapter.finalized_version = new_version
         chapter.title = title
+        if hasattr(chapter, "state_version"):
+            chapter.state_version = int(getattr(chapter, "state_version", 0) or 0) + 1
+            chapter.last_transition_reason = "finalizer->finalized"
+        try:
+            from app.models.tables import ChapterStateEvent
+
+            db.add(
+                ChapterStateEvent(
+                    id=uuid.uuid4(),
+                    chapter_id=chapter_id,
+                    book_id=book_id,
+                    from_state=ChapterState.FINALIZING.value,
+                    to_state=ChapterState.FINALIZED.value,
+                    state_version=int(getattr(chapter, "state_version", 1) or 1),
+                    actor="finalizer",
+                    reason="atomic finalize",
+                )
+            )
+        except Exception:
+            pass
 
         book = (await db.execute(select(Book).where(Book.id == book_id))).scalar_one_or_none()
         if book:

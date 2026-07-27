@@ -172,7 +172,9 @@ services:
     logging: *default-logging
 
 networks:
+  # Explicit name so New-API can declare external: novelforge_internal (P0 OPS-001)
   internal:
+    name: novelforge_internal
     driver: bridge
 
 volumes:

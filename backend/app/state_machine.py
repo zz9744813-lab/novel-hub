@@ -22,21 +22,46 @@ class ChapterState(str, Enum):
 
 # Legal transitions
 TRANSITIONS = {
-    ChapterState.QUEUED: {ChapterState.DEPENDENCY_CHECK, ChapterState.BLOCKED_BY_DEPENDENCY, ChapterState.FAILED},
-    ChapterState.DEPENDENCY_CHECK: {ChapterState.CONTEXT_BUILDING, ChapterState.BLOCKED_BY_DEPENDENCY, ChapterState.FAILED},
-    ChapterState.BLOCKED_BY_DEPENDENCY: {ChapterState.DEPENDENCY_CHECK, ChapterState.FAILED},
+    ChapterState.QUEUED: {
+        ChapterState.DEPENDENCY_CHECK,
+        ChapterState.BLOCKED_BY_DEPENDENCY,
+        ChapterState.RESOURCE_BLOCKED,
+        ChapterState.FAILED,
+    },
+    ChapterState.DEPENDENCY_CHECK: {
+        ChapterState.CONTEXT_BUILDING,
+        ChapterState.BLOCKED_BY_DEPENDENCY,
+        ChapterState.FAILED,
+    },
+    ChapterState.BLOCKED_BY_DEPENDENCY: {ChapterState.DEPENDENCY_CHECK, ChapterState.QUEUED, ChapterState.FAILED},
     ChapterState.CONTEXT_BUILDING: {ChapterState.PLANNING, ChapterState.FAILED},
     ChapterState.PLANNING: {ChapterState.DRAFTING, ChapterState.FAILED},
     ChapterState.DRAFTING: {ChapterState.REVIEWING, ChapterState.FAILED},
-    ChapterState.REVIEWING: {ChapterState.PATCHING, ChapterState.CONSISTENCY_CHECK, ChapterState.FAILED},
-    ChapterState.PATCHING: {ChapterState.CONSISTENCY_CHECK, ChapterState.REVIEWING, ChapterState.NEEDS_HUMAN, ChapterState.FAILED},
-    ChapterState.CONSISTENCY_CHECK: {ChapterState.STATE_EXTRACTING, ChapterState.PATCHING, ChapterState.NEEDS_HUMAN, ChapterState.FAILED},
+    ChapterState.REVIEWING: {
+        ChapterState.PATCHING,
+        ChapterState.CONSISTENCY_CHECK,
+        ChapterState.NEEDS_HUMAN,
+        ChapterState.FAILED,
+    },
+    ChapterState.PATCHING: {
+        ChapterState.CONSISTENCY_CHECK,
+        ChapterState.REVIEWING,
+        ChapterState.NEEDS_HUMAN,
+        ChapterState.FAILED,
+    },
+    ChapterState.CONSISTENCY_CHECK: {
+        ChapterState.STATE_EXTRACTING,
+        ChapterState.PATCHING,
+        ChapterState.NEEDS_HUMAN,
+        ChapterState.FAILED,
+    },
     ChapterState.STATE_EXTRACTING: {ChapterState.FINALIZING, ChapterState.FAILED},
     ChapterState.FINALIZING: {ChapterState.FINALIZED, ChapterState.FAILED},
-    ChapterState.FINALIZED: set(),  # terminal
+    # Re-run is an explicit API action
+    ChapterState.FINALIZED: {ChapterState.QUEUED},
     ChapterState.NEEDS_HUMAN: {ChapterState.QUEUED, ChapterState.PATCHING, ChapterState.FAILED},
     ChapterState.RESOURCE_BLOCKED: {ChapterState.QUEUED, ChapterState.FAILED},
-    ChapterState.FAILED: {ChapterState.QUEUED},  # retry
+    ChapterState.FAILED: {ChapterState.QUEUED},
 }
 
 

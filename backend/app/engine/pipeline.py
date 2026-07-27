@@ -31,15 +31,16 @@ from app.engine.memory_compiler import generate_l2
 logger = logging.getLogger("novelforge.pipeline")
 
 
-async def _set_chapter_status(chapter_id: uuid.UUID, status: str):
-    """Quick helper: update chapter status in a short-lived session."""
-    async with async_session_factory() as db:
-        chapter = (await db.execute(
-            select(Chapter).where(Chapter.id == chapter_id)
-        )).scalar_one_or_none()
-        if chapter:
-            chapter.status = status
-            await db.commit()
+async def _set_chapter_status(chapter_id: uuid.UUID, status: str, reason: str | None = None):
+    """P1 CORE-001: status writes go through State Transition Service."""
+    from app.engine.state_transition import transition_chapter
+
+    await transition_chapter(
+        chapter_id,
+        status,
+        reason=reason or f"pipeline->{status}",
+        actor="pipeline",
+    )
 
 
 async def _get_outline_node(outline_node_id: uuid.UUID) -> OutlineNode | None:
@@ -78,16 +79,30 @@ async def execute_pipeline(book_id: uuid.UUID, chapter_id: uuid.UUID, chapter_no
         outline_node_id = outline_node.id
         outline_version_id = outline_node.outline_version_id
 
-        chapter.status = ChapterState.DEPENDENCY_CHECK.value
         await db.commit()
+
+    await _set_chapter_status(chapter_id, ChapterState.DEPENDENCY_CHECK.value, "enter dependency_check")
+
+    async with async_session_factory() as db:
+        outline_node = (await db.execute(
+            select(OutlineNode).where(OutlineNode.id == outline_node_id)
+        )).scalar_one_or_none()
+        if not outline_node:
+            await _set_chapter_status(chapter_id, ChapterState.FAILED.value, "outline node missing after dep check")
+            return
+        outline_version_id = outline_node.outline_version_id
 
         deps_met, dep_errors = await check_required_dependencies(
             db, book_id, chapter_no, outline_version_id
         )
         if not deps_met:
             logger.warning(f"Chapter {chapter_no} blocked by dependencies: {dep_errors}")
-            chapter.status = ChapterState.BLOCKED_BY_DEPENDENCY.value
             await db.commit()
+            await _set_chapter_status(
+                chapter_id,
+                ChapterState.BLOCKED_BY_DEPENDENCY.value,
+                f"deps: {dep_errors}",
+            )
             return
 
         forced_deps = await dependency_resolver(db, book_id, outline_node_id)
@@ -396,9 +411,7 @@ async def execute_pipeline(book_id: uuid.UUID, chapter_id: uuid.UUID, chapter_no
     )
 
     # === Phase 8: Patching (if issues) ===
-    # Soft-pass thresholds for low-spec VPS / flaky LLM JSON
-    SOFT_PASS_WORDS = 1500
-
+    # P1 QA-001: drafts may be kept; finalize is never soft-passed.
     def _has_service_error(iss: list) -> bool:
         return any(
             isinstance(i, dict)
@@ -408,123 +421,115 @@ async def execute_pipeline(book_id: uuid.UUID, chapter_id: uuid.UUID, chapter_no
         )
 
     if not passed and issues:
-        # Review agent / provider outage: soft-pass if we already have a real draft
+        # Review agent / provider outage: fail closed for finalize path
         if _has_service_error(issues):
-            if word_count >= SOFT_PASS_WORDS:
-                logger.warning(
-                    f"Review service failure soft-pass chapter {chapter_no}: {issues}"
-                )
-                passed = True
-            else:
-                logger.error(f"Review service failure for chapter {chapter_no}: {issues}")
-                await _set_chapter_status(chapter_id, ChapterState.FAILED.value)
-                return
+            logger.error(
+                f"Review service failure for chapter {chapter_no} (no soft-pass): {issues}"
+            )
+            await _set_chapter_status(
+                chapter_id,
+                ChapterState.FAILED.value,
+                "review service_error fail-closed",
+            )
+            return
 
-        if not passed:
-            await _set_chapter_status(chapter_id, ChapterState.PATCHING.value)
+        await _set_chapter_status(chapter_id, ChapterState.PATCHING.value, "enter patching")
 
-            clusters = {}
-            for issue in issues:
-                cid = issue.get("issue_cluster_id", issue.get("issue_id"))
-                clusters.setdefault(cid, []).append(issue)
+        clusters = {}
+        for issue in issues:
+            cid = issue.get("issue_cluster_id", issue.get("issue_id"))
+            clusters.setdefault(cid, []).append(issue)
 
-            remaining = issues
-            for _cluster_id, cluster_issues in clusters.items():
-                for retry_round in range(1, 4):  # §8.3: max 3 rounds
-                    patches = []
-                    for issue in cluster_issues:
-                        if issue.get("severity") == "critical":
-                            continue  # Critical issues go to NEEDS_HUMAN
-                        patch = await generate_patch(
-                            book_id=book_id,
-                            chapter_id=chapter_id,
-                            issue=issue,
-                            chapter_content=chapter_content,
-                            retry_round=retry_round,
-                        )
-                        if patch:
-                            patches.append(patch)
-
-                    if patches:
-                        chapter_content = await apply_patches(chapter_content, patches)
-                        word_count = len(chapter_content)
-                        current_version += 1
-                        # P0: persist patched content as a new ChapterVersion
-                        async with async_session_factory() as db:
-                            existing_pv = (
-                                await db.execute(
-                                    select(ChapterVersion).where(
-                                        ChapterVersion.chapter_id == chapter_id,
-                                        ChapterVersion.version == current_version,
-                                    )
-                                )
-                            ).scalar_one_or_none()
-                            if existing_pv:
-                                existing_pv.content = chapter_content
-                                existing_pv.word_count = word_count
-                                existing_pv.source_run_id = source_run
-                            else:
-                                patched_ver = ChapterVersion(
-                                    id=uuid.uuid4(),
-                                    book_id=book_id,
-                                    chapter_id=chapter_id,
-                                    version=current_version,
-                                    content=chapter_content,
-                                    word_count=word_count,
-                                    source_run_id=source_run,
-                                )
-                                db.add(patched_ver)
-                            await db.commit()
-
-                    # Re-review after patch (no session held during LLM)
-                    passed, remaining = await review_chapter(
+        remaining = issues
+        for _cluster_id, cluster_issues in clusters.items():
+            for retry_round in range(1, 3):  # max 2 auto patch rounds (v2.0)
+                patches = []
+                for issue in cluster_issues:
+                    if issue.get("severity") == "critical":
+                        continue  # Critical issues go to NEEDS_HUMAN
+                    patch = await generate_patch(
                         book_id=book_id,
                         chapter_id=chapter_id,
+                        issue=issue,
                         chapter_content=chapter_content,
-                        outline_data=outline_data,
-                        outline_node_id=uuid.UUID(outline_data["id"]),
+                        retry_round=retry_round,
                     )
-                    if passed or not remaining:
-                        break
-                    if _has_service_error(remaining):
-                        if word_count >= SOFT_PASS_WORDS:
-                            logger.warning(
-                                f"Re-review service error soft-pass chapter {chapter_no}"
-                            )
-                            passed = True
-                            break
-                        await _set_chapter_status(chapter_id, ChapterState.FAILED.value)
-                        return
+                    if patch:
+                        patches.append(patch)
 
-            if not passed:
-                critical = [
-                    i for i in (remaining or issues or [])
-                    if isinstance(i, dict) and i.get("severity") == "critical"
-                    and i.get("category") != "service_error"
-                ]
-                if not critical and word_count >= SOFT_PASS_WORDS:
-                    logger.warning(
-                        f"Chapter {chapter_no}: soft-pass after patch rounds "
-                        f"with {len(remaining or issues or [])} non-critical issues"
+                if patches:
+                    chapter_content = await apply_patches(chapter_content, patches)
+                    word_count = len(chapter_content)
+                    current_version += 1
+                    # P0: persist patched content as a new ChapterVersion
+                    async with async_session_factory() as db:
+                        existing_pv = (
+                            await db.execute(
+                                select(ChapterVersion).where(
+                                    ChapterVersion.chapter_id == chapter_id,
+                                    ChapterVersion.version == current_version,
+                                )
+                            )
+                        ).scalar_one_or_none()
+                        if existing_pv:
+                            existing_pv.content = chapter_content
+                            existing_pv.word_count = word_count
+                            existing_pv.source_run_id = source_run
+                        else:
+                            patched_ver = ChapterVersion(
+                                id=uuid.uuid4(),
+                                book_id=book_id,
+                                chapter_id=chapter_id,
+                                version=current_version,
+                                content=chapter_content,
+                                word_count=word_count,
+                                source_run_id=source_run,
+                            )
+                            db.add(patched_ver)
+                        await db.commit()
+
+                # Re-review after patch (no session held during LLM)
+                passed, remaining = await review_chapter(
+                    book_id=book_id,
+                    chapter_id=chapter_id,
+                    chapter_content=chapter_content,
+                    outline_data=outline_data,
+                    outline_node_id=uuid.UUID(outline_data["id"]),
+                )
+                if passed or not remaining:
+                    break
+                if _has_service_error(remaining):
+                    logger.error(
+                        f"Re-review service error chapter {chapter_no} fail-closed"
                     )
-                    passed = True
-                else:
-                    await _set_chapter_status(chapter_id, ChapterState.NEEDS_HUMAN.value)
-                    logger.warning(
-                        f"Chapter {chapter_no} needs human intervention after 3 patch rounds"
+                    await _set_chapter_status(
+                        chapter_id,
+                        ChapterState.FAILED.value,
+                        "re-review service_error fail-closed",
                     )
                     return
-    elif not passed:
-        # Review failed with empty issues / unusable payload
-        if word_count >= SOFT_PASS_WORDS:
-            logger.warning(
-                f"Chapter {chapter_no}: review empty-fail soft-pass "
-                f"(wc={word_count})"
+
+        if not passed:
+            await _set_chapter_status(
+                chapter_id,
+                ChapterState.NEEDS_HUMAN.value,
+                f"review not passed after patch; remaining={len(remaining or issues or [])}",
             )
-            passed = True
-        else:
-            await _set_chapter_status(chapter_id, ChapterState.FAILED.value)
+            logger.warning(
+                f"Chapter {chapter_no} needs human intervention after patch rounds"
+            )
             return
+    elif not passed:
+        # Review failed with empty issues / unusable payload — fail closed
+        logger.error(
+            f"Chapter {chapter_no}: review empty-fail fail-closed (wc={word_count})"
+        )
+        await _set_chapter_status(
+            chapter_id,
+            ChapterState.FAILED.value,
+            "review empty-fail fail-closed",
+        )
+        return
 
     # === Phase 9: ContinuityCheck + StateExtractor ===
     await _set_chapter_status(chapter_id, ChapterState.CONSISTENCY_CHECK.value)

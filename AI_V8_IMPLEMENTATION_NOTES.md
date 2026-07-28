@@ -54,3 +54,13 @@ Spec: NovelForge-v8-.md
 - Commit creates characters/relationships/outline nodes/volumes/plot threads/writing constraints
 - Smoke (2026-07-28): sample md → 3 chars, 4 outline nodes, 3 plot threads, 3 writing rules; book `83fbd711-…`
 - Known gaps: world_rules/locations often empty under LLM variance; 429 rate-limit slows pipeline; no Playwright E2E; GitHub push still auth-blocked
+
+
+## World/Location harden + 西荒 Golden smoke
+
+- deterministic_world_from_text + merge_world (rules/locations regex fallback)
+- commit writes location_cards + world_rules
+- Smoke 西荒·弃渊夜 (session 59342df5… → book 17ffd9a8…):
+  chars=3, nodes=4, rules=1, locs=4 (弃渊城/夜市/慈父宅/猎渊崖), wr=8, pt=6, vols=2
+- Branch only: refactor/bookshelf-import-prompt-studio (NOT main)
+- LLM 429/503 still slows pipeline (~10min under load)

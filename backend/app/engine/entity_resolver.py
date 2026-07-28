@@ -255,7 +255,6 @@ def deterministic_outline_from_text(text: str) -> dict:
         "notes": ["deterministic_regex_fallback"] if chapters or volumes else [],
     }
 
-
 def merge_outline(llm: dict | None, det: dict | None) -> dict:
     llm = llm or {}
     det = det or {}
@@ -286,6 +285,161 @@ def merge_outline(llm: dict | None, det: dict | None) -> dict:
         or det.get("declared_total_chapters"),
         "notes": list(dict.fromkeys((llm.get("notes") or []) + (det.get("notes") or []))),
     }
+
+
+def deterministic_world_from_text(text: str) -> dict:
+    """Regex/heuristic world rules + locations when LLM returns empty."""
+    rules: list[dict] = []
+    locations: list[dict] = []
+    seen_rules: set[str] = set()
+    seen_loc: set[str] = set()
+
+    def add_loc(name: str, description: str | None = None) -> None:
+        name = (name or "").strip().strip("。.;；")
+        if not name or name in seen_loc or not (1 < len(name) <= 30):
+            return
+        # skip pure rule-ish phrases
+        if re.search(r"不可|禁止|违者|必须|规则", name):
+            return
+        seen_loc.add(name)
+        locations.append(
+            {
+                "name": name,
+                "description": description,
+                "aliases": [],
+                "rules": [],
+            }
+        )
+
+    def add_rule(body: str, hard: bool | None = None) -> None:
+        body = (body or "").strip()
+        if len(body) < 4:
+            return
+        # location-only lines are not rules
+        if re.match(r"^地点[:：]", body):
+            return
+        key = re.sub(r"\s+", "", body)[:40]
+        if key in seen_rules:
+            return
+        seen_rules.add(key)
+        is_hard = bool(re.search(r"不可|禁止|违者|必须", body)) if hard is None else hard
+        rules.append(
+            {
+                "rule_key": f"rule_{len(rules)+1}",
+                "description": body,
+                "category": "hard" if is_hard else "setting",
+                "is_hard": is_hard,
+            }
+        )
+
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    rule_ctx = False
+    loc_ctx = False
+    for ln in lines:
+        if re.search(r"^(##+\s*)?(世界观|世界设定|设定|规则|硬规则|法则)", ln):
+            rule_ctx = True
+            loc_ctx = bool(re.search(r"地点|地理|城|镇|区域", ln))
+            continue
+        if re.search(r"^(##+\s*)?(地点|地理|场景|主要地点)", ln):
+            loc_ctx = True
+            rule_ctx = False
+            continue
+        if re.match(r"^##+\s+", ln) and not re.search(r"世界|设定|规则|地点|地理", ln):
+            rule_ctx = False
+            loc_ctx = False
+
+        # "地点：A、B、C" anywhere
+        m4 = re.search(r"地点[:：]\s*(.+)$", ln)
+        if m4:
+            parts = re.split(r"[、,，/|]", m4.group(1))
+            for p in parts:
+                add_loc(p)
+            # strip trailing punctuation junk
+            continue
+
+        # bare location-like tokens in bullets: X城/Y谷/Z渊
+        m5 = re.match(
+            r"^[-*•·]\s*([^\s：:]{2,20}(?:城|镇|谷|渊|山|府|宫|殿|市|村|岛|界|域|宅))",
+            ln,
+        )
+        if m5:
+            add_loc(m5.group(1), ln.lstrip("-*•· ").strip())
+
+        # explicit rule bullets
+        m = re.match(r"^[-*•·]\s*(?:规则[:：]?\s*)?(.+)$", ln)
+        if m and (rule_ctx or "规则" in ln or "不可" in ln or "禁止" in ln or "违者" in ln):
+            body = m.group(1).strip()
+            if re.match(r"^地点[:：]", body):
+                continue
+            # setting bullets under 世界观 that look like places: skip as rule if pure place line
+            if re.match(r"^[^：:]{2,20}(?:城|镇|谷|渊|山|府|宫|殿|市|村|岛|界|域|宅)\s*$", body):
+                add_loc(body)
+                continue
+            add_rule(body)
+            continue
+
+        # "规则：xxx" inline
+        m2 = re.search(r"规则[:：]\s*(.+)$", ln)
+        if m2:
+            add_rule(m2.group(1).strip(), hard=True)
+
+        if loc_ctx:
+            m3 = re.match(r"^[-*•·]\s*(.+)$", ln)
+            if m3:
+                name = re.split(r"[：:，,。\s]", m3.group(1).strip())[0]
+                add_loc(name, m3.group(1).strip())
+
+    # world summary: first non-heading paragraph under 世界观 if any
+    summary = None
+    for i, ln in enumerate(lines):
+        if re.search(r"世界观|世界设定", ln):
+            for j in range(i + 1, min(i + 6, len(lines))):
+                if lines[j].startswith("#") or lines[j].startswith("-"):
+                    if lines[j].startswith("-") and not summary:
+                        summary = lines[j].lstrip("-*•· ").strip()
+                    break
+                if len(lines[j]) > 8:
+                    summary = lines[j]
+                    break
+            break
+
+    return {
+        "world_summary": summary,
+        "rules": rules,
+        "locations": locations,
+        "notes": ["deterministic_world_fallback"] if rules or locations else [],
+    }
+
+
+def merge_world(llm: dict | None, det: dict | None) -> dict:
+    llm = llm or {}
+    det = det or {}
+    rules: list[dict] = []
+    seen_r: set[str] = set()
+    for src in (det.get("rules") or [], llm.get("rules") or []):
+        for r in src:
+            desc = (r.get("description") or "").strip()
+            key = re.sub(r"\s+", "", desc)[:48] or (r.get("rule_key") or "")
+            if not key or key in seen_r:
+                continue
+            seen_r.add(key)
+            rules.append(r)
+    locs: list[dict] = []
+    seen_l: set[str] = set()
+    for src in (det.get("locations") or [], llm.get("locations") or []):
+        for loc in src:
+            name = (loc.get("name") or "").strip()
+            if not name or name in seen_l:
+                continue
+            seen_l.add(name)
+            locs.append(loc)
+    return {
+        "world_summary": llm.get("world_summary") or det.get("world_summary"),
+        "rules": rules,
+        "locations": locs,
+        "notes": list(dict.fromkeys((llm.get("notes") or []) + (det.get("notes") or []))),
+    }
+
 
 def build_preview_bundle(
     *,

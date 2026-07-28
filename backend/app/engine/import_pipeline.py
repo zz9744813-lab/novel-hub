@@ -17,7 +17,9 @@ from app.engine.entity_resolver import (
     build_preview_bundle,
     detect_outline_conflicts,
     deterministic_outline_from_text,
+    deterministic_world_from_text,
     merge_outline,
+    merge_world,
     resolve_characters,
 )
 from app.engine.import_llm import call_import_agent
@@ -30,6 +32,7 @@ from app.models.tables import (
     ImportConflict,
     ImportSession,
     ImportSessionEvent,
+    LocationCard,
     OutlineNode,
     OutlineVersion,
     OutlineVolume,
@@ -364,9 +367,25 @@ async def run_import_pipeline(session_id: str) -> dict:
         "world",
         "world_v1",
         "world_bible_extractor",
-        "提取世界观摘要、硬/软规则、地点。rules 每项含 rule_key, description, category?, is_hard。只输出 JSON。",
+        (
+            "提取世界观摘要、硬/软规则、地点。"
+            "rules 每项必须含 rule_key, description；category?, is_hard。"
+            "locations 每项必须含 name；description?, aliases?, rules?。"
+            "文档里「规则：」「地点：」「X城/渊/谷」都要尽量收录。只输出 JSON。"
+        ),
         f"文档:\n{body_text[:16000]}",
     )
+    det_world = deterministic_world_from_text(body_text)
+    world_out = merge_world(world_out, det_world)
+    async with async_session_factory() as db:
+        await _save_artifact(
+            db,
+            sid,
+            artifact_type="world_merged",
+            key="world_merged_v1",
+            payload=world_out,
+        )
+        await db.commit()
     char_out = await extract_step(
         "characters",
         "characters_v1",
@@ -599,7 +618,7 @@ async def atomic_commit_import(
         )
     )
 
-    # world rules
+    # world rules + locations
     world = preview.get("world") or {}
     for r in world.get("rules") or []:
         db.add(
@@ -613,6 +632,22 @@ async def atomic_commit_import(
                     "is_hard": r.get("is_hard", True),
                     "source": "import_v8",
                 },
+            )
+        )
+    for loc in world.get("locations") or []:
+        name = (loc.get("name") or "").strip()
+        if not name:
+            continue
+        db.add(
+            LocationCard(
+                id=gen_uuid(),
+                book_id=book.id,
+                name=name[:300],
+                aliases=loc.get("aliases") or [],
+                description=loc.get("description"),
+                rules=loc.get("rules") or [],
+                source_refs=[{"import_session_id": str(sess.id)}],
+                status="active",
             )
         )
 

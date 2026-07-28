@@ -115,7 +115,8 @@ async def list_bookshelf(db: AsyncSession) -> list[dict[str, Any]]:
                         """
                         SELECT book_id, COUNT(*)::int
                         FROM human_interventions
-                        WHERE book_id = ANY(:ids) AND COALESCE(resolved, false) = false
+                        WHERE book_id = ANY(:ids)
+                          AND COALESCE(status, 'open') NOT IN ('resolved', 'closed', 'done')
                         GROUP BY book_id
                         """
                     ),

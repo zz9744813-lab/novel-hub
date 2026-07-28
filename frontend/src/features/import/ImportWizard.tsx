@@ -71,20 +71,32 @@ export function ImportWizard({
     }
   };
 
+  const resolveWarnings = async () => {
+    if (!sessionId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.imports.resolveBatch(sessionId, "warnings");
+      const p = await api.imports.preview(sessionId);
+      setPreview(p);
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const commit = async () => {
     if (!sessionId || !preview) return;
     setBusy(true);
     setError(null);
     try {
-      for (const c of preview.conflicts || []) {
-        if (c.status === "open" && c.severity !== "blocking" && c.options?.[0]?.id) {
-          await api.imports.resolveConflict(sessionId, c.conflict_id, c.options[0].id);
-        }
-      }
+      // server auto_resolve_warnings=true by default; one click commit
       const r = await api.imports.commit(sessionId, {
         expected_preview_hash: preview.preview_hash,
         book_overrides: { title: title || preview.preview?.title_guess },
-      });
+        auto_resolve_warnings: true,
+      } as any);
       onCommitted(r.book_id);
     } catch (e: any) {
       setError(e?.message || String(e));
@@ -110,6 +122,13 @@ export function ImportWizard({
   const counts = preview?.preview?.counts || {};
   const characters = preview?.preview?.characters || [];
   const chapters = preview?.preview?.chapters || [];
+  const locations = preview?.preview?.world?.locations || [];
+  const openWarnings = (preview?.conflicts || []).filter(
+    (c: any) => c.status === "open" && c.severity !== "blocking"
+  );
+  const openBlocking = (preview?.conflicts || []).filter(
+    (c: any) => c.status === "open" && c.severity === "blocking"
+  );
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
@@ -251,6 +270,16 @@ export function ImportWizard({
                 ))}
               </div>
             )}
+            {locations.length > 0 && (
+              <div className="panel p-3 text-2xs text-text-secondary max-h-20 overflow-auto">
+                <div className="text-text-disabled mb-1">地点（{locations.length}）</div>
+                {locations.slice(0, 12).map((l: any) => (
+                  <span key={l.name} className="inline-block mr-2 mb-1">
+                    {l.name}
+                  </span>
+                ))}
+              </div>
+            )}
             {chapters.length > 0 && (
               <div className="panel p-3 text-2xs text-text-secondary max-h-28 overflow-auto">
                 <div className="text-text-disabled mb-1">章纲预览（{chapters.length}）</div>
@@ -265,18 +294,24 @@ export function ImportWizard({
               <div className="text-text-disabled">{preview.preview?.note}</div>
               {(preview.conflicts || []).map((c: any) => (
                 <div key={c.conflict_id} className={c.severity === "blocking" ? "text-red-300" : "text-amber-300/90"}>
-                  [{c.severity}] {c.code}: {c.message}
+                  [{c.severity}] {c.status}: {c.code} — {c.message}
                 </div>
               ))}
             </div>
-            <div className="flex gap-2 justify-end">
+            <div className="flex flex-wrap gap-2 justify-end">
               <button className="btn text-xs py-1.5 px-3" onClick={onClose}>
                 取消
               </button>
+              {openWarnings.length > 0 && (
+                <button className="btn text-xs py-1.5 px-3" disabled={busy} onClick={resolveWarnings}>
+                  一键处理警告（{openWarnings.length}）
+                </button>
+              )}
               <button
                 className="btn-primary text-xs py-1.5 px-3"
-                disabled={busy || (preview.conflicts || []).some((c: any) => c.severity === "blocking" && c.status === "open")}
+                disabled={busy || openBlocking.length > 0}
                 onClick={commit}
+                title={openBlocking.length ? "请先处理阻断冲突" : "将自动忽略/采用默认处理警告项"}
               >
                 {busy ? <Loader2 size={12} className="animate-spin" /> : null}
                 确认创建小说

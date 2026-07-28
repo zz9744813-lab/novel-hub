@@ -64,3 +64,14 @@ Spec: NovelForge-v8-.md
   chars=3, nodes=4, rules=1, locs=4 (弃渊城/夜市/慈父宅/猎渊崖), wr=8, pt=6, vols=2
 - Branch only: refactor/bookshelf-import-prompt-studio (NOT main)
 - LLM 429/503 still slows pipeline (~10min under load)
+
+
+## Conflict UX + rate-limit harden
+
+- POST `/api/import-sessions/{id}/conflicts/resolve-batch` (warnings/all_open)
+- commit `auto_resolve_warnings=true` default
+- gateway 429/503 exponential backoff; import_llm min gap 1.2s
+- skip sanitize_llm when candidate clean
+- UI: 一键处理警告 + 地点预览；assets index-BynM34z7.js
+- Smoke 夜渊短测 → book ed30c019…: batch resolved 2 warnings, commit ok; locs=3 chars=2 chaps=3
+- Branch only: refactor/bookshelf-import-prompt-studio

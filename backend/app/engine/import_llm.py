@@ -1,9 +1,11 @@
 """Import LLM helper — stream gateway only, one schema repair, no Book pre-create."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
+import time
 import uuid
 from typing import Any, Type
 
@@ -17,6 +19,10 @@ logger = logging.getLogger("novelforge.import_llm")
 # Reuse production model binding for outline_parser when import roles unbound
 DEFAULT_IMPORT_MODEL = "deepseek-v4-flash"
 DEFAULT_IMPORT_PROVIDER = "new-api"
+
+# process-local throttle to reduce 429 storms across sequential import agents
+_last_call_ts = 0.0
+_MIN_GAP_SEC = 1.2
 
 
 async def resolve_import_model() -> tuple[str, str, str | None]:
@@ -76,6 +82,15 @@ def validate_import(role: str, payload: Any) -> tuple[dict | None, str | None]:
         return None, str(e)
 
 
+async def _throttle() -> None:
+    global _last_call_ts
+    now = time.monotonic()
+    wait = _MIN_GAP_SEC - (now - _last_call_ts)
+    if wait > 0:
+        await asyncio.sleep(wait)
+    _last_call_ts = time.monotonic()
+
+
 async def call_import_agent(
     *,
     role: str,
@@ -107,6 +122,7 @@ async def call_import_agent(
     }
 
     async def _once(extra_user: str = "") -> tuple[dict | None, str | None, Any]:
+        await _throttle()
         result = await stream_with_retry(
             system_prompt=system_prompt,
             user_content=user_content + extra_user,
@@ -115,6 +131,7 @@ async def call_import_agent(
             provider=provider,
             fallback_model=fallback,
             response_format=response_format,
+            max_tokens=8192,
         )
         meta["attempts"] = meta.get("attempts", 0) + 1
         meta["latency_ms"] = getattr(result, "latency_ms", None)
@@ -134,11 +151,14 @@ async def call_import_agent(
         meta["ok"] = True
         return validated, meta
 
-    # one repair
+    # one repair — extra throttle already in _once
     repair = (
         "\n\n【修复】上一次输出不符合 JSON Schema，错误："
         f"{err}\n请只输出合法 JSON 对象，不要 markdown。"
     )
+    # if rate-limited, wait a bit more before repair
+    if err and "429" in str(err):
+        await asyncio.sleep(8)
     validated2, err2, raw2 = await _once(repair)
     if validated2 is not None:
         meta["ok"] = True

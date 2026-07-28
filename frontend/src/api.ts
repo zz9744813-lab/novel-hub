@@ -283,6 +283,14 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ option_id: optionId }),
       }),
+    resolveBatch: (sessionId: string, mode: "warnings" | "all_open" = "warnings") =>
+      fetchJSON<{ status: string; resolved_count: number; skipped_count: number; session_status?: string }>(
+        `/api/import-sessions/${sessionId}/conflicts/resolve-batch`,
+        {
+          method: "POST",
+          body: JSON.stringify({ mode }),
+        }
+      ),
     commit: (id: string, body: { expected_preview_hash: string; book_overrides?: any }) =>
       fetchJSON<{ book_id: string; status: string; counts?: any }>(`/api/import-sessions/${id}/commit`, {
         method: "POST",

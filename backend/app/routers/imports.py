@@ -326,6 +326,11 @@ class ResolveBody(BaseModel):
     option_id: str
 
 
+class BatchResolveBody(BaseModel):
+    mode: str = "warnings"  # warnings | all_open
+    default_option: str | None = None  # if set, force this option id when present
+
+
 @router.post("/{session_id}/conflicts/{conflict_id}/resolve")
 async def resolve_conflict(
     session_id: str,
@@ -345,9 +350,79 @@ async def resolve_conflict(
     return {"status": "resolved", "conflict_id": conflict_id, "option_id": body.option_id}
 
 
+def _pick_option(c: ImportConflict, preferred: str | None) -> str | None:
+    opts = c.options or []
+    ids = [o.get("id") for o in opts if isinstance(o, dict) and o.get("id")]
+    if preferred and preferred in ids:
+        return preferred
+    # sensible defaults
+    for prefer in ("use_declared", "keep_detected", "keep_first", "note_only", "ack"):
+        if prefer in ids:
+            return prefer
+    return ids[0] if ids else "ack"
+
+
+@router.post("/{session_id}/conflicts/resolve-batch")
+async def resolve_conflicts_batch(
+    session_id: str,
+    body: BatchResolveBody,
+    db: AsyncSession = Depends(get_db),
+):
+    """One-click resolve open warning conflicts (or all open if mode=all_open)."""
+    sid = uuid.UUID(session_id)
+    sess = (
+        await db.execute(select(ImportSession).where(ImportSession.id == sid))
+    ).scalar_one_or_none()
+    if not sess:
+        raise HTTPException(404, "not found")
+    rows = (
+        await db.execute(
+            select(ImportConflict).where(
+                ImportConflict.import_session_id == sid,
+                ImportConflict.status == "open",
+            )
+        )
+    ).scalars().all()
+    resolved = []
+    skipped = []
+    for c in rows:
+        if body.mode == "warnings" and c.severity == "blocking":
+            skipped.append({"conflict_id": str(c.id), "reason": "blocking"})
+            continue
+        oid = _pick_option(c, body.default_option)
+        if not oid:
+            skipped.append({"conflict_id": str(c.id), "reason": "no_option"})
+            continue
+        c.selected_option_id = oid
+        c.status = "resolved"
+        resolved.append({"conflict_id": str(c.id), "option_id": oid, "code": c.code})
+    # if only warnings left open were resolved, drop needs_human
+    remaining_blocking = (
+        await db.execute(
+            select(ImportConflict).where(
+                ImportConflict.import_session_id == sid,
+                ImportConflict.status == "open",
+                ImportConflict.severity == "blocking",
+            )
+        )
+    ).scalars().all()
+    if sess.status == "needs_human" and not remaining_blocking:
+        await _transition(db, sess, "preview_ready", "batch_resolve_warnings")
+    await db.commit()
+    return {
+        "status": "ok",
+        "resolved_count": len(resolved),
+        "skipped_count": len(skipped),
+        "resolved": resolved,
+        "skipped": skipped,
+        "session_status": sess.status,
+    }
+
+
 class CommitBody(BaseModel):
     expected_preview_hash: str
     book_overrides: dict | None = None
+    auto_resolve_warnings: bool = True
 
 
 @router.post("/{session_id}/commit")
@@ -365,6 +440,26 @@ async def commit_session(
     ).scalar_one_or_none()
     if not sess:
         raise HTTPException(404, "not found")
+
+    # auto soft-resolve open warnings so commit is one click
+    if body.auto_resolve_warnings:
+        open_rows = (
+            await db.execute(
+                select(ImportConflict).where(
+                    ImportConflict.import_session_id == sid,
+                    ImportConflict.status == "open",
+                )
+            )
+        ).scalars().all()
+        for c in open_rows:
+            if c.severity == "blocking":
+                continue
+            oid = _pick_option(c, None)
+            if oid:
+                c.selected_option_id = oid
+                c.status = "resolved"
+        await db.flush()
+
     try:
         result = await atomic_commit_import(
             db,

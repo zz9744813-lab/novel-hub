@@ -11,6 +11,7 @@ import time
 import re
 import logging
 import os
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import httpx
@@ -359,6 +360,12 @@ async def stream_with_retry(
         if result.error and result.error not in RETRYABLE_ERRORS:
             logger.warning(f"Non-retryable error: {result.error}, stopping")
             break
+
+        # rate-limit / transient: backoff before next attempt
+        if result.error in {"HTTP_429", "HTTP_503", "HTTP_502", "HTTP_504", "READ_TIMEOUT"}:
+            delay = min(45.0, 4.0 * (2 ** (attempt - 1)))
+            logger.warning("Backoff %.1fs after %s (attempt %s)", delay, result.error, attempt)
+            await asyncio.sleep(delay)
 
         if attempt == 2 and not fallback_model:
             logger.warning(

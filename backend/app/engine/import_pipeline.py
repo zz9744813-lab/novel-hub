@@ -264,57 +264,73 @@ async def run_import_pipeline(session_id: str) -> dict:
                 report["steps"].append({"step": "classify", "ok": False, "meta": meta})
             await db.commit()
 
-    # ── sanitize_llm (batch on uncertain) ──
+    # ── sanitize_llm (batch on uncertain) — skip when candidate already clean ──
     if not await done("sanitize_llm_v1"):
-        # only send review candidates
         review_blocks = []
         for b, c in zip(blocks, cand_items or [{}] * len(blocks)):
             if (c or {}).get("action") == "review" or not cand_items:
                 review_blocks.append(b)
-        sample = review_blocks[:40] if review_blocks else kept_blocks[:20]
-        data, meta = await call_import_agent(
-            role="import_sanitizer",
-            system_prompt=(
-                "你是企划文档清洗器。对每个 block 判断是否为 AI 对话残留/噪声。"
-                "classification: source_content|assistant_chatter|user_chatter|duplicate_summary|format_noise|uncertain。"
-                "action: keep|exclude|review。只输出 JSON {items:[...]}。"
-            ),
-            user_content=_blocks_text(sample, 10000),
-        )
-        async with async_session_factory() as db:
-            sess = (await db.execute(select(ImportSession).where(ImportSession.id == sid))).scalar_one()
-            payload = data or {"items": cand_items}
-            await _save_artifact(
-                db,
-                sid,
-                artifact_type="sanitize_llm",
-                key="sanitize_llm_v1",
-                payload=payload,
-                status="ready" if data else "degraded",
-                meta=[meta],
+        # short clean docs: skip LLM sanitizer to save rate budget
+        if len(blocks) <= 80 and not review_blocks and cand_items:
+            async with async_session_factory() as db:
+                sess = (await db.execute(select(ImportSession).where(ImportSession.id == sid))).scalar_one()
+                await _save_artifact(
+                    db,
+                    sid,
+                    artifact_type="sanitize_llm",
+                    key="sanitize_llm_v1",
+                    payload={"items": cand_items, "skipped": True, "reason": "candidate_clean"},
+                    status="ready",
+                )
+                await _transition(db, sess, "analyzing", "sanitize_llm_skipped")
+                sess.progress = STEP_PROGRESS["sanitize_llm"]
+                await db.commit()
+                report["steps"].append({"step": "sanitize_llm", "ok": True, "skipped": True})
+        else:
+            sample = review_blocks[:40] if review_blocks else kept_blocks[:20]
+            data, meta = await call_import_agent(
+                role="import_sanitizer",
+                system_prompt=(
+                    "你是企划文档清洗器。对每个 block 判断是否为 AI 对话残留/噪声。"
+                    "classification: source_content|assistant_chatter|user_chatter|duplicate_summary|format_noise|uncertain。"
+                    "action: keep|exclude|review。只输出 JSON {items:[...]}。"
+                ),
+                user_content=_blocks_text(sample, 10000),
             )
-            # rebuild kept from LLM if present
-            if data and data.get("items"):
-                by_id = {i.get("block_id"): i for i in data["items"]}
-                new_kept = []
-                for b in blocks:
-                    bid = b.get("id") or b.get("block_id")
-                    item = by_id.get(bid)
-                    if item and item.get("action") == "exclude":
-                        continue
-                    new_kept.append(b)
-                if new_kept:
-                    await _save_artifact(
-                        db,
-                        sid,
-                        artifact_type="document_blocks",
-                        key="kept_blocks",
-                        payload={"blocks": new_kept},
-                    )
-            await _transition(db, sess, "analyzing", "sanitize_llm")
-            sess.progress = STEP_PROGRESS["sanitize_llm"]
-            await db.commit()
-            report["steps"].append({"step": "sanitize_llm", "ok": bool(data)})
+            async with async_session_factory() as db:
+                sess = (await db.execute(select(ImportSession).where(ImportSession.id == sid))).scalar_one()
+                payload = data or {"items": cand_items}
+                await _save_artifact(
+                    db,
+                    sid,
+                    artifact_type="sanitize_llm",
+                    key="sanitize_llm_v1",
+                    payload=payload,
+                    status="ready" if data else "degraded",
+                    meta=[meta],
+                )
+                # rebuild kept from LLM if present
+                if data and data.get("items"):
+                    by_id = {i.get("block_id"): i for i in data["items"]}
+                    new_kept = []
+                    for b in blocks:
+                        bid = b.get("id") or b.get("block_id")
+                        item = by_id.get(bid)
+                        if item and item.get("action") == "exclude":
+                            continue
+                        new_kept.append(b)
+                    if new_kept:
+                        await _save_artifact(
+                            db,
+                            sid,
+                            artifact_type="document_blocks",
+                            key="kept_blocks",
+                            payload={"blocks": new_kept},
+                        )
+                await _transition(db, sess, "analyzing", "sanitize_llm")
+                sess.progress = STEP_PROGRESS["sanitize_llm"]
+                await db.commit()
+                report["steps"].append({"step": "sanitize_llm", "ok": bool(data)})
 
     async with async_session_factory() as db:
         kept_art = await _get_art(db, sid, "kept_blocks")
@@ -431,7 +447,11 @@ async def run_import_pipeline(session_id: str) -> dict:
     )
     # merge deterministic regex fallback (第N章 / 第N卷)
     det_outline = deterministic_outline_from_text(body_text)
+    # if regex already solid, don't wait on empty LLM — still merge
     outline = merge_outline(outline_out, det_outline)
+    # when det found chapters and LLM empty, mark step ok via merge artifact
+    if (not outline_out or not (outline_out or {}).get("chapters")) and det_outline.get("chapters"):
+        report["steps"].append({"step": "outline_det_fallback", "ok": True, "chapters": len(det_outline["chapters"])})
     async with async_session_factory() as db:
         await _save_artifact(
             db,

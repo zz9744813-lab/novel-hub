@@ -518,11 +518,45 @@ async def outbox_tick(ctx):
         logger.warning(f"outbox_tick failed: {e}")
 
 
+async def run_import_pipeline_job(ctx, session_id: str):
+    """v8 multi-agent import analysis (checkpointed). Shares max_jobs=1 with chapter pipeline."""
+    logger.info("import_pipeline start session=%s", session_id)
+    try:
+        from app.engine.import_pipeline import run_import_pipeline
+
+        report = await run_import_pipeline(session_id)
+        logger.info("import_pipeline done session=%s report=%s", session_id, report)
+        return report
+    except Exception as e:
+        logger.exception("import_pipeline failed session=%s: %s", session_id, e)
+        try:
+            from app.database import async_session_factory
+            from app.models.tables import ImportSession
+            from sqlalchemy import select
+            from datetime import datetime, timezone
+
+            async with async_session_factory() as db:
+                sess = (
+                    await db.execute(
+                        select(ImportSession).where(ImportSession.id == uuid.UUID(session_id))
+                    )
+                ).scalar_one_or_none()
+                if sess and sess.status not in ("completed", "preview_ready", "needs_human"):
+                    sess.status = "failed"
+                    sess.error_code = "PIPELINE_FAILED"
+                    sess.error_detail = str(e)[:2000]
+                    sess.updated_at = datetime.now(timezone.utc)
+                    await db.commit()
+        except Exception as e2:
+            logger.warning("failed to mark import session failed: %s", e2)
+        raise
+
+
 class WorkerSettings:
     # arq cron: minute-level outbox drain (B-11)
     cron_jobs = [cron(outbox_tick, second={0, 30})]
 
-    functions = [run_chapter_pipeline, outbox_tick]
+    functions = [run_chapter_pipeline, outbox_tick, run_import_pipeline_job]
     on_startup = on_startup
     on_shutdown = on_shutdown
     redis_settings = RedisSettings(

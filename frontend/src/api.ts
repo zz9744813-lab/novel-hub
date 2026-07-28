@@ -268,20 +268,23 @@ export const api = {
         status: string;
         progress: number;
         preview_hash: string;
+        enqueue_error?: string | null;
+        message?: string;
       }>;
     },
     get: (id: string) => fetchJSON<any>(`/api/import-sessions/${id}`),
     preview: (id: string) => fetchJSON<any>(`/api/import-sessions/${id}/preview`),
+    analyze: (id: string) =>
+      fetchJSON<{ status: string; import_session_id: string }>(`/api/import-sessions/${id}/analyze`, {
+        method: "POST",
+      }),
     resolveConflict: (sessionId: string, conflictId: string, optionId: string) =>
       fetchJSON<any>(`/api/import-sessions/${sessionId}/conflicts/${conflictId}/resolve`, {
         method: "POST",
         body: JSON.stringify({ option_id: optionId }),
       }),
-    commit: (
-      sessionId: string,
-      body: { expected_preview_hash: string; book_overrides?: Record<string, any> }
-    ) =>
-      fetchJSON<{ book_id: string; status: string }>(`/api/import-sessions/${sessionId}/commit`, {
+    commit: (id: string, body: { expected_preview_hash: string; book_overrides?: any }) =>
+      fetchJSON<{ book_id: string; status: string; counts?: any }>(`/api/import-sessions/${id}/commit`, {
         method: "POST",
         body: JSON.stringify(body),
       }),
@@ -290,17 +293,23 @@ export const api = {
   },
   promptStudio: {
     agents: () => fetchJSON<{ agents: any[] }>("/api/prompt-studio/agents"),
+    list: () => fetchJSON<{ templates: any[] }>("/api/prompt-studio/templates"),
     templates: (agentRole?: string) =>
       fetchJSON<{ templates: any[] }>(
         `/api/prompt-studio/templates${agentRole ? `?agent_role=${encodeURIComponent(agentRole)}` : ""}`
       ),
+    get: (id: string) => fetchJSON<any>(`/api/prompt-studio/templates/${id}`),
     getTemplate: (id: string) => fetchJSON<any>(`/api/prompt-studio/templates/${id}`),
+    create: (body: any) =>
+      fetchJSON<any>("/api/prompt-studio/templates", { method: "POST", body: JSON.stringify(body) }),
     createTemplate: (body: any) =>
       fetchJSON<any>("/api/prompt-studio/templates", { method: "POST", body: JSON.stringify(body) }),
-    test: (id: string) =>
-      fetchJSON<any>(`/api/prompt-studio/templates/${id}/test`, { method: "POST" }),
     activate: (id: string) =>
       fetchJSON<any>(`/api/prompt-studio/templates/${id}/activate`, { method: "POST" }),
+    test: (id: string) =>
+      fetchJSON<any>(`/api/prompt-studio/templates/${id}/test`, { method: "POST" }),
+    testStructure: (id: string) =>
+      fetchJSON<any>(`/api/prompt-studio/templates/${id}/test-structure`, { method: "POST" }),
     compatibility: (id: string) => fetchJSON<any>(`/api/prompt-studio/templates/${id}/compatibility`),
     compiledPreview: (id: string) =>
       fetchJSON<any>(`/api/prompt-studio/templates/${id}/compiled-preview`),

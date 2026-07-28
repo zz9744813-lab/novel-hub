@@ -55,7 +55,7 @@ async def create_import_session(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ):
-    """Upload source file → ImportSession (no Book). Extract text synchronously (no LLM)."""
+    """Upload source file → ImportSession (no Book). Extract text, then queue LLM analysis."""
     data = await file.read()
     if not data:
         raise HTTPException(400, "empty file")
@@ -66,7 +66,6 @@ async def create_import_session(
     source_id = gen_uuid()
     session_id = gen_uuid()
     safe_name = (file.filename or "upload.bin").replace("/", "_")[:200]
-    # Prefer mounted import dir; fall back to /tmp if not writable (container perms)
     roots = [UPLOAD_ROOT, Path("/tmp/novelforge_imports")]
     dest = None
     last_err: Exception | None = None
@@ -111,26 +110,26 @@ async def create_import_session(
     await db.flush()
     await _transition(db, sess, "uploaded", "uploaded", {"filename": safe_name, "sha256": sha})
 
-    # Phase 1: extract blocks without LLM
-    await _transition(db, sess, "extracting", "extracting")
-    sess.progress = 0.2
+    preview_hash = None
     try:
+        await _transition(db, sess, "extracting", "extracting")
+        sess.progress = 0.2
         doc = extract_file(dest, safe_name, str(source_id))
         source.extracted_blocks_json = doc
-        art = ImportArtifact(
-            id=gen_uuid(),
-            import_session_id=session_id,
-            artifact_type="document_blocks",
-            artifact_key="raw_blocks",
-            version=1,
-            status="ready",
-            input_hash=sha,
-            output_json=doc,
-            source_refs=[],
+        db.add(
+            ImportArtifact(
+                id=gen_uuid(),
+                import_session_id=session_id,
+                artifact_type="document_blocks",
+                artifact_key="raw_blocks",
+                version=1,
+                status="ready",
+                input_hash=sha,
+                output_json=doc,
+                source_refs=[],
+            )
         )
-        db.add(art)
 
-        # rule-only sanitize candidates
         await _transition(db, sess, "sanitizing", "sanitizing")
         sess.progress = 0.35
         cand = candidate_sanitize(doc.get("blocks") or [])
@@ -146,7 +145,6 @@ async def create_import_session(
             )
         )
 
-        # lightweight preview scaffold (no LLM entity extract yet)
         kept = [
             b
             for b, c in zip(doc.get("blocks") or [], cand)
@@ -158,8 +156,9 @@ async def create_import_session(
             "block_count": len(doc.get("blocks") or []),
             "heading_count": len(headings),
             "sanitize_review_count": sum(1 for c in cand if c.get("action") == "review"),
-            "note": "Phase1: 文本已提取。多阶段 LLM 抽取将在后续 worker 步骤填充人物/世界/大纲。",
+            "note": "文本已提取，正在排队多阶段 LLM 分析（人物/世界/大纲…）",
             "headings_sample": [h["text"] for h in headings[:40]],
+            "counts": {"文档块": len(doc.get("blocks") or [])},
         }
         preview_hash = sha256_bytes(json.dumps(preview, ensure_ascii=False, sort_keys=True).encode())
         sess.preview_hash = preview_hash
@@ -175,7 +174,6 @@ async def create_import_session(
             )
         )
 
-        # if many chatter candidates, open a non-blocking conflict
         review_n = sum(1 for c in cand if c.get("action") == "review")
         if review_n:
             db.add(
@@ -185,7 +183,7 @@ async def create_import_session(
                     code="CHATTER_CANDIDATES",
                     severity="warning",
                     entity_type="document_block",
-                    message=f"检测到 {review_n} 处疑似 AI 对话残留，请在预览中确认清洗结果",
+                    message=f"检测到 {review_n} 处疑似 AI 对话残留，分析阶段将进一步清洗",
                     options=[
                         {"id": "review_later", "label": "稍后在预览中处理"},
                         {"id": "accept_rules", "label": "接受规则候选"},
@@ -194,8 +192,8 @@ async def create_import_session(
                 )
             )
 
-        await _transition(db, sess, "preview_ready", "preview_ready")
-        sess.progress = 0.5
+        await _transition(db, sess, "analyzing", "queued_analysis")
+        sess.progress = 0.38
         sess.primary_document_type = "mixed_book_proposal"
         sess.document_types = ["book_proposal"]
     except Exception as e:
@@ -206,12 +204,23 @@ async def create_import_session(
         raise HTTPException(500, f"extract failed: {e}")
 
     await db.commit()
+
+    enqueue_error = None
+    try:
+        from app.engine.import_pipeline import enqueue_import_pipeline
+
+        await enqueue_import_pipeline(str(session_id))
+    except Exception as e:
+        enqueue_error = str(e)
+
     return {
         "import_session_id": str(session_id),
-        "status": sess.status,
-        "progress": sess.progress,
-        "preview_hash": sess.preview_hash,
+        "status": "analyzing",
+        "progress": 0.38,
+        "preview_hash": preview_hash,
         "source": {"id": str(source_id), "filename": safe_name, "sha256": sha, "size": len(data)},
+        "enqueue_error": enqueue_error,
+        "message": "已上传并排队 LLM 分析，请轮询状态直至 preview_ready",
     }
 
 
@@ -273,7 +282,10 @@ async def get_preview(session_id: str, db: AsyncSession = Depends(get_db)):
             select(ImportConflict).where(ImportConflict.import_session_id == sid)
         )
     ).scalars().all()
-    by_key = {a.artifact_key: a.output_json for a in arts}
+    by_key = {}
+    for a in arts:
+        # later versions overwrite (arts ordered by created_at)
+        by_key[a.artifact_key] = a.output_json
     return {
         "import_session_id": str(sid),
         "status": sess.status,
@@ -344,11 +356,8 @@ async def commit_session(
     body: CommitBody,
     db: AsyncSession = Depends(get_db),
 ):
-    """Phase1 commit: create minimal Book + BookProfile only after preview_ready.
-
-    Full multi-entity atomic commit lands in Phase 3; this still forbids pre-create Book on upload.
-    """
-    from app.models.tables import Book, BookProfile
+    """Atomic multi-entity commit after preview_ready (no pre-create Book on upload)."""
+    from app.engine.import_pipeline import atomic_commit_import
 
     sid = uuid.UUID(session_id)
     sess = (
@@ -356,69 +365,45 @@ async def commit_session(
     ).scalar_one_or_none()
     if not sess:
         raise HTTPException(404, "not found")
-    if sess.status not in ("preview_ready", "needs_human"):
-        raise HTTPException(400, f"cannot commit from status={sess.status}")
-    if body.expected_preview_hash != sess.preview_hash:
-        raise HTTPException(status_code=409, detail={"code": "PREVIEW_STALE", "message": "preview hash mismatch"})
-
-    blocking = (
-        await db.execute(
-            select(ImportConflict).where(
-                ImportConflict.import_session_id == sid,
-                ImportConflict.severity == "blocking",
-                ImportConflict.status == "open",
-            )
+    try:
+        result = await atomic_commit_import(
+            db,
+            sess,
+            expected_preview_hash=body.expected_preview_hash,
+            book_overrides=body.book_overrides,
         )
-    ).scalars().all()
-    if blocking:
-        raise HTTPException(400, f"{len(blocking)} blocking conflicts unresolved")
+        await db.commit()
+        return result
+    except ValueError as e:
+        msg = str(e)
+        if msg == "PREVIEW_STALE":
+            raise HTTPException(status_code=409, detail={"code": "PREVIEW_STALE", "message": "preview hash mismatch"})
+        if msg.startswith("BLOCKING_CONFLICTS"):
+            raise HTTPException(400, msg)
+        raise HTTPException(400, msg)
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(500, f"commit failed: {e}")
 
-    if sess.book_id:
-        return {"book_id": str(sess.book_id), "status": "already_committed"}
 
-    await _transition(db, sess, "committing", "committing")
-    art = (
-        await db.execute(
-            select(ImportArtifact).where(
-                ImportArtifact.import_session_id == sid,
-                ImportArtifact.artifact_key == "preview",
-            )
-        )
+@router.post("/{session_id}/analyze")
+async def requeue_analysis(session_id: str, db: AsyncSession = Depends(get_db)):
+    """Re-enqueue LLM pipeline (idempotent resume via artifacts)."""
+    sid = uuid.UUID(session_id)
+    sess = (
+        await db.execute(select(ImportSession).where(ImportSession.id == sid))
     ).scalar_one_or_none()
-    preview = (art.output_json if art else {}) or {}
-    overrides = body.book_overrides or {}
-    title = overrides.get("title") or preview.get("title_guess") or "未命名小说"
+    if not sess:
+        raise HTTPException(404, "not found")
+    if sess.status in ("completed", "committing"):
+        raise HTTPException(400, f"cannot analyze status={sess.status}")
+    try:
+        from app.engine.import_pipeline import enqueue_import_pipeline
 
-    book = Book(
-        id=gen_uuid(),
-        title=title,
-        description=overrides.get("description"),
-        status="created",
-        target_chapters=int(overrides.get("planned_chapters") or 500),
-        planned_chapters=int(overrides.get("planned_chapters") or 500),
-        lifecycle_status="draft",
-        source_import_session_id=sid,
-        tags=overrides.get("tags") or [],
-        logline=overrides.get("logline"),
-        last_activity_at=_utcnow(),
-    )
-    db.add(book)
-    await db.flush()
-    db.add(
-        BookProfile(
-            id=gen_uuid(),
-            book_id=book.id,
-            logline=book.logline,
-            synopsis=None,
-            genre=overrides.get("genre"),
-        )
-    )
-    sess.book_id = book.id
-    await _transition(db, sess, "completed", "completed")
-    sess.progress = 1.0
-    sess.completed_at = _utcnow()
-    await db.commit()
-    return {"book_id": str(book.id), "status": "completed", "import_session_id": str(sid)}
+        await enqueue_import_pipeline(session_id)
+    except Exception as e:
+        raise HTTPException(500, f"enqueue failed: {e}")
+    return {"status": "queued", "import_session_id": session_id}
 
 
 @router.post("/{session_id}/cancel")

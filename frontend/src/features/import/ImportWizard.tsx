@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../../api";
 import { Loader2, Upload, FileText, Sparkles } from "lucide-react";
 
@@ -9,14 +9,45 @@ export function ImportWizard({
   onClose: () => void;
   onCommitted: (bookId: string) => void;
 }) {
-  const [mode, setMode] = useState<"choose" | "upload" | "blank" | "preview">("choose");
+  const [mode, setMode] = useState<"choose" | "upload" | "blank" | "preview" | "analyzing">("choose");
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [preview, setPreview] = useState<any>(null);
+  const [session, setSession] = useState<any>(null);
   const [title, setTitle] = useState("");
   const [blankTitle, setBlankTitle] = useState("");
+
+  // poll while analyzing
+  useEffect(() => {
+    if (!sessionId || mode !== "analyzing") return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const s = await api.imports.get(sessionId);
+        if (cancelled) return;
+        setSession(s);
+        if (s.status === "preview_ready" || s.status === "needs_human") {
+          const p = await api.imports.preview(sessionId);
+          if (cancelled) return;
+          setPreview(p);
+          setTitle(p.preview?.title_guess || p.preview?.metadata?.title || "");
+          setMode("preview");
+        } else if (s.status === "failed") {
+          setError(s.error_detail || s.error_code || "分析失败");
+        }
+      } catch (e: any) {
+        if (!cancelled) setError(e?.message || String(e));
+      }
+    };
+    tick();
+    const id = setInterval(tick, 2500);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [sessionId, mode]);
 
   const upload = async () => {
     if (!file) return;
@@ -25,10 +56,14 @@ export function ImportWizard({
     try {
       const r = await api.imports.create(file);
       setSessionId(r.import_session_id);
-      const p = await api.imports.preview(r.import_session_id);
-      setPreview(p);
-      setTitle(p.preview?.title_guess || file.name.replace(/\.[^.]+$/, ""));
-      setMode("preview");
+      if (r.status === "preview_ready" || r.status === "needs_human") {
+        const p = await api.imports.preview(r.import_session_id);
+        setPreview(p);
+        setTitle(p.preview?.title_guess || file.name.replace(/\.[^.]+$/, ""));
+        setMode("preview");
+      } else {
+        setMode("analyzing");
+      }
     } catch (e: any) {
       setError(e?.message || String(e));
     } finally {
@@ -41,9 +76,8 @@ export function ImportWizard({
     setBusy(true);
     setError(null);
     try {
-      // resolve open warning conflicts as review_later
       for (const c of preview.conflicts || []) {
-        if (c.status === "open" && c.options?.[0]?.id) {
+        if (c.status === "open" && c.severity !== "blocking" && c.options?.[0]?.id) {
           await api.imports.resolveConflict(sessionId, c.conflict_id, c.options[0].id);
         }
       }
@@ -73,10 +107,14 @@ export function ImportWizard({
     }
   };
 
+  const counts = preview?.preview?.counts || {};
+  const characters = preview?.preview?.characters || [];
+  const chapters = preview?.preview?.chapters || [];
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
       <div
-        className="bg-bg-elevated border border-border rounded-lg w-full max-w-lg max-h-[85vh] overflow-auto p-5 space-y-4"
+        className="bg-bg-elevated border border-border rounded-lg w-full max-w-xl max-h-[90vh] overflow-auto p-5 space-y-4"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">
@@ -90,22 +128,16 @@ export function ImportWizard({
 
         {mode === "choose" && (
           <div className="grid grid-cols-1 gap-3">
-            <button
-              className="panel p-4 text-left hover:border-brand/40 transition-colors"
-              onClick={() => setMode("upload")}
-            >
+            <button className="panel p-4 text-left hover:border-brand/40 transition-colors" onClick={() => setMode("upload")}>
               <div className="flex items-center gap-2 text-sm text-text-primary" style={{ fontWeight: 510 }}>
                 <Sparkles size={15} className="text-brand-accent" />
                 从企划书创建
               </div>
               <p className="text-xs text-text-tertiary mt-1">
-                上传完整企划 → 提取预览 → 确认后才创建正式书（不会先建空项目）
+                上传完整企划 → 多阶段 LLM 分析 → 确认后才创建正式书（不会先建空项目）
               </p>
             </button>
-            <button
-              className="panel p-4 text-left hover:border-brand/40 transition-colors"
-              onClick={() => setMode("blank")}
-            >
+            <button className="panel p-4 text-left hover:border-brand/40 transition-colors" onClick={() => setMode("blank")}>
               <div className="flex items-center gap-2 text-sm text-text-primary" style={{ fontWeight: 510 }}>
                 <FileText size={15} className="text-brand-accent" />
                 创建空白小说
@@ -158,11 +190,41 @@ export function ImportWizard({
           </div>
         )}
 
+        {mode === "analyzing" && (
+          <div className="space-y-3 py-6 text-center">
+            <Loader2 size={22} className="animate-spin mx-auto text-brand-accent" />
+            <div className="text-sm text-text-primary">正在多阶段分析企划…</div>
+            <div className="text-2xs text-text-tertiary font-mono">
+              状态 {session?.status || "analyzing"} · 步骤 {session?.current_step || "…"} · 进度{" "}
+              {Math.round((session?.progress || 0) * 100)}%
+            </div>
+            <p className="text-2xs text-text-disabled px-6">
+              分类 → 清洗 → 元数据 → 世界 → 人物 → 关系 → 大纲 → 剧情线 → 写作规则 → 一致性
+            </p>
+            {sessionId && (
+              <button
+                className="btn text-2xs py-1 px-2"
+                onClick={async () => {
+                  try {
+                    await api.imports.analyze(sessionId);
+                  } catch (e: any) {
+                    setError(e?.message || String(e));
+                  }
+                }}
+              >
+                重新排队
+              </button>
+            )}
+          </div>
+        )}
+
         {mode === "preview" && preview && (
           <div className="space-y-3">
             <div className="text-xs text-text-tertiary">
-              状态 <span className="text-text-primary font-mono">{preview.status}</span> · 预览哈希{" "}
-              <span className="font-mono">{(preview.preview_hash || "").slice(0, 12)}…</span>
+              状态 <span className="text-text-primary font-mono">{preview.status}</span>
+              {preview.status === "needs_human" && (
+                <span className="ml-2 text-amber-300">有待确认冲突</span>
+              )}
             </div>
             <label className="block text-2xs text-text-disabled mb-1">正式书名</label>
             <input
@@ -170,13 +232,40 @@ export function ImportWizard({
               value={title}
               onChange={(e) => setTitle(e.target.value)}
             />
-            <div className="panel p-3 text-2xs text-text-secondary space-y-1 max-h-40 overflow-auto">
-              <div>块数：{preview.preview?.block_count}</div>
-              <div>标题样例：{(preview.preview?.headings_sample || []).slice(0, 8).join(" · ")}</div>
+            <div className="grid grid-cols-3 gap-2">
+              {Object.entries(counts).map(([k, v]) => (
+                <div key={k} className="panel p-2 text-center">
+                  <div className="text-sm text-text-primary font-mono">{String(v)}</div>
+                  <div className="text-2xs text-text-disabled">{k}</div>
+                </div>
+              ))}
+            </div>
+            {characters.length > 0 && (
+              <div className="panel p-3 text-2xs text-text-secondary max-h-28 overflow-auto">
+                <div className="text-text-disabled mb-1">人物预览</div>
+                {characters.slice(0, 12).map((c: any) => (
+                  <div key={c.temp_id || c.canonical_name}>
+                    {c.canonical_name}
+                    {c.role ? ` · ${c.role}` : ""}
+                  </div>
+                ))}
+              </div>
+            )}
+            {chapters.length > 0 && (
+              <div className="panel p-3 text-2xs text-text-secondary max-h-28 overflow-auto">
+                <div className="text-text-disabled mb-1">章纲预览（{chapters.length}）</div>
+                {chapters.slice(0, 10).map((c: any) => (
+                  <div key={c.chapter_no}>
+                    第{c.chapter_no}章 {c.title || c.goal || ""}
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="panel p-3 text-2xs text-text-secondary space-y-1 max-h-32 overflow-auto">
               <div className="text-text-disabled">{preview.preview?.note}</div>
               {(preview.conflicts || []).map((c: any) => (
-                <div key={c.conflict_id} className="text-amber-300/90">
-                  冲突 {c.code}: {c.message}
+                <div key={c.conflict_id} className={c.severity === "blocking" ? "text-red-300" : "text-amber-300/90"}>
+                  [{c.severity}] {c.code}: {c.message}
                 </div>
               ))}
             </div>
@@ -184,7 +273,11 @@ export function ImportWizard({
               <button className="btn text-xs py-1.5 px-3" onClick={onClose}>
                 取消
               </button>
-              <button className="btn-primary text-xs py-1.5 px-3" disabled={busy} onClick={commit}>
+              <button
+                className="btn-primary text-xs py-1.5 px-3"
+                disabled={busy || (preview.conflicts || []).some((c: any) => c.severity === "blocking" && c.status === "open")}
+                onClick={commit}
+              >
                 {busy ? <Loader2 size={12} className="animate-spin" /> : null}
                 确认创建小说
               </button>

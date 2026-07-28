@@ -44,3 +44,13 @@ Spec: NovelForge-v8-.md
 ## Ops
 - Upload dir: `/app/data/imports` (compose mount `../data/imports`)
 - Feature flags in settings: FEATURE_LIBRARY_V2 / IMPORT_V2 / PROMPT_STUDIO (default true)
+
+
+## Phase 2 (landed, partial DoD)
+
+- Worker: `run_import_pipeline_job` multi-step LLM extract with artifact checkpoints
+- Upload returns `analyzing` then poll until `preview_ready` / `needs_human`
+- Deterministic outline regex fallback merged with LLM
+- Commit creates characters/relationships/outline nodes/volumes/plot threads/writing constraints
+- Smoke (2026-07-28): sample md → 3 chars, 4 outline nodes, 3 plot threads, 3 writing rules; book `83fbd711-…`
+- Known gaps: world_rules/locations often empty under LLM variance; 429 rate-limit slows pipeline; no Playwright E2E; GitHub push still auth-blocked

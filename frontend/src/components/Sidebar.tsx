@@ -11,6 +11,13 @@ import {
   Palette,
   Globe,
   ArrowLeft,
+  Library,
+  Home,
+  Sparkles,
+  Wrench,
+  ListTodo,
+  FolderOpen,
+  Settings,
 } from "lucide-react";
 import clsx from "clsx";
 
@@ -23,16 +30,32 @@ interface Props {
   selectedBookTitle?: string | null;
 }
 
-const tabs = [
-  { id: "overview", label: "项目总览", icon: BookOpen, desc: "BOOKS", needsBook: false },
-  { id: "outline", label: "大纲依赖", icon: GitGraph, desc: "DAG", needsBook: true },
-  { id: "chapters", label: "章节流水线", icon: FileText, desc: "PIPE", needsBook: true },
-  { id: "memory", label: "记忆银行", icon: Brain, desc: "L0-L4", needsBook: true },
+/** Global IA (v8): 我的书架 / 写作任务 / 参考资料 / 系统设置 */
+const globalTabs = [
+  { id: "library", label: "我的书架", icon: Library, desc: "BOOKS", needsBook: false },
+  { id: "tasks", label: "写作任务", icon: ListTodo, desc: "TASKS", needsBook: false },
+  { id: "references", label: "参考资料库", icon: FolderOpen, desc: "REF", needsBook: false },
+  { id: "settings", label: "系统设置", icon: Settings, desc: "SYS", needsBook: false },
+];
+
+/** Single-book studio nav (creator language; engineering → diagnostics) */
+const bookTabs = [
+  { id: "home", label: "作品首页", icon: Home, desc: "HOME", needsBook: true },
+  { id: "outline", label: "大纲", icon: GitGraph, desc: "OUT", needsBook: true },
+  { id: "chapters", label: "章节", icon: FileText, desc: "CH", needsBook: true },
+  { id: "writing", label: "写作台", icon: PenTool, desc: "WRITE", needsBook: true },
+  { id: "memory", label: "记忆", icon: Brain, desc: "MEM", needsBook: true },
+  { id: "prompts", label: "提示词工坊", icon: Sparkles, desc: "PROMPT", needsBook: false },
+  { id: "genre", label: "文风档案", icon: Palette, desc: "GENRE", needsBook: true },
+  { id: "research", label: "调研", icon: Globe, desc: "RES", needsBook: true },
+  { id: "diagnostics", label: "高级诊断", icon: Wrench, desc: "DIAG", needsBook: true },
+];
+
+/** Legacy engineering tabs still reachable under diagnostics group */
+const diagTabs = [
+  { id: "context", label: "Context 检视", icon: Package, desc: "CTX", needsBook: false },
+  { id: "models", label: "模型绑定", icon: Cpu, desc: "MODEL", needsBook: false },
   { id: "audit", label: "漂移审计", icon: AlertTriangle, desc: "DRIFT", needsBook: true },
-  { id: "context", label: "Context", icon: Package, desc: "C-35", needsBook: false },
-  { id: "models", label: "模型绑定", icon: Cpu, desc: "C-21", needsBook: false },
-  { id: "genre", label: "Genre", icon: Palette, desc: "C-27", needsBook: false },
-  { id: "research", label: "调研", icon: Globe, desc: "C-32", needsBook: false },
 ];
 
 export function Sidebar({
@@ -43,14 +66,18 @@ export function Sidebar({
   selectedBookId,
   selectedBookTitle,
 }: Props) {
+  const inBook = !!selectedBookId;
+  const tabs = inBook ? bookTabs : globalTabs;
+  const showDiag = inBook && (tab === "diagnostics" || diagTabs.some((d) => d.id === tab));
+
   return (
     <aside className="w-56 bg-bg-panel border-r border-border flex flex-col shrink-0">
       <div className="h-11 flex items-center px-4 border-b border-border">
-        <PenTool size={15} className="text-brand" />
+        <BookOpen size={15} className="text-brand" />
         <span className="ml-2 text-xs text-text-primary tracking-wide" style={{ fontWeight: 510 }}>
           NovelForge
         </span>
-        <span className="ml-auto text-2xs text-text-disabled font-mono">v7.4</span>
+        <span className="ml-auto text-2xs text-text-disabled font-mono">v8.0</span>
       </div>
 
       {selectedBookId && (
@@ -63,9 +90,9 @@ export function Sidebar({
           >
             <ArrowLeft size={13} className="shrink-0" />
             <div className="flex-1 min-w-0">
-              <div className="text-2xs text-text-disabled">返回项目列表</div>
+              <div className="text-2xs text-text-disabled">返回书架</div>
               <div className="truncate" style={{ fontWeight: 510 }}>
-                {selectedBookTitle || "当前项目"}
+                {selectedBookTitle || "当前作品"}
               </div>
             </div>
           </button>
@@ -75,13 +102,13 @@ export function Sidebar({
       <nav className="flex-1 p-2 space-y-px overflow-auto">
         {tabs.map((t) => {
           const Icon = t.icon;
-          const active = tab === t.id;
+          const active = tab === t.id || (t.id === "diagnostics" && showDiag && diagTabs.some((d) => d.id === tab));
           const disabled = t.needsBook && !selectedBookId;
           return (
             <button
               key={t.id}
               onClick={() => !disabled && setTab(t.id)}
-              title={disabled ? "请先选择或新建一个项目" : undefined}
+              title={disabled ? "请先选择一本小说" : undefined}
               className={clsx(
                 "w-full flex items-center gap-2.5 px-3 py-[7px] rounded text-xs text-left transition-all duration-150",
                 active
@@ -99,6 +126,30 @@ export function Sidebar({
             </button>
           );
         })}
+
+        {showDiag && (
+          <div className="mt-2 pt-2 border-t border-border/50 space-y-px">
+            <div className="px-3 py-1 text-2xs text-text-disabled">工程诊断</div>
+            {diagTabs.map((t) => {
+              const Icon = t.icon;
+              const active = tab === t.id;
+              const disabled = t.needsBook && !selectedBookId;
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => !disabled && setTab(t.id)}
+                  className={clsx(
+                    "w-full flex items-center gap-2.5 px-3 py-[7px] rounded text-xs text-left",
+                    active ? "bg-brand-muted text-brand-accent" : "text-text-tertiary hover:bg-bg-hover"
+                  )}
+                >
+                  <Icon size={13} />
+                  <span>{t.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </nav>
 
       <div className="p-2 border-t border-border">
@@ -107,7 +158,7 @@ export function Sidebar({
           className="btn-primary w-full flex items-center justify-center gap-1.5 py-[7px] text-xs rounded-md"
         >
           <Plus size={13} />
-          新建项目
+          新建小说
         </button>
       </div>
     </aside>

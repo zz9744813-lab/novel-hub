@@ -16,6 +16,10 @@ from app.models.tables import (
     # v7.4 models
     AgentModelBinding, ModelChangeLog, ModelRouteEvent, AgentContextPackage,
     ReferenceSample, GenreProfile, ResearchSession, ExternalResearchEvidence,
+    # v8.0
+    BookProfile, BookSource, ImportSession, ImportSessionEvent, ImportArtifact, ImportConflict,
+    LocationCard, CharacterRelationship, OutlineVolume, WritingConstraint,
+    PromptTemplateVersion, PromptTestRun,
 )
 
 __all__ = [
@@ -32,7 +36,9 @@ __all__ = [
     "ReviewIssue", "RewritePatch", "DriftAuditReport",
     "AgentRun", "AgentRunOutput", "LlmUsageEvent",
     "HumanIntervention", "PromptTemplate", "TechniqueCard",
-    # v7.4
     "AgentModelBinding", "ModelChangeLog", "ModelRouteEvent", "AgentContextPackage",
     "ReferenceSample", "GenreProfile", "ResearchSession", "ExternalResearchEvidence",
+    "BookProfile", "BookSource", "ImportSession", "ImportSessionEvent", "ImportArtifact", "ImportConflict",
+    "LocationCard", "CharacterRelationship", "OutlineVolume", "WritingConstraint",
+    "PromptTemplateVersion", "PromptTestRun",
 ]

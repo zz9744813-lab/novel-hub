@@ -26,12 +26,20 @@ from app.models import (
     StyleToneAnchor,
     WorldRule,
     PlotThread,
+    BookProfile,
+    WritingConstraint,
+    CharacterCard,
+    CharacterRelationship,
+    LocationCard,
+    OutlineVolume,
+    GenreProfile,
+    ExternalResearchEvidence,
 )
 from app.token_estimate import safe_token_estimate
 
 logger = logging.getLogger("novelforge.context")
 
-ASSEMBLER_VERSION = "2.0-record-only"
+ASSEMBLER_VERSION = "3.0-v8-wired"
 
 
 def _sha(obj: Any) -> str:
@@ -242,6 +250,250 @@ async def assemble_context(
                 agent_role=agent_role,
             )
         )
+
+    # v8.0: book_profile / volume / character cards / relationships / locations / writing constraints
+    try:
+        bp = (
+            await db.execute(select(BookProfile).where(BookProfile.book_id == book_id))
+        ).scalar_one_or_none()
+        if bp:
+            profile = {
+                "logline": bp.logline,
+                "synopsis": bp.synopsis,
+                "genre": bp.genre,
+                "themes": bp.themes,
+                "tone": bp.tone,
+                "core_loop": bp.core_loop,
+            }
+            items.append(
+                _item(
+                    kind="book_profile",
+                    content=profile,
+                    priority=810,
+                    required=False,
+                    reason="book_tone_profile",
+                    source_id=str(bp.id),
+                    canon_level="approved",
+                    agent_role=agent_role,
+                )
+            )
+    except Exception as e:
+        logger.debug("book_profile skip: %s", e)
+
+    try:
+        vol = (
+            await db.execute(
+                select(OutlineVolume)
+                .where(
+                    OutlineVolume.book_id == book_id,
+                    OutlineVolume.chapter_from.is_not(None),
+                    OutlineVolume.chapter_from <= current_chapter,
+                )
+                .order_by(OutlineVolume.volume_no.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if vol and (vol.chapter_to is None or vol.chapter_to >= current_chapter):
+            items.append(
+                _item(
+                    kind="current_volume",
+                    content={
+                        "volume_no": vol.volume_no,
+                        "title": vol.title,
+                        "goal": vol.goal,
+                        "chapter_from": vol.chapter_from,
+                        "chapter_to": vol.chapter_to,
+                        "themes": vol.themes,
+                    },
+                    priority=940,
+                    required=True,
+                    reason="current_volume_goal",
+                    source_id=str(vol.id),
+                    canon_level="approved",
+                    agent_role=agent_role,
+                )
+            )
+    except Exception as e:
+        logger.debug("volume skip: %s", e)
+
+    try:
+        cards = (
+            await db.execute(select(CharacterCard).where(CharacterCard.book_id == book_id).limit(40))
+        ).scalars().all()
+        if cards:
+            payload = [
+                {"id": str(c.id), "name": c.name, "role": c.role, "description": c.description}
+                for c in cards
+            ]
+            items.append(
+                _item(
+                    kind="character_cards",
+                    content=payload,
+                    priority=920,
+                    required=True,
+                    reason="character_bible",
+                    canon_level="approved",
+                    agent_role=agent_role,
+                )
+            )
+    except Exception as e:
+        logger.debug("character_cards skip: %s", e)
+
+    try:
+        rels = (
+            await db.execute(
+                select(CharacterRelationship)
+                .where(CharacterRelationship.book_id == book_id, CharacterRelationship.status == "active")
+                .limit(80)
+            )
+        ).scalars().all()
+        if rels:
+            payload = [
+                {
+                    "from": str(r.from_character_id),
+                    "to": str(r.to_character_id),
+                    "type": r.relation_type,
+                    "stage": r.stage,
+                    "description": r.description,
+                }
+                for r in rels
+            ]
+            items.append(
+                _item(
+                    kind="character_relationships",
+                    content=payload,
+                    priority=780,
+                    required=False,
+                    reason="relationship_graph",
+                    canon_level="working",
+                    agent_role=agent_role,
+                )
+            )
+    except Exception as e:
+        logger.debug("relationships skip: %s", e)
+
+    try:
+        locs = (
+            await db.execute(
+                select(LocationCard).where(LocationCard.book_id == book_id, LocationCard.status == "active").limit(40)
+            )
+        ).scalars().all()
+        if locs:
+            payload = [
+                {"id": str(l.id), "name": l.name, "description": l.description, "rules": l.rules}
+                for l in locs
+            ]
+            items.append(
+                _item(
+                    kind="location_cards",
+                    content=payload,
+                    priority=900,
+                    required=True,
+                    reason="location_rules",
+                    canon_level="approved",
+                    agent_role=agent_role,
+                )
+            )
+    except Exception as e:
+        logger.debug("locations skip: %s", e)
+
+    try:
+        wcs = (
+            await db.execute(
+                select(WritingConstraint)
+                .where(WritingConstraint.book_id == book_id, WritingConstraint.status == "active")
+                .order_by(WritingConstraint.priority.desc())
+                .limit(60)
+            )
+        ).scalars().all()
+        for wc in wcs:
+            items.append(
+                _item(
+                    kind="writing_constraints",
+                    content={
+                        "type": wc.constraint_type,
+                        "title": wc.title,
+                        "body": wc.body,
+                        "is_hard": wc.is_hard,
+                        "scope_type": wc.scope_type,
+                    },
+                    priority=890 if wc.is_hard else 800,
+                    required=bool(wc.is_hard),
+                    reason="writing_rule",
+                    source_id=str(wc.id),
+                    canon_level="approved",
+                    agent_role=agent_role,
+                )
+            )
+    except Exception as e:
+        logger.debug("writing_constraints skip: %s", e)
+
+    try:
+        gp = (
+            await db.execute(
+                select(GenreProfile)
+                .where(GenreProfile.book_id == book_id, GenreProfile.status == "approved")
+                .order_by(GenreProfile.version.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if gp:
+            items.append(
+                _item(
+                    kind="approved_genre_profile",
+                    content={
+                        "id": str(gp.id),
+                        "narrative_person": gp.narrative_person,
+                        "pacing_profile": gp.pacing_profile,
+                        "technique_tags": list(gp.technique_tags or []),
+                        "prompt_injection_snippet": gp.prompt_injection_snippet,
+                    },
+                    priority=815,
+                    required=False,
+                    reason="genre_profile",
+                    source_id=str(gp.id),
+                    canon_level="approved",
+                    agent_role=agent_role,
+                )
+            )
+    except Exception as e:
+        logger.debug("genre_profile skip: %s", e)
+
+    try:
+        evid = (
+            await db.execute(
+                select(ExternalResearchEvidence)
+                .where(
+                    ExternalResearchEvidence.book_id == book_id,
+                    ExternalResearchEvidence.status == "approved",
+                )
+                .limit(20)
+            )
+        ).scalars().all()
+        if evid:
+            payload = [
+                {
+                    "id": str(e.id),
+                    "title": getattr(e, "source_title", None),
+                    "snippet": (getattr(e, "summary", None) or "")[:800],
+                    "source_kind": "external_research",
+                    "url": getattr(e, "source_url", None),
+                }
+                for e in evid
+            ]
+            items.append(
+                _item(
+                    kind="approved_external_research",
+                    content=payload,
+                    priority=350,
+                    required=False,
+                    reason="external_research_approved",
+                    canon_level="external",
+                    agent_role=agent_role,
+                )
+            )
+    except Exception as e:
+        logger.debug("external research skip: %s", e)
 
     threads = await db.execute(
         select(PlotThread).where(PlotThread.book_id == book_id, PlotThread.status == "open")

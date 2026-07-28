@@ -244,6 +244,67 @@ export const api = {
   },
   resources: () => fetchJSON<{ available_mb: number; swap_used_pct: number; resource_safe: boolean }>("/api/admin/resources"),
   events: (bookId: string) => fetchJSON<any[]>(`/api/books/${bookId}/events`),
+  library: {
+    books: () => fetchJSON<{ books: any[]; total: number }>("/api/library/books"),
+    bookHome: (bookId: string) => fetchJSON<any>(`/api/library/books/${bookId}`),
+  },
+  imports: {
+    create: async (file: File) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      const r = await fetch(BASE + "/api/import-sessions", {
+        method: "POST",
+        headers: authHeaders(),
+        body: formData,
+      });
+      if (r.status === 401) {
+        clearAdminToken();
+        window.dispatchEvent(new CustomEvent("novelforge:unauthorized"));
+        throw new Error(`401: unauthorized`);
+      }
+      if (!r.ok) throw new Error(`${r.status}: ${await r.text()}`);
+      return r.json() as Promise<{
+        import_session_id: string;
+        status: string;
+        progress: number;
+        preview_hash: string;
+      }>;
+    },
+    get: (id: string) => fetchJSON<any>(`/api/import-sessions/${id}`),
+    preview: (id: string) => fetchJSON<any>(`/api/import-sessions/${id}/preview`),
+    resolveConflict: (sessionId: string, conflictId: string, optionId: string) =>
+      fetchJSON<any>(`/api/import-sessions/${sessionId}/conflicts/${conflictId}/resolve`, {
+        method: "POST",
+        body: JSON.stringify({ option_id: optionId }),
+      }),
+    commit: (
+      sessionId: string,
+      body: { expected_preview_hash: string; book_overrides?: Record<string, any> }
+    ) =>
+      fetchJSON<{ book_id: string; status: string }>(`/api/import-sessions/${sessionId}/commit`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    cancel: (sessionId: string) =>
+      fetchJSON<{ status: string }>(`/api/import-sessions/${sessionId}/cancel`, { method: "POST" }),
+  },
+  promptStudio: {
+    agents: () => fetchJSON<{ agents: any[] }>("/api/prompt-studio/agents"),
+    templates: (agentRole?: string) =>
+      fetchJSON<{ templates: any[] }>(
+        `/api/prompt-studio/templates${agentRole ? `?agent_role=${encodeURIComponent(agentRole)}` : ""}`
+      ),
+    getTemplate: (id: string) => fetchJSON<any>(`/api/prompt-studio/templates/${id}`),
+    createTemplate: (body: any) =>
+      fetchJSON<any>("/api/prompt-studio/templates", { method: "POST", body: JSON.stringify(body) }),
+    test: (id: string) =>
+      fetchJSON<any>(`/api/prompt-studio/templates/${id}/test`, { method: "POST" }),
+    activate: (id: string) =>
+      fetchJSON<any>(`/api/prompt-studio/templates/${id}/activate`, { method: "POST" }),
+    compatibility: (id: string) => fetchJSON<any>(`/api/prompt-studio/templates/${id}/compatibility`),
+    compiledPreview: (id: string) =>
+      fetchJSON<any>(`/api/prompt-studio/templates/${id}/compiled-preview`),
+  },
 };
 
 export interface Book {

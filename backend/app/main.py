@@ -15,6 +15,9 @@ from fastapi.responses import JSONResponse
 
 from app.api.routes import router, seed_prompt_templates
 from app.config import settings
+from app.routers import library as library_router
+from app.routers import imports as imports_router
+from app.routers import prompt_studio as prompt_studio_router
 
 logger = logging.getLogger("novelforge.main")
 
@@ -82,8 +85,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="NovelForge",
-    description="全自动超长篇小说写作系统 v7.4",
-    version="7.4.0",
+    description="NovelForge v8.0 — 书架 / 企划导入 / 提示词工坊",
+    version="8.0.0",
     docs_url=None if _is_production() else "/docs",
     redoc_url=None if _is_production() else "/redoc",
     openapi_url=None if _is_production() else "/openapi.json",
@@ -137,6 +140,9 @@ async def admin_token_middleware(request: Request, call_next):
 
 
 app.include_router(router)
+app.include_router(library_router.router)
+app.include_router(imports_router.router)
+app.include_router(prompt_studio_router.router)
 
 
 @app.get("/health/live")

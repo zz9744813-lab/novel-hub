@@ -75,6 +75,7 @@ services:
       - ../data/books:/app/data/books
       - ../data/exports:/app/data/exports
       - ../data/references:/data/references
+      - ../data/imports:/app/data/imports
       - ./.env:/app/.env:ro
     networks:
       - internal
@@ -117,6 +118,7 @@ services:
       - ../data/books:/app/data/books
       - ../data/exports:/app/data/exports
       - ../data/references:/data/references
+      - ../data/imports:/app/data/imports
       - ./.env:/app/.env:ro
     networks:
       - internal

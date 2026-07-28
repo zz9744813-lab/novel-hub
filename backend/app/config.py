@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     sqlalchemy_pool_size: int = 3
     sqlalchemy_max_overflow: int = 1
 
+    # NovelForge v8.0 feature flags (env FEATURE_* or defaults)
+    feature_library_v2: bool = True
+    feature_import_v2: bool = True
+    feature_prompt_studio: bool = True
+
     class Config:
         env_file = ".env"
         extra = "ignore"

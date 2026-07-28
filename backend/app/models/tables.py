@@ -24,6 +24,21 @@ class Book(Base, TimestampMixin):
     target_words: Mapped[int] = mapped_column(Integer, default=5000000)
     finalized_chapters: Mapped[int] = mapped_column(Integer, default=0)
     finalized_words: Mapped[int] = mapped_column(Integer, default=0)
+    # v8.0 library fields
+    subtitle: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    logline: Mapped[str | None] = mapped_column(Text, nullable=True)
+    synopsis: Mapped[str | None] = mapped_column(Text, nullable=True)
+    genre: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    tags: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    tone_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cover_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cover_thumb_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cover_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    planned_chapters: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    current_chapter_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    lifecycle_status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft", server_default="draft")
+    source_import_session_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class BookSetting(Base, TimestampMixin):
@@ -64,6 +79,10 @@ class OutlineNode(Base, TimestampMixin):
     plot_thread_ids: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     depends_on: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     expected_state_changes: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    volume_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    arc_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    source_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    import_artifact_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     __table_args__ = (UniqueConstraint("book_id", "outline_version_id", "chapter_no"), Index("idx_outline_nodes_book_chapter", "book_id", "chapter_no"))
 
 
@@ -865,3 +884,212 @@ class ExternalResearchEvidence(Base):
     conflicts_or_uncertainty: Mapped[list | None] = mapped_column(ARRAY(String), nullable=True)
     evidence_source: Mapped[str] = mapped_column(String(50), nullable=False, server_default="external_research")
     source_run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("agent_runs.id"), nullable=False)
+
+
+# ---- NovelForge v8.0: library / import / prompt studio ----
+class BookProfile(Base, TimestampMixin):
+    __tablename__ = "book_profiles"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=False, unique=True, index=True)
+    logline: Mapped[str | None] = mapped_column(Text, nullable=True)
+    synopsis: Mapped[str | None] = mapped_column(Text, nullable=True)
+    genre: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    themes: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    tone: Mapped[str | None] = mapped_column(Text, nullable=True)
+    audience: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    content_boundaries: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    core_loop: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extra: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+
+
+class BookSource(Base, TimestampMixin):
+    __tablename__ = "book_sources"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=True, index=True)
+    original_filename: Mapped[str] = mapped_column(String(500), nullable=False)
+    mime_type: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    file_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    storage_path: Mapped[str] = mapped_column(Text, nullable=False)
+    extractor_version: Mapped[str] = mapped_column(String(50), default="v1", nullable=False)
+    extracted_text_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extracted_blocks_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    uploaded_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    legacy_import: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
+class ImportSession(Base, TimestampMixin):
+    __tablename__ = "import_sessions"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="uploaded", index=True)
+    source_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("book_sources.id"), nullable=False, index=True)
+    book_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=True, index=True)
+    primary_document_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    document_types: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    progress: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    current_step: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    parser_version: Mapped[str] = mapped_column(String(50), default="v8.0", nullable=False)
+    pipeline_version: Mapped[str] = mapped_column(String(50), default="v8.0", nullable=False)
+    control_requested: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    preview_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    commit_idempotency_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ImportSessionEvent(Base, TimestampMixin):
+    __tablename__ = "import_session_events"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    import_session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("import_sessions.id"), nullable=False, index=True)
+    from_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    to_status: Mapped[str] = mapped_column(String(50), nullable=False)
+    step: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    detail: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+
+
+class ImportArtifact(Base, TimestampMixin):
+    __tablename__ = "import_artifacts"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    import_session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("import_sessions.id"), nullable=False, index=True)
+    artifact_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    artifact_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(String(50), default="ready", nullable=False)
+    input_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    output_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    output_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    agent_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    __table_args__ = (UniqueConstraint("import_session_id", "artifact_key", "version"),)
+
+
+class ImportConflict(Base, TimestampMixin):
+    __tablename__ = "import_conflicts"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    import_session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("import_sessions.id"), nullable=False, index=True)
+    code: Mapped[str] = mapped_column(String(100), nullable=False)
+    severity: Mapped[str] = mapped_column(String(20), nullable=False, default="warning")  # warning|blocking
+    entity_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    entity_temp_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    options: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    selected_option_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    status: Mapped[str] = mapped_column(String(50), default="open", nullable=False)  # open|resolved|ignored
+    source_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+
+
+class LocationCard(Base, TimestampMixin):
+    __tablename__ = "location_cards"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    aliases: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    environment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resources: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    rules: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    parent_location_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    source_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    status: Mapped[str] = mapped_column(String(50), default="active", nullable=False)
+
+
+class CharacterRelationship(Base, TimestampMixin):
+    __tablename__ = "character_relationships"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=False, index=True)
+    from_character_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    to_character_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    relation_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    stage: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    strength: Mapped[float | None] = mapped_column(Float, nullable=True)
+    start_chapter_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_chapter_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    status: Mapped[str] = mapped_column(String(50), default="active", nullable=False)
+
+
+class OutlineVolume(Base, TimestampMixin):
+    __tablename__ = "outline_volumes"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=False, index=True)
+    outline_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("outline_versions.id"), nullable=True, index=True)
+    volume_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    chapter_from: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    chapter_to: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    goal: Mapped[str | None] = mapped_column(Text, nullable=True)
+    themes: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    required_outcomes: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    forbidden_outcomes: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    involved_character_ids: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    source_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    __table_args__ = (UniqueConstraint("book_id", "volume_no", "outline_version_id"),)
+
+
+class WritingConstraint(Base, TimestampMixin):
+    __tablename__ = "writing_constraints"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=False, index=True)
+    scope_type: Mapped[str] = mapped_column(String(50), nullable=False)  # book|volume|arc|chapter|character
+    scope_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    constraint_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    title: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    is_hard: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    status: Mapped[str] = mapped_column(String(50), default="active", nullable=False)
+    source_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+
+class PromptTemplateVersion(Base, TimestampMixin):
+    """v8 Prompt Studio versioned templates (does not replace legacy PromptTemplate seed)."""
+    __tablename__ = "prompt_template_versions"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    template_key: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    agent_role: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    scope_type: Mapped[str] = mapped_column(String(50), default="system", nullable=False)
+    scope_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(String(50), default="draft", nullable=False)  # draft|active|archived
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    system_prompt: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    user_prompt_template: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    input_contract_key: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    input_contract_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    output_contract_key: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    output_contract_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    allowed_context_kinds: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    required_context_kinds: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    forbidden_context_kinds: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    required_model_capabilities: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    default_temperature: Mapped[float | None] = mapped_column(Float, nullable=True)
+    default_max_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    variables: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    template_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    supersedes_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    last_test_passed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    __table_args__ = (UniqueConstraint("template_key", "scope_type", "scope_id", "version"),)
+
+
+class PromptTestRun(Base, TimestampMixin):
+    __tablename__ = "prompt_test_runs"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    template_version_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("prompt_template_versions.id"), nullable=False, index=True)
+    fixture_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    provider: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    input_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    output_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    output_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    contract_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    leak_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(50), default="completed", nullable=False)
+

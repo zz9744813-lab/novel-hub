@@ -16,8 +16,10 @@ from app.engine.document_blocks import sha256_bytes
 from app.engine.entity_resolver import (
     build_preview_bundle,
     detect_outline_conflicts,
+    deterministic_metadata_from_text,
     deterministic_outline_from_text,
     deterministic_world_from_text,
+    merge_metadata,
     merge_outline,
     merge_world,
     resolve_characters,
@@ -376,9 +378,24 @@ async def run_import_pipeline(session_id: str) -> dict:
         "metadata",
         "metadata_v1",
         "book_metadata_extractor",
-        "从企划书提取书目元数据。只输出 JSON。planned_chapters 为整数或 null。",
+        (
+            "从企划书提取书目元数据。只输出 JSON。"
+            "必须尽量填写 title, logline, synopsis, genre, tags, tone, themes, core_loop, planned_chapters。"
+            "title 取书名；logline 取一句话卖点；genre 取类型；planned_chapters 为整数或 null。"
+        ),
         f"文档:\n{body_text[:16000]}",
     )
+    det_meta = deterministic_metadata_from_text(body_text)
+    meta_out = merge_metadata(meta_out, det_meta)
+    async with async_session_factory() as db:
+        await _save_artifact(
+            db,
+            sid,
+            artifact_type="metadata_merged",
+            key="metadata_merged_v1",
+            payload=meta_out,
+        )
+        await db.commit()
     world_out = await extract_step(
         "world",
         "world_v1",
@@ -603,22 +620,43 @@ async def atomic_commit_import(
     planned = overrides.get("planned_chapters") or meta.get("planned_chapters") or preview.get("declared_total")
     if not planned:
         planned = len(preview.get("chapters") or []) or 500
+    logline = overrides.get("logline") or meta.get("logline") or preview.get("logline")
+    genre = overrides.get("genre") or meta.get("genre") or preview.get("genre")
+    tags = overrides.get("tags") or meta.get("tags") or preview.get("tags") or []
+    if not tags and genre:
+        tags = [genre]
+    for th in meta.get("themes") or []:
+        if th and th not in tags:
+            tags.append(th)
+    tone = meta.get("tone")
+    synopsis = meta.get("synopsis")
+    if not logline and tone:
+        logline = str(tone)[:200]
+    if not logline and synopsis:
+        logline = str(synopsis)[:200]
+    # strip block ids / multi-section dumps from LLM noise
+    if logline:
+        import re as _re
+        logline = _re.sub(r"\[b-\d+\]\s*", "", str(logline)).strip()
+        if "类型与体量" in logline or logline.count("；") >= 2:
+            logline = _re.split(r"[；;\n]", logline)[0].strip()
+        logline = _re.split(r"[。！？]", logline)[0].strip()[:200] or None
 
     book = Book(
         id=gen_uuid(),
         title=title,
         subtitle=overrides.get("subtitle") or meta.get("subtitle"),
-        description=overrides.get("description") or meta.get("synopsis"),
+        description=overrides.get("description") or synopsis,
         status="created",
         target_chapters=int(planned),
         planned_chapters=int(planned),
         lifecycle_status="draft",
         source_import_session_id=sess.id,
-        tags=overrides.get("tags") or meta.get("tags") or [],
-        logline=overrides.get("logline") or meta.get("logline"),
-        synopsis=meta.get("synopsis"),
-        genre=overrides.get("genre") or meta.get("genre"),
-        tone_summary=meta.get("tone"),
+        tags=list(tags)[:12],
+        logline=logline,
+        synopsis=synopsis,
+        genre=genre,
+        tone_summary=tone,
         last_activity_at=_utcnow(),
     )
     db.add(book)
@@ -628,13 +666,13 @@ async def atomic_commit_import(
         BookProfile(
             id=gen_uuid(),
             book_id=book.id,
-            logline=book.logline,
-            synopsis=meta.get("synopsis"),
-            genre=book.genre,
+            logline=logline,
+            synopsis=synopsis,
+            genre=genre,
             themes=meta.get("themes") or [],
-            tone=meta.get("tone"),
+            tone=tone,
             core_loop=meta.get("core_loop"),
-            extra={"import_session_id": str(sess.id)},
+            extra={"import_session_id": str(sess.id), "metadata_source": meta.get("source")},
         )
     )
 

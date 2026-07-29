@@ -411,22 +411,22 @@ def deterministic_world_from_text(text: str) -> dict:
     }
 
 
+
 def merge_world(llm: dict | None, det: dict | None) -> dict:
     llm = llm or {}
     det = det or {}
     rules: list[dict] = []
     seen_r: set[str] = set()
-    for src in (det.get("rules") or [], llm.get("rules") or []):
+    for src in (llm.get("rules") or [], det.get("rules") or []):
         for r in src:
-            desc = (r.get("description") or "").strip()
-            key = re.sub(r"\s+", "", desc)[:48] or (r.get("rule_key") or "")
+            key = (r.get("rule_key") or r.get("description") or "")[:80]
             if not key or key in seen_r:
                 continue
             seen_r.add(key)
             rules.append(r)
     locs: list[dict] = []
     seen_l: set[str] = set()
-    for src in (det.get("locations") or [], llm.get("locations") or []):
+    for src in (llm.get("locations") or [], det.get("locations") or []):
         for loc in src:
             name = (loc.get("name") or "").strip()
             if not name or name in seen_l:
@@ -439,6 +439,145 @@ def merge_world(llm: dict | None, det: dict | None) -> dict:
         "locations": locs,
         "notes": list(dict.fromkeys((llm.get("notes") or []) + (det.get("notes") or []))),
     }
+
+
+def deterministic_metadata_from_text(text: str) -> dict:
+    """Heuristic title/logline/genre/tags when LLM metadata is sparse."""
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    title = None
+    for ln in lines[:12]:
+        m = re.match(r"^#\s*《([^》]+)》", ln)
+        if m:
+            title = m.group(1).strip()
+            break
+        m = re.match(r"^#\s+(.+)$", ln)
+        if m and "企划" not in m.group(1):
+            title = re.sub(r"^《|》$", "", m.group(1).strip())
+            break
+        m = re.search(r"《([^》]+)》", ln)
+        if m:
+            title = m.group(1).strip()
+            break
+
+    def _section_body(headers: list[str], max_lines: int = 6, join: str = "；") -> str:
+        for i, ln in enumerate(lines):
+            # header line itself
+            pure = re.sub(r"^#{1,6}\s*", "", ln).strip()
+            low = pure.lower().replace(" ", "")
+            if any(h in pure or h in low for h in headers):
+                buf = []
+                for nxt in lines[i + 1 : i + 1 + max_lines]:
+                    if nxt.startswith("#") or re.match(r"^#{1,3}\s", nxt):
+                        break
+                    # stop at next labeled section-ish line
+                    if re.match(r"^(类型|世界观|人物|卷纲|章纲|写作|文风|调性)", nxt):
+                        break
+                    cleaned = re.sub(r"^[-*•]\s*", "", nxt).strip()
+                    # drop block-id noise like [b-000003]
+                    cleaned = re.sub(r"\[b-\d+\]\s*", "", cleaned).strip()
+                    if cleaned:
+                        buf.append(cleaned)
+                return join.join(buf).strip(join + " ")
+        return ""
+
+    # logline: prefer single first bullet/sentence under 一句话卖点
+    logline = _section_body(["一句话卖点", "logline"], 3, join=" ")
+    if logline:
+        # keep first sentence-ish chunk only
+        logline = re.split(r"[。！？\n]", logline)[0].strip()[:200]
+    if not logline:
+        for ln in lines[1:20]:
+            if ln.startswith("#"):
+                continue
+            if re.match(r"^(类型|世界观|人物|卷纲|章纲|写作)", ln):
+                continue
+            cleaned = re.sub(r"\[b-\d+\]\s*", "", ln).strip()
+            if len(cleaned) >= 6 and "卖点" not in cleaned:
+                logline = cleaned[:200]
+                break
+
+    genre = None
+    gbody = _section_body(["类型与体量", "类型", "genre"], 4)
+    for cand in ("玄幻", "仙侠", "都市", "科幻", "言情", "历史", "悬疑", "末世", "无限流", "克苏鲁"):
+        if cand in (gbody or text[:2000]):
+            genre = cand
+            break
+
+    planned = None
+    m = re.search(r"(?:目标|计划|预计)\s*(\d{1,4})\s*章", text)
+    if m:
+        planned = int(m.group(1))
+    else:
+        m = re.search(r"(\d{1,4})\s*章", gbody or "")
+        if m:
+            planned = int(m.group(1))
+
+    tone = _section_body(["文风", "调性", "tone", "写作要求"], 5)[:300] or None
+    themes: list[str] = []
+    if "慈父" in text:
+        themes.append("慈父")
+    if "渊" in text or "西荒" in text:
+        themes.append("西荒")
+    if "养女" in text:
+        themes.append("养成")
+    tags = list(dict.fromkeys(([genre] if genre else []) + themes))
+    synopsis = _section_body(["世界观", "故事简介", "synopsis", "简介"], 8)[:800] or None
+
+    return {
+        "title": title,
+        "logline": logline or None,
+        "synopsis": synopsis,
+        "genre": genre,
+        "tags": tags,
+        "tone": tone,
+        "themes": themes,
+        "planned_chapters": planned,
+        "confidence": 0.55 if title or logline else 0.2,
+        "source": "deterministic_metadata",
+    }
+
+
+def _clean_logline(s: str | None) -> str | None:
+    if not s:
+        return None
+    s = re.sub(r"\[b-\d+\]\s*", "", str(s)).strip()
+    # drop multi-section dumps
+    if "类型与体量" in s or "世界观" in s or s.count("；") >= 2:
+        # keep first clause only
+        s = re.split(r"[；;\n]", s)[0].strip()
+    s = re.split(r"[。！？]", s)[0].strip()
+    s = s[:200]
+    return s or None
+
+
+def merge_metadata(llm: dict | None, det: dict | None) -> dict:
+    llm = llm or {}
+    det = det or {}
+    out = dict(det)
+    for k, v in llm.items():
+        if v is None or v == "" or v == []:
+            continue
+        out[k] = v
+    for k in ("tags", "themes"):
+        vals = []
+        for src in (llm.get(k) or [], det.get(k) or []):
+            for x in src:
+                if x and x not in vals:
+                    vals.append(x)
+        if vals:
+            out[k] = vals
+    # prefer cleaner logline
+    det_ll = _clean_logline(det.get("logline"))
+    llm_ll = _clean_logline(llm.get("logline"))
+    if det_ll and (not llm_ll or len(str(llm.get("logline") or "")) > len(det_ll) * 1.5 or "[b-" in str(llm.get("logline") or "")):
+        out["logline"] = det_ll
+    else:
+        out["logline"] = llm_ll or det_ll
+    if not out.get("logline") and out.get("tone"):
+        out["logline"] = _clean_logline(str(out["tone"])[:200])
+    if not out.get("genre") and out.get("tags"):
+        out["genre"] = out["tags"][0]
+    return out
 
 
 def build_preview_bundle(
@@ -457,9 +596,13 @@ def build_preview_bundle(
     volumes = outline.get("volumes") or []
     chapters = outline.get("chapters") or []
     meta = metadata or {}
+    title = meta.get("title") or "未命名小说"
     return {
-        "title_guess": meta.get("title") or "未命名小说",
+        "title_guess": title,
         "metadata": meta,
+        "logline": meta.get("logline"),
+        "genre": meta.get("genre"),
+        "tags": meta.get("tags") or [],
         "world": world or {},
         "characters": characters,
         "relationships": relationships,
@@ -469,6 +612,7 @@ def build_preview_bundle(
         "writing_rules": writing_rules,
         "document_types": (classify or {}).get("document_types") or [],
         "primary_document_type": (classify or {}).get("primary_type"),
+        "declared_total": meta.get("planned_chapters") or outline.get("declared_total_chapters"),
         "counts": {
             "作品信息": 1 if meta else 0,
             "世界设定": len((world or {}).get("rules") or []),

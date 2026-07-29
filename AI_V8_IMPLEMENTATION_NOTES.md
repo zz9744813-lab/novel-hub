@@ -98,3 +98,11 @@ Spec: NovelForge-v8-.md
 - Golden 西荒 smoke: counts 3/4/1/4/6/8/2/2; context 23 items kinds include book_profile, character_cards, location_cards, writing_constraints, plot_thread, current_volume, world_rule
 - Frontend assets index-Dxu5mtMO.js
 - Branch only
+
+## p6 metadata fill + smoke script (branch only)
+- deterministic_metadata_from_text + merge_metadata; commit cleans noisy LLM loglines
+- Book/BookProfile filled with logline/genre/tags/themes on import commit
+- Golden backfill: 西荒 logline+genre+tags
+- script: deploy/scripts/v8_import_home_smoke.sh (upload→poll→resolve→commit→home→context)
+- live smoke book 9fe48cfa: logline 雾港养女，灯下慈父 / genre 玄幻 / tags 玄幻,慈父,养成 / chars 顾衡,小棠 / locs 3 / ctx 24 items
+- NOT claiming full v8 DoD

@@ -104,7 +104,7 @@ async def call_agent(
                 prompt_config = {
                     "version": f"v{tpl.version}",
                     "system_prompt": tpl.system_prompt or "",
-                    "output_schema": tpl.output_schema,
+                    "output_schema": getattr(tpl, "output_schema", None) or getattr(tpl, "compiled_schema", None),
                 }
                 logger.info("using PromptStudio template %s v%s for %s", tpl.template_key, tpl.version, agent_role)
     except Exception as e:

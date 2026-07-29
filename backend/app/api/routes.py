@@ -207,6 +207,52 @@ async def approve_outline(book_id: str, version: int, db: AsyncSession = Depends
     return {"status": "approved", "version": version}
 
 
+@router.get("/api/books/{book_id}/outline")
+async def get_book_outline(book_id: str, db: AsyncSession = Depends(get_db)):
+    """B-13: Return outline nodes for a book (latest approved or latest version)."""
+    bid = uuid.UUID(book_id)
+    # Get latest approved version, fallback to latest
+    version_result = await db.execute(
+        select(OutlineVersion)
+        .where(OutlineVersion.book_id == bid)
+        .order_by(
+            (OutlineVersion.status == "approved").desc(),
+            OutlineVersion.version.desc(),
+        )
+        .limit(1)
+    )
+    latest_version = version_result.scalar_one_or_none()
+    if not latest_version:
+        return {"nodes": [], "outline_version_id": None, "version": None, "status": None}
+    
+    result = await db.execute(
+        select(OutlineNode)
+        .where(
+            OutlineNode.book_id == bid,
+            OutlineNode.outline_version_id == latest_version.id,
+        )
+        .order_by(OutlineNode.chapter_no)
+    )
+    nodes = result.scalars().all()
+    return {
+        "nodes": [
+            {
+                "node_id": str(n.id),
+                "chapter_no": n.chapter_no,
+                "title": n.title,
+                "goal": n.goal,
+                "depends_on": n.depends_on,
+                "required_beats": n.required_beats,
+                "forbidden_outcomes": n.forbidden_outcomes,
+            }
+            for n in nodes
+        ],
+        "outline_version_id": str(latest_version.id),
+        "version": latest_version.version,
+        "status": latest_version.status,
+    }
+
+
 @router.get("/api/books/{book_id}/outline-graph")
 async def get_outline_graph(book_id: str, db: AsyncSession = Depends(get_db)):
     bid = uuid.UUID(book_id)

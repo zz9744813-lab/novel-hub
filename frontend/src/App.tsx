@@ -15,6 +15,8 @@ import { LibraryPage } from "./features/library/LibraryPage";
 import { BookHomePage } from "./features/book/BookHomePage";
 import { ImportWizard } from "./features/import/ImportWizard";
 import { PromptStudioPage } from "./features/prompt-studio/PromptStudioPage";
+import { WritingTasksPage } from "./features/tasks/WritingTasksPage";
+import { ReferencesLibraryPage } from "./features/references/ReferencesLibraryPage";
 import { SystemSettingsPage } from "./features/settings/SystemSettingsPage";
 import {
   clearAdminToken,
@@ -173,19 +175,12 @@ export default function App() {
         />
       );
     }
-    if (tab === "tasks") {
-      return (
-        <Placeholder
-          title="写作任务"
-          tip="汇总：导入中 / 生成中 / 待人工 / 调研待批准。底层日志在高级诊断。"
-        />
-      );
-    }
+    if (tab === "tasks") return <WritingTasksPage />;
     if (tab === "references") {
       return (
-        <Placeholder
-          title="参考资料库"
-          tip="参考小说、风格样本、研究证据与源文件。可先从作品内 Genre/调研进入。"
+        <ReferencesLibraryPage
+          onOpenGenre={() => setTab("genre")}
+          onOpenResearch={() => setTab("research")}
         />
       );
     }

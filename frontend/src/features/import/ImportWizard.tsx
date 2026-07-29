@@ -170,11 +170,11 @@ export function ImportWizard({
           <div className="space-y-3">
             <label className="panel flex flex-col items-center py-10 cursor-pointer border-dashed">
               <Upload size={22} className="text-text-disabled mb-2" />
-              <span className="text-xs text-text-secondary">{file ? file.name : "选择企划文件（docx/pdf/txt/md…）"}</span>
+              <span className="text-xs text-text-secondary">{file ? file.name : "拖拽或选择企划（txt/md/docx/pdf/rtf/csv/json/html/xml…）"}</span>
               <input
                 type="file"
                 className="hidden"
-                accept=".txt,.md,.docx,.pdf,.html,.json,.csv"
+                accept=".txt,.md,.markdown,.docx,.pdf,.rtf,.csv,.tsv,.json,.jsonl,.html,.htm,.xml,.log,text/plain,application/pdf"
                 onChange={(e) => setFile(e.target.files?.[0] || null)}
               />
             </label>

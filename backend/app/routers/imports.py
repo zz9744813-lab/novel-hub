@@ -50,6 +50,32 @@ async def _transition(db: AsyncSession, sess: ImportSession, to_status: str, ste
     sess.updated_at = _utcnow()
 
 
+@router.get("")
+async def list_import_sessions(
+    status: str | None = None,
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db),
+):
+    """List import sessions, optionally filtered by status."""
+    q = select(ImportSession).order_by(ImportSession.created_at.desc()).limit(limit)
+    if status:
+        q = q.where(ImportSession.status == status)
+    rows = (await db.execute(q)).scalars().all()
+    return {"sessions": [
+        {
+            "id": str(r.id),
+            "status": r.status,
+            "current_step": r.current_step,
+            "progress": r.progress,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+            "error_code": r.error_code,
+            "error_detail": r.error_detail,
+        }
+        for r in rows
+    ]}
+
+
 @router.post("")
 async def create_import_session(
     file: UploadFile = File(...),

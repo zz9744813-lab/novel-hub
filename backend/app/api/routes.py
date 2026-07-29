@@ -975,6 +975,39 @@ async def list_chapter_runs(chapter_id: str, db: AsyncSession = Depends(get_db))
     ]
 
 
+@router.get("/api/chapters/needs-human")
+async def list_needs_human_chapters(db: AsyncSession = Depends(get_db)):
+    """PR-07: global needs-human queue across all books."""
+    from app.models.tables import Chapter, ChapterRun, Book
+    result = await db.execute(
+        select(Chapter, Book.title.label("book_title"))
+        .join(Book, Chapter.book_id == Book.id)
+        .where(Chapter.status.in_(("needs_human", "paused", "control_requested")))
+        .order_by(Chapter.updated_at.desc())
+        .limit(50)
+    )
+    rows = result.all()
+    out = []
+    for ch, book_title in rows:
+        run = None
+        if ch.active_run_id:
+            run = (await db.execute(select(ChapterRun).where(ChapterRun.id == ch.active_run_id))).scalar_one_or_none()
+        out.append({
+            "chapter_id": str(ch.id),
+            "book_id": str(ch.book_id),
+            "book_title": book_title or "未命名",
+            "chapter_no": ch.chapter_no,
+            "status": ch.status,
+            "run_id": str(ch.active_run_id) if ch.active_run_id else None,
+            "run_status": run.status if run else None,
+            "current_step": run.current_step if run else None,
+            "error_code": run.error_code if run else None,
+            "error_detail": run.error_detail if run else None,
+            "updated_at": ch.updated_at.isoformat() if ch.updated_at else None,
+        })
+    return {"chapters": out, "count": len(out)}
+
+
 @router.get("/api/chapters/{chapter_id}/needs-human")
 async def chapter_needs_human_detail(chapter_id: str, db: AsyncSession = Depends(get_db)):
     """PR-07: evidence for needs_human — last transition reason + failed steps + active run."""

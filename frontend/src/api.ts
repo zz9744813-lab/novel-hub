@@ -276,6 +276,10 @@ export const api = {
         message?: string;
       }>;
     },
+    list: (params?: { status?: string; limit?: number }) => {
+      const q = new URLSearchParams((params as any) || {}).toString();
+      return fetchJSON<{ sessions: any[] }>(`/api/import-sessions?${q}`);
+    },
     get: (id: string) => fetchJSON<any>(`/api/import-sessions/${id}`),
     preview: (id: string) => fetchJSON<any>(`/api/import-sessions/${id}/preview`),
     analyze: (id: string) =>

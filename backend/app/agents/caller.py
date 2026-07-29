@@ -86,16 +86,40 @@ async def call_agent(
 
     Returns (run, publishable, metadata). Run is detached ORM after final query.
     """
-    if agent_role not in PROMPTS:
-        # Allow runtime system roles that reuse a nearby prompt template
-        prompt_config = PROMPTS.get("query_planner") or next(iter(PROMPTS.values()))
-        prompt_config = {
-            **prompt_config,
-            "version": f"{agent_role}-v1",
-            "system_prompt": prompt_config.get("system_prompt", ""),
-        }
-    else:
-        prompt_config = PROMPTS[agent_role]
+    # v8 Prompt Studio: try active template first
+    prompt_config = None
+    from app.models.tables import PromptTemplateVersion
+    from sqlalchemy import select
+    try:
+        async with async_session_factory() as db_tpl:
+            tpl = (await db_tpl.execute(
+                select(PromptTemplateVersion)
+                .where(PromptTemplateVersion.agent_role == agent_role)
+                .where(PromptTemplateVersion.status == "active")
+                .where(PromptTemplateVersion.activated_at.isnot(None))
+                .order_by(PromptTemplateVersion.version.desc())
+                .limit(1)
+            )).scalar_one_or_none()
+            if tpl:
+                prompt_config = {
+                    "version": f"v{tpl.version}",
+                    "system_prompt": tpl.system_prompt or "",
+                    "output_schema": tpl.output_schema,
+                }
+                logger.info("using PromptStudio template %s v%s for %s", tpl.template_key, tpl.version, agent_role)
+    except Exception as e:
+        logger.warning("PromptStudio lookup failed, fallback to PROMPTS: %s", e)
+
+    if prompt_config is None:
+        if agent_role not in PROMPTS:
+            prompt_config = PROMPTS.get("query_planner") or next(iter(PROMPTS.values()))
+            prompt_config = {
+                **prompt_config,
+                "version": f"{agent_role}-v1",
+                "system_prompt": prompt_config.get("system_prompt", ""),
+            }
+        else:
+            prompt_config = PROMPTS[agent_role]
 
     temperature = (overrides or {}).get("temperature", AGENT_TEMPERATURES.get(agent_role, 0.7))
     is_json = AGENT_IS_JSON.get(agent_role, False)

@@ -39,7 +39,7 @@ from app.token_estimate import safe_token_estimate
 
 logger = logging.getLogger("novelforge.context")
 
-ASSEMBLER_VERSION = "3.0-v8-wired"
+ASSEMBLER_VERSION = "3.0-v8-bookhome"
 
 
 def _sha(obj: Any) -> str:
@@ -496,10 +496,13 @@ async def assemble_context(
         logger.debug("external research skip: %s", e)
 
     threads = await db.execute(
-        select(PlotThread).where(PlotThread.book_id == book_id, PlotThread.status == "open")
+        select(PlotThread).where(
+            PlotThread.book_id == book_id,
+            PlotThread.status.in_(["open", "active", "planted", "ongoing"]),
+        )
     )
     open_threads = [
-        {"id": str(t.id), "name": t.name, "planted_chapter": t.planted_chapter}
+        {"id": str(t.id), "name": t.name, "planted_chapter": t.planted_chapter, "status": t.status}
         for t in threads.scalars().all()
     ]
     for t in open_threads:

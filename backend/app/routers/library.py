@@ -30,6 +30,23 @@ async def get_book_home(book_id: str, db: AsyncSession = Depends(get_db)):
     return data
 
 
+@router.get("/books/{book_id}/context-preview")
+async def get_book_context_preview(
+    book_id: str,
+    chapter_no: int = 1,
+    agent_role: str = "draft_writer",
+    db: AsyncSession = Depends(get_db),
+):
+    """Dry-run assembler kinds for import-derived bible (no chapter run)."""
+    try:
+        bid = uuid.UUID(book_id)
+    except ValueError:
+        raise HTTPException(400, "invalid book_id")
+    return await library_service.preview_context_kinds(
+        db, bid, chapter_no=chapter_no, agent_role=agent_role
+    )
+
+
 @router.get("/features")
 async def get_features():
     from app.config import settings

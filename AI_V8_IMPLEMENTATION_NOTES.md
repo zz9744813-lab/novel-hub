@@ -87,3 +87,14 @@ Spec: NovelForge-v8-.md
 - Library books response includes `total`
 - Frontend assets: index-Rc1OunXz.js
 - Branch only: refactor/bookshelf-import-prompt-studio
+
+
+## Book home + context preview
+
+- `GET /api/library/books/{id}/home` richer counts/entities (chars/locs/plots/rules/wcs/vols/rels)
+- `GET /api/library/books/{id}/context-preview` dry-run assembler kinds
+- BookProfile merge on bookshelf for logline/genre when present
+- ASSEMBLER_VERSION `3.0-v8-bookhome`
+- Golden 西荒 smoke: counts 3/4/1/4/6/8/2/2; context 23 items kinds include book_profile, character_cards, location_cards, writing_constraints, plot_thread, current_volume, world_rule
+- Frontend assets index-Dxu5mtMO.js
+- Branch only

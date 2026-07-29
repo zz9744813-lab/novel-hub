@@ -246,7 +246,11 @@ export const api = {
   events: (bookId: string) => fetchJSON<any[]>(`/api/books/${bookId}/events`),
   library: {
     books: () => fetchJSON<{ books: any[]; total: number }>("/api/library/books"),
-    bookHome: (bookId: string) => fetchJSON<any>(`/api/library/books/${bookId}`),
+    bookHome: (bookId: string) => fetchJSON<any>(`/api/library/books/${bookId}/home`),
+    contextPreview: (bookId: string, chapterNo = 1, agentRole = "draft_writer") =>
+      fetchJSON<any>(
+        `/api/library/books/${bookId}/context-preview?chapter_no=${chapterNo}&agent_role=${encodeURIComponent(agentRole)}`
+      ),
   },
   imports: {
     create: async (file: File) => {

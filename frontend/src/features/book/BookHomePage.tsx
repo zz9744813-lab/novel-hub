@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api";
-import { Play, Loader2, BookOpen, Users, Map, GitBranch } from "lucide-react";
+import { Play, Loader2, BookOpen, Users, Map, GitBranch, MapPin, ScrollText } from "lucide-react";
 
 export function BookHomePage({
   bookId,
@@ -12,6 +12,7 @@ export function BookHomePage({
   onOpenChapters: () => void;
 }) {
   const [data, setData] = useState<any>(null);
+  const [ctx, setCtx] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -21,6 +22,12 @@ export function BookHomePage({
       try {
         const d = await api.library.bookHome(bookId);
         if (!cancelled) setData(d);
+        try {
+          const c = await (api.library as any).contextPreview?.(bookId);
+          if (!cancelled && c) setCtx(c);
+        } catch {
+          /* optional */
+        }
       } catch (e: any) {
         if (!cancelled) setErr(e?.message || String(e));
       }
@@ -32,6 +39,9 @@ export function BookHomePage({
 
   const book = data?.book;
   const style = book?.cover_style;
+  const counts = data?.counts || {};
+  const entities = data?.entities || {};
+  const profile = data?.profile;
 
   const handleContinue = async () => {
     setBusy(true);
@@ -67,13 +77,20 @@ export function BookHomePage({
           <h1 className="text-lg text-text-primary" style={{ fontWeight: 510 }}>
             {book?.title}
           </h1>
-          {book?.logline && <p className="text-xs text-text-tertiary mt-2">{book.logline}</p>}
+          {(book?.logline || profile?.logline) && (
+            <p className="text-xs text-text-tertiary mt-2">{book?.logline || profile?.logline}</p>
+          )}
           <div className="flex flex-wrap gap-2 mt-3">
             {(book?.tags || []).map((t: string) => (
               <span key={t} className="text-2xs border border-border rounded px-2 py-0.5 text-text-secondary">
                 {t}
               </span>
             ))}
+            {book?.genre && !(book?.tags || []).includes(book.genre) && (
+              <span className="text-2xs border border-border rounded px-2 py-0.5 text-text-secondary">
+                {book.genre}
+              </span>
+            )}
           </div>
           <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
             <Stat label="已定稿" value={`${book?.finalized_chapters ?? 0} 章`} />
@@ -101,12 +118,59 @@ export function BookHomePage({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Mini icon={Users} label="人物" value={data.counts?.characters ?? 0} />
-        <Mini icon={Map} label="世界规则" value={data.counts?.world_rules ?? 0} />
-        <Mini icon={GitBranch} label="大纲节点" value={data.counts?.outline_nodes ?? 0} />
-        <Mini icon={BookOpen} label="下一动作" value={data.next_action || "—"} small />
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
+        <Mini icon={Users} label="人物" value={counts.characters ?? 0} />
+        <Mini icon={MapPin} label="地点" value={counts.locations ?? 0} />
+        <Mini icon={Map} label="世界规则" value={counts.world_rules ?? 0} />
+        <Mini icon={GitBranch} label="大纲" value={counts.outline_nodes ?? 0} />
+        <Mini icon={ScrollText} label="剧情线" value={counts.plot_threads ?? 0} />
+        <Mini icon={BookOpen} label="写作规则" value={counts.writing_constraints ?? 0} />
+        <Mini icon={GitBranch} label="卷" value={counts.volumes ?? 0} />
+        <Mini icon={Users} label="关系" value={counts.relationships ?? 0} />
       </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <EntityList title="人物" items={(entities.characters || []).map((c: any) => c.name + (c.role ? ` · ${c.role}` : ""))} />
+        <EntityList title="地点" items={(entities.locations || []).map((l: any) => l.name)} />
+        <EntityList
+          title="章纲预览"
+          items={(entities.outline_preview || []).map(
+            (n: any) => `第${n.chapter_no}章 ${n.title || n.goal || ""}`
+          )}
+        />
+        <EntityList
+          title="剧情线"
+          items={(entities.plot_threads || []).map((t: any) => `${t.name}${t.status ? ` (${t.status})` : ""}`)}
+        />
+        <EntityList
+          title="世界规则"
+          items={(entities.world_rules || []).map((r: any) => r.rule_key || r.description)}
+        />
+        <EntityList
+          title="写作约束"
+          items={(entities.writing_constraints || []).map(
+            (w: any) => `${w.is_hard ? "[硬] " : ""}${w.title || w.body || w.constraint_type}`
+          )}
+        />
+      </div>
+
+      {ctx?.ok && (
+        <div className="panel p-3 text-2xs text-text-secondary space-y-1">
+          <div className="text-text-disabled">
+            Context 预览 · {ctx.assembler_version} · ch{ctx.chapter_no} · {ctx.item_count} items ·{" "}
+            {ctx.used_tokens} tok (record-only)
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {Object.entries(ctx.kinds || {}).map(([k, v]) => (
+              <span key={k} className="border border-border rounded px-1.5 py-0.5 font-mono">
+                {k}:{String(v)}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="text-2xs text-text-disabled">下一动作：{data.next_action || "—"}</div>
     </div>
   );
 }
@@ -140,6 +204,29 @@ function Mini({
           {value}
         </div>
       </div>
+    </div>
+  );
+}
+
+function EntityList({ title, items }: { title: string; items: string[] }) {
+  if (!items?.length) {
+    return (
+      <div className="panel p-3">
+        <div className="text-2xs text-text-disabled mb-1">{title}</div>
+        <div className="text-2xs text-text-tertiary">暂无</div>
+      </div>
+    );
+  }
+  return (
+    <div className="panel p-3 max-h-40 overflow-auto">
+      <div className="text-2xs text-text-disabled mb-1">
+        {title}（{items.length}）
+      </div>
+      <ul className="text-2xs text-text-secondary space-y-0.5">
+        {items.slice(0, 10).map((x, i) => (
+          <li key={`${i}-${x}`}>{x}</li>
+        ))}
+      </ul>
     </div>
   );
 }

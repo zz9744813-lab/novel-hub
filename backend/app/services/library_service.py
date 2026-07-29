@@ -142,6 +142,26 @@ async def list_bookshelf(db: AsyncSession) -> list[dict[str, Any]]:
         ).all()
     }
 
+    # BookProfile map for logline/genre fallback
+    profiles: dict[Any, dict[str, Any]] = {}
+    try:
+        from app.models.tables import BookProfile
+
+        if books:
+            ids = [b.id for b in books]
+            for bp in (
+                await db.execute(select(BookProfile).where(BookProfile.book_id.in_(ids)))
+            ).scalars().all():
+                profiles[bp.book_id] = {
+                    "logline": bp.logline,
+                    "genre": bp.genre,
+                    "themes": bp.themes,
+                    "tone": bp.tone,
+                    "synopsis": bp.synopsis,
+                }
+    except Exception as e:
+        logger.debug("book_profile map skip: %s", e)
+
     out: list[dict[str, Any]] = []
     for b in books:
         ar = run_by_book.get(b.id)
@@ -172,6 +192,19 @@ async def list_bookshelf(db: AsyncSession) -> list[dict[str, Any]]:
             cover = f"/api/library/books/{b.id}/cover?thumb=1"
         elif getattr(b, "cover_path", None):
             cover = f"/api/library/books/{b.id}/cover"
+        # merge BookProfile when book-level fields empty (import path)
+        genre = getattr(b, "genre", None)
+        logline = getattr(b, "logline", None)
+        prof = profiles.get(b.id)
+        if prof:
+            if not logline:
+                logline = prof.get("logline")
+            if not genre:
+                genre = prof.get("genre")
+            if not tags and genre:
+                tags = [genre]
+            if not tags and prof.get("themes"):
+                tags = list(prof.get("themes") or [])[:5]
         out.append(
             {
                 "book_id": str(b.id),
@@ -188,15 +221,24 @@ async def list_bookshelf(db: AsyncSession) -> list[dict[str, Any]]:
                 "active_task": active_task,
                 "unresolved_risk_count": risk,
                 "updated_at": (b.updated_at.isoformat() if b.updated_at else None),
-                "genre": getattr(b, "genre", None),
-                "logline": getattr(b, "logline", None),
+                "genre": genre,
+                "logline": logline,
             }
         )
     return out
 
 
 async def book_home_summary(db: AsyncSession, book_id: UUID) -> dict[str, Any]:
-    from app.models.tables import CharacterCard, WorldRule
+    from app.models.tables import (
+        BookProfile,
+        CharacterCard,
+        CharacterRelationship,
+        LocationCard,
+        OutlineVolume,
+        PlotThread,
+        WorldRule,
+        WritingConstraint,
+    )
 
     book = (await db.execute(select(Book).where(Book.id == book_id))).scalar_one_or_none()
     if not book:
@@ -205,32 +247,223 @@ async def book_home_summary(db: AsyncSession, book_id: UUID) -> dict[str, Any]:
     card = next((x for x in items if x["book_id"] == str(book_id)), None)
     if not card:
         return {}
-    char_n = (
+
+    async def _count(model, extra=None):
+        q = select(func.count()).select_from(model).where(model.book_id == book_id)
+        if extra is not None:
+            q = q.where(extra)
+        return int((await db.execute(q)).scalar() or 0)
+
+    char_n = await _count(CharacterCard)
+    rule_n = await _count(WorldRule)
+    outline_n = await _count(OutlineNode)
+    loc_n = await _count(LocationCard)
+    plot_n = await _count(PlotThread)
+    wc_n = await _count(WritingConstraint)
+    vol_n = await _count(OutlineVolume)
+    rel_n = await _count(CharacterRelationship)
+
+    chars = (
+        await db.execute(select(CharacterCard).where(CharacterCard.book_id == book_id).limit(12))
+    ).scalars().all()
+    locs = (
+        await db.execute(select(LocationCard).where(LocationCard.book_id == book_id).limit(12))
+    ).scalars().all()
+    plots = (
+        await db.execute(select(PlotThread).where(PlotThread.book_id == book_id).limit(12))
+    ).scalars().all()
+    rules = (
+        await db.execute(select(WorldRule).where(WorldRule.book_id == book_id).limit(12))
+    ).scalars().all()
+    wcs = (
         await db.execute(
-            select(func.count()).select_from(CharacterCard).where(CharacterCard.book_id == book_id)
+            select(WritingConstraint)
+            .where(WritingConstraint.book_id == book_id)
+            .order_by(WritingConstraint.priority.desc())
+            .limit(12)
         )
-    ).scalar() or 0
-    rule_n = (
+    ).scalars().all()
+    vols = (
         await db.execute(
-            select(func.count()).select_from(WorldRule).where(WorldRule.book_id == book_id)
+            select(OutlineVolume).where(OutlineVolume.book_id == book_id).order_by(OutlineVolume.volume_no).limit(8)
         )
-    ).scalar() or 0
-    outline_n = (
+    ).scalars().all()
+    outline_rows = (
         await db.execute(
-            select(func.count()).select_from(OutlineNode).where(OutlineNode.book_id == book_id)
+            select(OutlineNode)
+            .where(OutlineNode.book_id == book_id)
+            .order_by(OutlineNode.chapter_no)
+            .limit(12)
         )
-    ).scalar() or 0
+    ).scalars().all()
+    bp = (
+        await db.execute(select(BookProfile).where(BookProfile.book_id == book_id))
+    ).scalar_one_or_none()
+    profile = None
+    if bp:
+        profile = {
+            "logline": bp.logline,
+            "synopsis": bp.synopsis,
+            "genre": bp.genre,
+            "themes": bp.themes,
+            "tone": bp.tone,
+            "core_loop": bp.core_loop,
+        }
+        if not card.get("logline") and bp.logline:
+            card = {**card, "logline": bp.logline}
+        if not card.get("genre") and bp.genre:
+            card = {**card, "genre": bp.genre}
+
     next_action = "继续写下一章"
     if card.get("active_task"):
         next_action = card["active_task"]["label"]
     elif card.get("unresolved_risk_count"):
         next_action = "处理待确认项"
+    elif outline_n == 0:
+        next_action = "完善大纲后开始写作"
+    elif char_n == 0:
+        next_action = "补充人物设定"
+
     return {
         "book": card,
+        "profile": profile,
         "counts": {
-            "characters": int(char_n),
-            "world_rules": int(rule_n),
-            "outline_nodes": int(outline_n),
+            "characters": char_n,
+            "world_rules": rule_n,
+            "outline_nodes": outline_n,
+            "locations": loc_n,
+            "plot_threads": plot_n,
+            "writing_constraints": wc_n,
+            "volumes": vol_n,
+            "relationships": rel_n,
+        },
+        "entities": {
+            "characters": [
+                {"id": str(c.id), "name": c.name, "role": c.role, "description": (c.description or "")[:200]}
+                for c in chars
+            ],
+            "locations": [
+                {"id": str(l.id), "name": l.name, "description": (l.description or "")[:200]}
+                for l in locs
+            ],
+            "plot_threads": [
+                {"id": str(t.id), "name": t.name, "status": t.status, "description": (t.description or "")[:200]}
+                for t in plots
+            ],
+            "world_rules": [
+                {"id": str(r.id), "rule_key": r.rule_key, "description": (r.description or "")[:200]}
+                for r in rules
+            ],
+            "writing_constraints": [
+                {
+                    "id": str(w.id),
+                    "title": w.title,
+                    "constraint_type": w.constraint_type,
+                    "is_hard": w.is_hard,
+                    "body": (w.body or "")[:200],
+                }
+                for w in wcs
+            ],
+            "volumes": [
+                {
+                    "id": str(v.id),
+                    "volume_no": v.volume_no,
+                    "title": v.title,
+                    "chapter_from": v.chapter_from,
+                    "chapter_to": v.chapter_to,
+                }
+                for v in vols
+            ],
+            "outline_preview": [
+                {"id": str(n.id), "chapter_no": n.chapter_no, "title": n.title, "goal": (n.goal or "")[:160]}
+                for n in outline_rows
+            ],
         },
         "next_action": next_action,
+        "context_kinds_expected": [
+            "book_profile",
+            "character_cards",
+            "location_cards",
+            "world_rule",
+            "writing_constraints",
+            "plot_thread",
+            "current_volume",
+            "outline_node",
+        ],
+    }
+
+
+async def preview_context_kinds(
+    db: AsyncSession,
+    book_id: UUID,
+    *,
+    chapter_no: int = 1,
+    agent_role: str = "draft_writer",
+) -> dict[str, Any]:
+    """Dry-run ContextAssembler kinds for a book without starting a chapter run."""
+    from app.engine.context_assembler import assemble_context, ASSEMBLER_VERSION
+
+    node = (
+        await db.execute(
+            select(OutlineNode)
+            .where(OutlineNode.book_id == book_id, OutlineNode.chapter_no == chapter_no)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if not node:
+        node = (
+            await db.execute(
+                select(OutlineNode)
+                .where(OutlineNode.book_id == book_id)
+                .order_by(OutlineNode.chapter_no)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    if not node:
+        return {
+            "ok": False,
+            "error": "no_outline_node",
+            "assembler_version": ASSEMBLER_VERSION,
+            "kinds": {},
+            "items": [],
+        }
+    ch = int(node.chapter_no or chapter_no or 1)
+    pkg = await assemble_context(
+        db,
+        book_id,
+        node,
+        scene_plan={"goal": node.goal, "scenes": []},
+        forced_dependencies=[],
+        retrieved_evidence=[],
+        previous_scene_tail="",
+        current_chapter=ch,
+        agent_role=agent_role,
+    )
+    kinds: dict[str, int] = {}
+    for it in pkg.get("items") or []:
+        k = it.get("kind") or "unknown"
+        kinds[k] = kinds.get(k, 0) + 1
+    sample = [
+        {
+            "kind": it.get("kind"),
+            "priority": it.get("priority"),
+            "required": it.get("required"),
+            "reason": it.get("reason"),
+            "source_id": it.get("source_id"),
+            "estimated_tokens": it.get("estimated_tokens"),
+        }
+        for it in (pkg.get("items") or [])[:40]
+    ]
+    return {
+        "ok": True,
+        "assembler_version": pkg.get("assembler_version") or ASSEMBLER_VERSION,
+        "agent_role": agent_role,
+        "chapter_no": ch,
+        "outline_node_id": str(node.id),
+        "used_tokens": pkg.get("used_tokens"),
+        "budget_mode": pkg.get("budget_mode"),
+        "manifest_hash": pkg.get("manifest_hash"),
+        "kinds": dict(sorted(kinds.items(), key=lambda x: (-x[1], x[0]))),
+        "item_count": len(pkg.get("items") or []),
+        "items_sample": sample,
     }

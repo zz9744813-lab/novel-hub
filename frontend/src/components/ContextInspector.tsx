@@ -98,6 +98,12 @@ export function ContextInspector({ bookId }: Props) {
         </div>
       )}
 
+      {!bookId && (
+        <div className="panel-elevated rounded-md px-3 py-3 text-xs text-text-tertiary">
+          未选择作品也可进入本页。可在上方「系统设置」选书后浏览章节 Context 包，或直接输入 chapter_id 查询。
+        </div>
+      )}
+
       <div className="flex gap-2">
         <input
           className="flex-1 bg-bg-elevated border border-border rounded-md px-3 py-1.5 text-xs text-text-primary placeholder:text-text-disabled focus:outline-none focus:border-brand font-mono"

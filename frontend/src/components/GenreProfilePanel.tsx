@@ -114,8 +114,13 @@ export function GenreProfilePanel({ bookId }: Props) {
 
   if (!bookId) {
     return (
-      <div className="p-6 text-center text-xs text-text-disabled">
-        请先选择或新建项目，再上传参考文本生成 GenreProfile
+      <div className="panel-elevated rounded-md px-4 py-6 space-y-2">
+        <h2 className="text-sm text-text-primary" style={{ fontWeight: 510 }}>
+          Genre Profile
+        </h2>
+        <p className="text-xs text-text-tertiary">
+          未选择作品也可进入本页。请在上方选择一本书后，再上传参考文本生成文风档案。
+        </p>
       </div>
     );
   }

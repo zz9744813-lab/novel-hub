@@ -78,8 +78,13 @@ export function ResearchPanel({ bookId }: Props) {
 
   if (!bookId) {
     return (
-      <div className="p-6 text-center text-xs text-text-disabled">
-        请先选择项目再创建调研会话
+      <div className="panel-elevated rounded-md px-4 py-6 space-y-2">
+        <h2 className="text-sm text-text-primary" style={{ fontWeight: 510 }}>
+          Research Sessions
+        </h2>
+        <p className="text-xs text-text-tertiary">
+          未选择作品也可进入本页。请在上方选择一本书后再创建调研会话。
+        </p>
       </div>
     );
   }

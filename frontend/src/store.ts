@@ -7,7 +7,7 @@ interface AppState {
   loading: boolean;
   error: string | null;
   fetchBooks: () => Promise<void>;
-  selectBook: (id: string) => void;
+  selectBook: (id: string | null) => void;
   createBook: (title: string, desc?: string, targetChapters?: number) => Promise<string | null>;
 }
 
@@ -37,7 +37,7 @@ export const useStore = create<AppState>((set, get) => ({
       set({ error: e.message, loading: false });
     }
   },
-  selectBook: (id: string) => set({ selectedBookId: id }),
+  selectBook: (id: string | null) => set({ selectedBookId: id }),
   createBook: async (title: string, desc?: string, targetChapters?: number) => {
     try {
       const { book_id } = await api.books.create({

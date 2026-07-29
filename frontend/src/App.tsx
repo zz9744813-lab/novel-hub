@@ -15,6 +15,7 @@ import { LibraryPage } from "./features/library/LibraryPage";
 import { BookHomePage } from "./features/book/BookHomePage";
 import { ImportWizard } from "./features/import/ImportWizard";
 import { PromptStudioPage } from "./features/prompt-studio/PromptStudioPage";
+import { SystemSettingsPage } from "./features/settings/SystemSettingsPage";
 import {
   clearAdminToken,
   getAdminToken,
@@ -189,35 +190,14 @@ export default function App() {
       );
     }
     if (tab === "settings") {
-      return (
-        <div className="h-full overflow-auto space-y-4">
-          <div className="px-1">
-            <h2 className="text-sm text-text-primary" style={{ fontWeight: 510 }}>
-              系统设置
-            </h2>
-            <p className="text-xs text-text-tertiary">模型绑定 · 资源 · 诊断入口</p>
-          </div>
-          <ModelBindingPanel />
-        </div>
-      );
+      return <SystemSettingsPage initialTab="models" />;
     }
     if (tab === "prompts") return <PromptStudioPage />;
-    if (tab === "models") return <ModelBindingPanel />;
-    if (tab === "context") return <ContextInspector bookId={selectedBookId || ""} />;
-    if (tab === "genre") {
-      return selectedBookId ? (
-        <GenreProfilePanel bookId={selectedBookId} />
-      ) : (
-        <EmptyBookHint title="文风档案" tip="请先选择一本书" onNew={() => setShowCreate(true)} />
-      );
-    }
-    if (tab === "research") {
-      return selectedBookId ? (
-        <ResearchPanel bookId={selectedBookId} />
-      ) : (
-        <EmptyBookHint title="调研" tip="请先选择一本书" onNew={() => setShowCreate(true)} />
-      );
-    }
+    if (tab === "models") return <SystemSettingsPage initialTab="models" />;
+    // System-level tabs: always mount (no book gate) — pick book inside panel if needed
+    if (tab === "context") return <SystemSettingsPage initialTab="context" />;
+    if (tab === "genre") return <SystemSettingsPage initialTab="genre" />;
+    if (tab === "research") return <SystemSettingsPage initialTab="research" />;
     if (!selectedBookId) {
       return (
         <EmptyBookHint

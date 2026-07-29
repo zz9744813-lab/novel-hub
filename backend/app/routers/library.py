@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api/library", tags=["library"])
 @router.get("/books")
 async def get_library_books(db: AsyncSession = Depends(get_db)):
     items = await library_service.list_bookshelf(db)
-    return {"books": items, "count": len(items)}
+    return {"books": items, "count": len(items), "total": len(items)}
 
 
 @router.get("/books/{book_id}/home")

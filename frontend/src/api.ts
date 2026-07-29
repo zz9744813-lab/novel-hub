@@ -300,7 +300,8 @@ export const api = {
       fetchJSON<{ status: string }>(`/api/import-sessions/${sessionId}/cancel`, { method: "POST" }),
   },
   promptStudio: {
-    agents: () => fetchJSON<{ agents: any[] }>("/api/prompt-studio/agents"),
+    agents: () => fetchJSON<{ agents: any[]; context_kinds?: string[] }>("/api/prompt-studio/agents"),
+    contracts: () => fetchJSON<{ contracts: any[] }>("/api/prompt-studio/contracts"),
     list: () => fetchJSON<{ templates: any[] }>("/api/prompt-studio/templates"),
     templates: (agentRole?: string) =>
       fetchJSON<{ templates: any[] }>(
@@ -312,6 +313,11 @@ export const api = {
       fetchJSON<any>("/api/prompt-studio/templates", { method: "POST", body: JSON.stringify(body) }),
     createTemplate: (body: any) =>
       fetchJSON<any>("/api/prompt-studio/templates", { method: "POST", body: JSON.stringify(body) }),
+    seedDefaults: () =>
+      fetchJSON<{ created: any[]; skipped: string[]; created_count: number }>(
+        "/api/prompt-studio/templates/seed-defaults",
+        { method: "POST" }
+      ),
     activate: (id: string) =>
       fetchJSON<any>(`/api/prompt-studio/templates/${id}/activate`, { method: "POST" }),
     test: (id: string) =>
@@ -322,6 +328,7 @@ export const api = {
     compiledPreview: (id: string) =>
       fetchJSON<any>(`/api/prompt-studio/templates/${id}/compiled-preview`),
   },
+
 };
 
 export interface Book {

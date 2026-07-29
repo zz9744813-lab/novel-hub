@@ -75,3 +75,15 @@ Spec: NovelForge-v8-.md
 - UI: 一键处理警告 + 地点预览；assets index-BynM34z7.js
 - Smoke 夜渊短测 → book ed30c019…: batch resolved 2 warnings, commit ok; locs=3 chars=2 chaps=3
 - Branch only: refactor/bookshelf-import-prompt-studio
+
+
+## Prompt Studio contract gate (live)
+
+- Seed 9 drafts from PROMPTS (`POST .../seed-defaults`)
+- Compatibility: variables + context kinds + output contract schema
+- Activate fail-closed: TEST_REQUIRED before test; INCOMPATIBLE on empty/bad
+- Smoke: chapter_planner activate after test OK; empty review template blocked
+- Contracts registry: 18 keys (ROLE + IMPORT)
+- Library books response includes `total`
+- Frontend assets: index-Rc1OunXz.js
+- Branch only: refactor/bookshelf-import-prompt-studio

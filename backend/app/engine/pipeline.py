@@ -493,7 +493,9 @@ async def execute_pipeline(
 
         outline_node_uuid = uuid.UUID(outline_data["id"])
         for sc in scene_contents:
-            content_hash = hashlib.sha256(sc["content"].encode("utf-8")).hexdigest()
+            # NOTE: do not name this `content_hash` — that shadows the imported helper
+            # and causes UnboundLocalError on earlier content_hash(...) calls in this fn.
+            scene_content_hash = hashlib.sha256(sc["content"].encode("utf-8")).hexdigest()
             scene_row = Scene(
                 id=uuid.UUID(sc["scene_id"]),
                 book_id=book_id,
@@ -501,7 +503,7 @@ async def execute_pipeline(
                 scene_no=sc["scene_no"],
                 outline_node_id=outline_node_uuid,
                 content=sc["content"],
-                content_hash=content_hash,
+                content_hash=scene_content_hash,
                 canon_status="draft",
                 version=current_version,
             )

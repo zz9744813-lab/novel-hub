@@ -4,7 +4,8 @@ import json
 import asyncio
 from datetime import datetime, timezone
 from fastapi import Request, APIRouter, HTTPException, Depends, WebSocket, WebSocketDisconnect, UploadFile, File, Form
-from sqlalchemy import select, update, func
+from fastapi.responses import FileResponse
+from sqlalchemy import select, update, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, async_session_factory
 from app.models import (
@@ -23,6 +24,8 @@ from app.state_machine import ChapterState
 from pydantic import BaseModel
 from typing import Any
 import os
+
+from app.models.base import Base
 
 router = APIRouter()
 
@@ -108,6 +111,146 @@ async def get_book(book_id: str, db: AsyncSession = Depends(get_db)):
     return {"book_id": str(book.id), "title": book.title, "status": book.status,
             "target_chapters": book.target_chapters, "target_words": book.target_words,
             "finalized_chapters": book.finalized_chapters, "finalized_words": book.finalized_words}
+
+
+@router.delete("/api/books/{book_id}")
+async def delete_book(book_id: str, db: AsyncSession = Depends(get_db)):
+    """Delete a book and its book-scoped records, including generated covers."""
+    try:
+        bid = uuid.UUID(book_id)
+    except ValueError as exc:
+        raise HTTPException(400, "Invalid book id") from exc
+
+    book = (await db.execute(select(Book).where(Book.id == bid))).scalar_one_or_none()
+    if not book:
+        raise HTTPException(404, "Book not found")
+
+    cover_paths = [book.cover_path, book.cover_thumb_path]
+
+    # Build the complete dependent-row closure from Book through every FK.
+    # This covers legacy tables whose rows are scoped indirectly by chapter,
+    # run, scene, outline, or import-session rather than by book_id itself.
+    owned: dict[Any, set[Any]] = {Base.metadata.tables["books"]: {bid}}
+    for table in Base.metadata.sorted_tables:
+        if table.name == "books" or "book_id" not in table.c:
+            continue
+        pk = next(iter(table.primary_key.columns), None)
+        if pk is None:
+            continue
+        rows = await db.execute(select(pk).where(table.c.book_id == bid))
+        ids = {row[0] for row in rows}
+        if ids:
+            owned.setdefault(table, set()).update(ids)
+
+    changed = True
+    while changed:
+        changed = False
+        for table in Base.metadata.sorted_tables:
+            pk = next(iter(table.primary_key.columns), None)
+            if pk is None:
+                continue
+            for column in table.columns:
+                for fk in column.foreign_keys:
+                    parent = fk.column.table
+                    parent_ids = owned.get(parent)
+                    if not parent_ids:
+                        continue
+                    rows = await db.execute(select(pk).where(column.in_(list(parent_ids))))
+                    ids = {row[0] for row in rows}
+                    before = len(owned.setdefault(table, set()))
+                    owned[table].update(ids)
+                    changed = changed or len(owned[table]) != before
+
+    # chapters.active_run_id is a database FK to chapter_runs but is not
+    # represented as a ForeignKey in the legacy ORM model. Null it before
+    # removing runs, otherwise PostgreSQL rejects the child deletion.
+    chapter_table = Base.metadata.tables.get("chapters")
+    chapter_ids = owned.get(chapter_table, set()) if chapter_table is not None else set()
+    # Clear both database-level references that point from a chapter to its run
+    # before deleting chapter_runs. The second one (run_id) is legacy and may
+    # not be present in SQLAlchemy's ForeignKey metadata.
+    if chapter_ids:
+        await db.execute(
+            update(Chapter)
+            .where(Chapter.id.in_(list(chapter_ids)))
+            .values(active_run_id=None, run_id=None)
+        )
+        await db.execute(
+            update(ChapterTask)
+            .where(ChapterTask.book_id == bid)
+            .values(run_id=None)
+        )
+
+    # The run graph contains a cycle in the live schema:
+    # chapters.active_run_id -> chapter_runs, while chapter_runs.chapter_id
+    # -> chapters. Break both directions before deleting either side.
+    run_table = Base.metadata.tables.get("chapter_runs")
+    run_ids = owned.get(run_table, set()) if run_table is not None else set()
+    if run_ids and run_table is not None:
+        await db.execute(
+            update(run_table)
+            .where(run_table.c.id.in_(list(run_ids)))
+            .values(resume_from_run_id=None)
+        )
+        for dependent_name in ("chapter_dispatch_outbox", "chapter_step_runs"):
+            dependent = Base.metadata.tables.get(dependent_name)
+            if dependent is not None:
+                fk_col = dependent.c.chapter_run_id
+                await db.execute(delete(dependent).where(fk_col.in_(list(run_ids))))
+        await db.execute(delete(run_table).where(run_table.c.id.in_(list(run_ids))))
+        owned.pop(run_table, None)
+
+    # Delete rows in dependency order based on actual live FK metadata. The
+    # run/chapter cycle was broken above; all remaining NO ACTION edges are
+    # handled by this topological child-first pass.
+    deleted_tables: set[Any] = set()
+    table_ids = {table: ids for table, ids in owned.items() if ids}
+    for _ in range(len(table_ids) + 1):
+        progress = False
+        for table, ids in list(table_ids.items()):
+            if table.name == "books" or table in deleted_tables:
+                continue
+            # A table can be deleted only after every owned child table that
+            # references it has been deleted.
+            blocked = any(
+                other is not table
+                and other not in deleted_tables
+                and any(fk.column.table is table for fk in other.foreign_keys)
+                for other in table_ids
+            )
+            if blocked:
+                continue
+            pk = next(iter(table.primary_key.columns), None)
+            if pk is not None:
+                await db.execute(delete(table).where(pk.in_(list(ids))))
+            deleted_tables.add(table)
+            progress = True
+        if not progress:
+            break
+
+    # Any residual dependency is an explicit data-integrity error, not a 500
+    # traceback leaked to the caller; rollback is handled by get_db.
+    unresolved = [table.name for table in table_ids if table not in deleted_tables and table.name != "books"]
+    if unresolved:
+        raise HTTPException(409, detail={"message": "Book has dependent records", "tables": unresolved})
+
+    await db.execute(delete(Book).where(Book.id == bid))
+    await db.flush()
+
+    for path in cover_paths:
+        if path and os.path.isfile(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+    cover_dir = os.path.dirname(next((p for p in cover_paths if p), ""))
+    if cover_dir and os.path.isdir(cover_dir):
+        try:
+            if not os.listdir(cover_dir):
+                os.rmdir(cover_dir)
+        except OSError:
+            pass
+    return {"deleted": True, "book_id": str(bid)}
 
 
 # ---- Outline ----
@@ -205,6 +348,51 @@ async def approve_outline(book_id: str, version: int, db: AsyncSession = Depends
     ov.status = "approved"
     await db.flush()
     return {"status": "approved", "version": version}
+
+
+@router.post("/api/books/{book_id}/generate-cover")
+async def generate_book_cover(book_id: str, db: AsyncSession = Depends(get_db)):
+    """Generate and persist an exact 320x480 PNG cover."""
+    from app.cover_renderer import render_cover
+    from app.services.library_service import stable_cover_style
+    import hashlib
+
+    bid = uuid.UUID(book_id)
+    book = (await db.execute(select(Book).where(Book.id == bid))).scalar_one_or_none()
+    if not book:
+        raise HTTPException(404, detail={"message": "Book not found"})
+
+    cover_dir = os.path.join(os.environ.get("NOVELFORGE_DATA_DIR", "/app/data"), "books", str(bid), "covers")
+    cover_hash = hashlib.sha256(f"{bid}|{book.title}|{book.genre}|{book.logline}".encode()).hexdigest()[:16]
+    cover_path = f"{cover_dir}/cover_{cover_hash}.png"
+    thumb_path = f"{cover_dir}/thumb_{cover_hash}.png"
+    render_cover(cover_path, title=book.title or "Untitled", genre=book.genre or "", logline=book.logline or "")
+    render_cover(thumb_path, title=book.title or "Untitled", genre=book.genre or "", logline=book.logline or "", width=160, height=240)
+    book.cover_path = cover_path
+    book.cover_thumb_path = thumb_path
+    book.cover_hash = cover_hash
+    await db.commit()
+    return {
+        "status": "generated",
+        "width": 320,
+        "height": 480,
+        "cover_url": f"/api/library/books/{bid}/cover",
+        "thumb_url": f"/api/library/books/{bid}/cover?thumb=1",
+        "cover_style": stable_cover_style(bid),
+        "file_size": os.path.getsize(cover_path),
+    }
+
+
+@router.get("/api/library/books/{book_id}/cover")
+async def get_book_cover(book_id: str, thumb: int = 0, db: AsyncSession = Depends(get_db)):
+    bid = uuid.UUID(book_id)
+    book = (await db.execute(select(Book).where(Book.id == bid))).scalar_one_or_none()
+    if not book:
+        raise HTTPException(404, detail={"message": "Book not found"})
+    path = book.cover_thumb_path if thumb else book.cover_path
+    if not path or not os.path.isfile(path):
+        raise HTTPException(404, detail={"message": "Cover not generated"})
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
 
 
 @router.get("/api/books/{book_id}/outline")

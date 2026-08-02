@@ -211,6 +211,7 @@ async def list_bookshelf(db: AsyncSession) -> list[dict[str, Any]]:
                 "title": b.title,
                 "subtitle": getattr(b, "subtitle", None),
                 "cover_url": cover,
+                "cover_generated": bool(cover),
                 "cover_style": stable_cover_style(b.id),
                 "tags": tags[:5],
                 "lifecycle_status": life,

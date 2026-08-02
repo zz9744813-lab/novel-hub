@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api } from "../../api";
+import { api, fetchAuthenticatedAsset } from "../../api";
 import { Play, Loader2, BookOpen, Users, Map, GitBranch, MapPin, ScrollText } from "lucide-react";
 
 export function BookHomePage({
@@ -15,6 +15,24 @@ export function BookHomePage({
   const [ctx, setCtx] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [coverBusy, setCoverBusy] = useState(false);
+  const [coverSrc, setCoverSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl: string | null = null;
+    setCoverSrc(null);
+    const coverUrl = data?.book?.cover_url;
+    if (!coverUrl) return () => undefined;
+    fetchAuthenticatedAsset(coverUrl).then((url) => {
+      objectUrl = url;
+      if (active) setCoverSrc(url);
+    }).catch(() => undefined);
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [data?.book?.cover_url]);
 
   useEffect(() => {
     let cancelled = false;
@@ -36,6 +54,19 @@ export function BookHomePage({
       cancelled = true;
     };
   }, [bookId]);
+
+  const handleGenerateCover = async () => {
+    setCoverBusy(true);
+    setErr(null);
+    try {
+      await api.books.generateCover(bookId);
+      setData(await api.library.bookHome(bookId));
+    } catch (e: any) {
+      setErr(e?.message || String(e));
+    } finally {
+      setCoverBusy(false);
+    }
+  };
 
   const book = data?.book;
   const style = book?.cover_style;
@@ -72,7 +103,11 @@ export function BookHomePage({
         <div
           className="w-full md:w-40 h-56 rounded-lg shrink-0 border border-border shadow-md"
           style={{ background: style?.background || "#1a1a2e" }}
-        />
+        >
+          {coverSrc ? (
+            <img src={coverSrc} alt={`${book?.title || ""} 封面`} className="h-full w-full object-cover" />
+          ) : null}
+        </div>
         <div className="flex-1 min-w-0">
           <h1 className="text-lg text-text-primary" style={{ fontWeight: 510 }}>
             {book?.title}
@@ -109,6 +144,14 @@ export function BookHomePage({
             </button>
             <button onClick={onOpenChapters} className="btn text-xs py-2 px-3">
               打开章节
+            </button>
+            <button
+              onClick={handleGenerateCover}
+              disabled={coverBusy}
+              className="btn text-xs py-2 px-3 flex items-center gap-1.5"
+            >
+              {coverBusy ? <Loader2 size={13} className="animate-spin" /> : null}
+              {book?.cover_url ? "重新生成封面" : "生成封面"}
             </button>
           </div>
           {err && <p className="text-xs text-red-400 mt-2">{err}</p>}

@@ -1,100 +1,145 @@
+import { useEffect, useState } from "react";
+import type { CSSProperties } from "react";
 import clsx from "clsx";
-import { AlertTriangle, BookOpen } from "lucide-react";
+import { AlertTriangle, ArrowUpRight, BookOpen, Trash2 } from "lucide-react";
+import { fetchAuthenticatedAsset } from "../../api";
 import { BookshelfBook, LIFECYCLE_LABEL } from "./library.types";
 
-function progressPct(b: BookshelfBook): number {
-  const planned = b.planned_chapters || 0;
-  if (!planned) return b.finalized_chapters > 0 ? 5 : 0;
-  return Math.min(100, Math.round((b.finalized_chapters / planned) * 100));
+function progressPct(book: BookshelfBook): number {
+  const planned = book.planned_chapters || 0;
+  if (!planned) return book.finalized_chapters > 0 ? 5 : 0;
+  return Math.min(100, Math.round((book.finalized_chapters / planned) * 100));
+}
+
+function statusTone(status: string): string {
+  if (status === "writing") return "is-writing";
+  if (status === "needs_human") return "is-warning";
+  if (status === "completed") return "is-complete";
+  return "is-quiet";
 }
 
 export function BookCard({
   book,
   onOpen,
+  onDelete,
+  onPreview,
+  selected = false,
 }: {
   book: BookshelfBook;
   onOpen: (id: string) => void;
+  onDelete: (book: BookshelfBook) => void;
+  onPreview: (book: BookshelfBook) => void;
+  selected?: boolean;
 }) {
+  const [coverError, setCoverError] = useState(false);
+  const [coverSrc, setCoverSrc] = useState<string | null>(null);
   const pct = progressPct(book);
   const style = book.cover_style || {
-    background: "linear-gradient(135deg,#1a1a2e,#0f3460)",
-    accent: "#e94560",
-    bg: "#1a1a2e",
+    background: "linear-gradient(145deg, #2c314b 0%, #151923 72%)",
+    accent: "#9ca8ff",
+    bg: "#202538",
   };
+  const showCoverImage = Boolean(coverSrc) && !coverError;
+  const cssVars = {
+    ["--book-background" as string]: style.background,
+    ["--book-accent" as string]: style.accent || "#9ca8ff",
+  } as CSSProperties;
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl: string | null = null;
+    setCoverError(false);
+    setCoverSrc(null);
+    if (!book.cover_url) return () => undefined;
+    fetchAuthenticatedAsset(book.cover_url)
+      .then((url) => {
+        objectUrl = url;
+        if (active) setCoverSrc(url);
+      })
+      .catch(() => {
+        if (active) setCoverError(true);
+      });
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [book.cover_url]);
 
   return (
-    <button
-      type="button"
-      onClick={() => onOpen(book.book_id)}
-      className="group text-left rounded-xl border border-border bg-bg-panel hover:border-brand/50 hover:bg-bg-hover/40 transition-all overflow-hidden flex flex-col shadow-sm"
+    <article
+      className={clsx("shelf-book", selected && "is-selected")}
+      style={cssVars}
+      onMouseEnter={() => onPreview(book)}
+      onFocus={() => onPreview(book)}
     >
-      <div
-        className="relative h-40 w-full flex items-end p-3"
-        style={{ background: style.background }}
+      <div className="shelf-book-shadow" aria-hidden="true" />
+      <button
+        type="button"
+        className="shelf-book-button"
+        aria-label={`打开《${book.title}》`}
+        onClick={() => onOpen(book.book_id)}
       >
-        <div className="absolute inset-0 opacity-20 bg-[radial-gradient(circle_at_30%_20%,white,transparent_55%)]" />
-        <div className="relative">
-          <div className="text-[10px] uppercase tracking-widest text-white/70 mb-1">NovelForge</div>
-          <div className="text-sm text-white font-medium line-clamp-2 drop-shadow" style={{ fontWeight: 510 }}>
-            {book.title}
-          </div>
-        </div>
-        {book.unresolved_risk_count > 0 && (
-          <span className="absolute top-2 right-2 flex items-center gap-1 text-2xs bg-black/50 text-amber-300 px-1.5 py-0.5 rounded">
-            <AlertTriangle size={10} />
-            {book.unresolved_risk_count}
-          </span>
-        )}
-      </div>
-
-      <div className="p-3 flex-1 flex flex-col gap-2">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span
-            className={clsx(
-              "badge text-2xs",
-              book.lifecycle_status === "needs_human" && "bg-amber-500/15 text-amber-300",
-              book.lifecycle_status === "writing" && "bg-brand/15 text-brand-accent",
-              book.lifecycle_status === "completed" && "bg-success/15 text-success",
-              !["needs_human", "writing", "completed"].includes(book.lifecycle_status) &&
-                "bg-bg-canvas text-text-tertiary"
-            )}
-          >
-            {LIFECYCLE_LABEL[book.lifecycle_status] || book.lifecycle_status}
-          </span>
-          {(book.tags || []).slice(0, 3).map((t) => (
-            <span key={t} className="text-2xs text-text-disabled border border-border rounded px-1.5 py-0.5">
-              {t}
-            </span>
-          ))}
-        </div>
-
-        {book.logline && (
-          <p className="text-2xs text-text-tertiary line-clamp-2">{book.logline}</p>
-        )}
-
-        <div className="mt-auto space-y-1.5">
-          <div className="flex justify-between text-2xs text-text-disabled font-mono">
-            <span>
-              {book.finalized_chapters}/{book.planned_chapters ?? "?"} 章
-            </span>
-            <span>{(book.finalized_words || 0).toLocaleString()} 字</span>
-          </div>
-          <div className="h-1.5 rounded-full bg-bg-canvas overflow-hidden">
-            <div
-              className="h-full rounded-full bg-brand-accent/80 transition-all"
-              style={{ width: `${pct}%` }}
+        <span className="shelf-book-pages" aria-hidden="true">
+          <span className="shelf-book-page-lines" />
+        </span>
+        <span className="shelf-book-spine" aria-hidden="true">
+          <span>{book.title}</span>
+        </span>
+        <span className="shelf-book-cover">
+          {showCoverImage && (
+            <img
+              src={coverSrc || undefined}
+              alt=""
+              className="shelf-book-cover-image"
+              onError={() => setCoverError(true)}
             />
-          </div>
-          {book.active_task ? (
-            <div className="text-2xs text-brand-accent truncate">{book.active_task.label}</div>
-          ) : (
-            <div className="text-2xs text-text-disabled flex items-center gap-1">
-              <BookOpen size={10} />
-              {book.updated_at ? new Date(book.updated_at).toLocaleString() : "—"}
-            </div>
           )}
-        </div>
+          <span className="shelf-book-cover-shade" aria-hidden="true" />
+          <span className="shelf-book-cover-frame" aria-hidden="true" />
+          <span className="shelf-book-cover-kicker">NOVELFORGE · {book.genre || "长篇小说"}</span>
+          <span className="shelf-book-cover-title">{book.title}</span>
+          {book.subtitle && <span className="shelf-book-cover-subtitle">{book.subtitle}</span>}
+          <span className="shelf-book-cover-footer">
+            <span>{book.finalized_chapters}/{book.planned_chapters ?? "?"} 章</span>
+            <span>{pct}%</span>
+          </span>
+          <span className="shelf-book-progress" aria-hidden="true">
+            <span style={{ width: `${pct}%` }} />
+          </span>
+          <span className="shelf-book-open-hint"><ArrowUpRight size={13} /> 打开作品</span>
+        </span>
+      </button>
+
+      <div className="shelf-book-label">
+        <span className={clsx("shelf-status", statusTone(book.lifecycle_status))}>
+          <span className="shelf-status-dot" />
+          {LIFECYCLE_LABEL[book.lifecycle_status] || book.lifecycle_status}
+        </span>
+        <span className="shelf-book-task" title={book.active_task?.label || "暂无活动任务"}>
+          {book.active_task?.label || "点击翻开作品"}
+        </span>
+        <BookOpen size={13} className="shelf-book-label-icon" aria-hidden="true" />
       </div>
-    </button>
+
+      <div className="shelf-book-actions">
+        {book.unresolved_risk_count > 0 && (
+          <span className="shelf-risk" title={`${book.unresolved_risk_count} 项待处理风险`}>
+            <AlertTriangle size={11} /> {book.unresolved_risk_count}
+          </span>
+        )}
+        <button
+          type="button"
+          title={`删除《${book.title}》`}
+          aria-label={`删除《${book.title}》`}
+          className="shelf-delete"
+          onClick={(event) => {
+            event.stopPropagation();
+            onDelete(book);
+          }}
+        >
+          <Trash2 size={12} />
+        </button>
+      </div>
+    </article>
   );
 }

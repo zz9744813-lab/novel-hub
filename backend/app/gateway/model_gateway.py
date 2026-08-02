@@ -62,7 +62,6 @@ RETRYABLE_ERRORS = {
     "UNTERMINATED_REASONING",
     "CONNECT_TIMEOUT",
     "READ_TIMEOUT",
-    "HTTP_400",  # often bad/unknown model on midstream — allow retry/fallback
     "HTTP_404",
     "HTTP_500",
     "HTTP_502",

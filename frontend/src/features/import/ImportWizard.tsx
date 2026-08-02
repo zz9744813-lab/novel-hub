@@ -18,6 +18,7 @@ export function ImportWizard({
   const [session, setSession] = useState<any>(null);
   const [title, setTitle] = useState("");
   const [blankTitle, setBlankTitle] = useState("");
+  const [conflictSelections, setConflictSelections] = useState<Record<string, string>>({});
 
   // poll while analyzing
   useEffect(() => {
@@ -292,11 +293,49 @@ export function ImportWizard({
             )}
             <div className="panel p-3 text-2xs text-text-secondary space-y-1 max-h-32 overflow-auto">
               <div className="text-text-disabled">{preview.preview?.note}</div>
-              {(preview.conflicts || []).map((c: any) => (
-                <div key={c.conflict_id} className={c.severity === "blocking" ? "text-red-300" : "text-amber-300/90"}>
-                  [{c.severity}] {c.status}: {c.code} — {c.message}
+              {(preview.conflicts || []).map((c: any) => {
+                const selected = conflictSelections[c.conflict_id] || c.selected_option_id || c.options?.[0]?.id || "";
+                return (
+                <div key={c.conflict_id} className="rounded border border-border/70 p-2 space-y-2">
+                  <div className="flex items-start gap-2">
+                    <span className={c.severity === "blocking" ? "text-red-300" : "text-amber-300/90"}>
+                      [{c.severity}] {c.status}: {c.code} — {c.message}
+                    </span>
+                  </div>
+                  {c.status === "open" && (c.options || []).length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <select
+                        className="flex-1 rounded border border-border bg-bg-canvas px-2 py-1 text-2xs text-text-secondary"
+                        value={selected}
+                        onChange={(e) => setConflictSelections((prev) => ({ ...prev, [c.conflict_id]: e.target.value }))}
+                      >
+                        {(c.options || []).map((option: any) => (
+                          <option key={option.id} value={option.id}>{option.label || option.title || option.id}</option>
+                        ))}
+                      </select>
+                      <button
+                        className="btn text-2xs py-0.5 px-2"
+                        disabled={busy || !selected}
+                        onClick={async () => {
+                          if (!sessionId || !selected) return;
+                          setBusy(true);
+                          try {
+                            await api.imports.resolveConflict(sessionId, c.conflict_id, selected);
+                            setPreview(await api.imports.preview(sessionId));
+                          } catch (e: any) {
+                            setError(e?.message || String(e));
+                          } finally {
+                            setBusy(false);
+                          }
+                        }}
+                      >
+                        {busy ? <Loader2 size={10} className="animate-spin" /> : "应用此选项"}
+                      </button>
+                    </div>
+                  )}
                 </div>
-              ))}
+                );
+              })}
             </div>
             <div className="flex flex-wrap gap-2 justify-end">
               <button className="btn text-xs py-1.5 px-3" onClick={onClose}>

@@ -6,10 +6,14 @@ P0-09: lifespan fail-fast readiness (no background bootstrap sleep)
 from __future__ import annotations
 
 import os
+import uuid
+import json
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from redis.asyncio import Redis
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -79,7 +83,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"API orphan reconciler skipped: {e}")
 
+    global _event_task
+    _event_task = asyncio.create_task(_event_listener())
     yield
+    if _event_task:
+        _event_task.cancel()
+        try:
+            await _event_task
+        except asyncio.CancelledError:
+            pass
+        _event_task = None
     _READY = False
 
 
@@ -126,7 +139,7 @@ async def admin_token_middleware(request: Request, call_next):
 
     # When token configured (always in prod), protect API/WS/docs
     if token and not token.startswith("replace-"):
-        if path.startswith("/api") or path.startswith("/ws") or path in ("/docs", "/redoc", "/openapi.json"):
+        if path.startswith("/api") or path in ("/docs", "/redoc", "/openapi.json"):
             auth = request.headers.get("Authorization", "")
             provided = ""
             if auth.lower().startswith("bearer "):
@@ -143,6 +156,86 @@ app.include_router(router)
 app.include_router(library_router.router)
 app.include_router(imports_router.router)
 app.include_router(prompt_studio_router.router)
+
+
+# WebSocket connection manager for real-time events
+_ws_connections: dict[str, list[WebSocket]] = {}
+_event_task: asyncio.Task | None = None
+
+
+async def _event_listener():
+    """Bridge Redis pub/sub events from workers into connected WebSockets."""
+    redis = Redis.from_url(os.environ.get("REDIS_URL", "redis://redis:6379/0"), decode_responses=True)
+    pubsub = redis.pubsub()
+    try:
+        await pubsub.subscribe("novelforge:events")
+        async for message in pubsub.listen():
+            if message.get("type") != "message":
+                continue
+            try:
+                payload = json.loads(message["data"])
+                await broadcast_event(payload.pop("type", "event"), payload)
+            except Exception:
+                logger.warning("invalid realtime event", exc_info=True)
+    except asyncio.CancelledError:
+        raise
+    finally:
+        try:
+            await pubsub.unsubscribe("novelforge:events")
+            await pubsub.close()
+            await redis.aclose()
+        except Exception:
+            pass
+
+
+
+@app.websocket("/ws/events")
+async def websocket_events(websocket: WebSocket):
+    """WebSocket endpoint for real-time chapter/import events."""
+    configured_token = (os.environ.get("ADMIN_API_TOKEN") or "").strip()
+    supplied_token = websocket.query_params.get("token", "")
+    if configured_token and not configured_token.startswith("replace-") and supplied_token != configured_token:
+        await websocket.close(code=1008, reason="unauthorized")
+        return
+    await websocket.accept()
+    conn_id = uuid.uuid4().hex
+
+    # Register connection
+    if "events" not in _ws_connections:
+        _ws_connections["events"] = []
+    _ws_connections["events"].append(websocket)
+
+    try:
+        # Send initial connection message
+        await websocket.send_json({"type": "connected", "conn_id": conn_id})
+
+        # Keep connection alive, receive ping/pong
+        while True:
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
+    except WebSocketDisconnect:
+        pass
+    finally:
+        # Cleanup
+        if websocket in _ws_connections.get("events", []):
+            _ws_connections["events"].remove(websocket)
+
+
+async def broadcast_event(event_type: str, payload: dict):
+    """Broadcast event to all connected WebSocket clients."""
+    message = {"type": event_type, **payload}
+    for ws in list(_ws_connections.get("events", [])):
+        try:
+            await ws.send_json(message)
+        except Exception:
+            if ws in _ws_connections.get("events", []):
+                _ws_connections["events"].remove(ws)
+
+
+async def _broadcast_chapter_event(chapter_id: uuid.UUID, event_type: str, detail: dict):
+    """Broadcast chapter status change via WebSocket."""
+    await broadcast_event(event_type, {"chapter_id": str(chapter_id), **detail})
 
 
 @app.get("/health/live")

@@ -54,6 +54,19 @@ async def _set_chapter_status(
         actor="pipeline",
         run_id=chapter_run_id,
     )
+    try:
+        from app.events import publish_event
+        await publish_event(
+            "chapter.updated",
+            {
+                "chapter_id": str(chapter_id),
+                "chapter_run_id": str(chapter_run_id) if chapter_run_id else None,
+                "status": status,
+                "reason": reason,
+            },
+        )
+    except Exception:
+        logger.debug("chapter status event publish failed", exc_info=True)
 
 
 async def _get_outline_node(outline_node_id: uuid.UUID) -> OutlineNode | None:

@@ -62,12 +62,31 @@ export async function verifyAdminToken(token: string): Promise<boolean> {
   }
 }
 
+export async function fetchAuthenticatedAsset(url: string): Promise<string> {
+  const r = await fetch(BASE + url, { headers: authHeaders() });
+  if (r.status === 401) {
+    clearAdminToken();
+    window.dispatchEvent(new CustomEvent("novelforge:unauthorized"));
+    throw new Error("401: unauthorized");
+  }
+  if (!r.ok) throw new Error(`${r.status}: ${await r.text()}`);
+  return URL.createObjectURL(await r.blob());
+}
+
+export interface LibraryBooksResponse { books: any[]; total: number }
+
 export const api = {
   books: {
     list: () => fetchJSON<Book[]>("/api/books"),
     create: (data: { title: string; description?: string; target_chapters?: number }) =>
       fetchJSON<{ book_id: string }>("/api/books", { method: "POST", body: JSON.stringify(data) }),
     get: (id: string) => fetchJSON<Book>(`/api/books/${id}`),
+    delete: (id: string) => fetchJSON<{ deleted: boolean; book_id: string }>(`/api/books/${id}`, { method: "DELETE" }),
+    generateCover: (id: string) =>
+      fetchJSON<{ status: string; width: number; height: number; cover_url: string; thumb_url: string }>(
+        `/api/books/${id}/generate-cover`,
+        { method: "POST" }
+      ),
     exportDownload: async (bookId: string, filenameHint?: string) => {
       const r = await fetch(BASE + `/api/books/${bookId}/export`, {
         headers: authHeaders(),
@@ -245,7 +264,7 @@ export const api = {
   resources: () => fetchJSON<{ available_mb: number; swap_used_pct: number; resource_safe: boolean }>("/api/admin/resources"),
   events: (bookId: string) => fetchJSON<any[]>(`/api/books/${bookId}/events`),
   library: {
-    books: () => fetchJSON<{ books: any[]; total: number }>("/api/library/books"),
+    books: () => fetchJSON<LibraryBooksResponse>("/api/library/books"),
     bookHome: (bookId: string) => fetchJSON<any>(`/api/library/books/${bookId}/home`),
     contextPreview: (bookId: string, chapterNo = 1, agentRole = "draft_writer") =>
       fetchJSON<any>(
@@ -360,6 +379,9 @@ export interface ChapterListItem {
   title: string | null;
   word_count: number;
 }
+export interface ChapterRunSummary { run_id: string; status: string; current_step?: string | null; chapter_no?: number; }
+export interface NeedsHumanDetail { chapter_id: string; status: string; issues?: any[]; detail?: any; run?: any; active_run_id?: string | null; }
+export interface ChapterRunDetail extends ChapterRunSummary { book_id?: string; error_code?: string | null; error_detail?: any; }
 export interface L4Snapshot {
   id: string; entity_type: string; entity_id: string;
   as_of_chapter: number; state: any; version: number; is_locked: boolean;

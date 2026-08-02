@@ -4,6 +4,7 @@ export interface BookshelfBook {
   subtitle?: string | null;
   cover_url?: string | null;
   cover_style?: { background: string; accent: string; bg: string };
+  cover_generated?: boolean;
   tags: string[];
   lifecycle_status:
     | "draft"

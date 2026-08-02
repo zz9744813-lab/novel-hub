@@ -8,6 +8,8 @@ from uuid import UUID
 
 class PipelineOutcome(str, Enum):
     FINALIZED = "finalized"
+    # Backward-compatible alias retained for older invariant tests.
+    SUCCEEDED = "succeeded"
     BLOCKED_DEPENDENCY = "blocked_dependency"
     RESOURCE_BLOCKED = "resource_blocked"
     PAUSED = "paused"
@@ -19,7 +21,7 @@ class PipelineOutcome(str, Enum):
 @dataclass(frozen=True)
 class PipelineResult:
     outcome: PipelineOutcome
-    chapter_id: UUID
+    chapter_id: UUID | None = None
     chapter_run_id: UUID | None = None
     final_version: int | None = None
     error_code: str | None = None

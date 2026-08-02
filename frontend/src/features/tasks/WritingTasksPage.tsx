@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api } from "../../api";
+import { api, getAdminToken } from "../../api";
 import { Loader2, ListTodo, Upload, PenTool, AlertTriangle, CheckCircle2, Clock } from "lucide-react";
 
 interface ImportItem {
@@ -60,7 +60,7 @@ export function WritingTasksPage() {
                 }
                 // fallback fetch
                 const r = await fetch(`/api/chapters/${ch.chapter_id}/runs`, {
-                  headers: { Authorization: `Bearer ${sessionStorage.getItem("novelforge_admin_token") || ""}` },
+                  headers: { Authorization: `Bearer ${getAdminToken() || ""}` },
                 });
                 if (!r.ok) return [];
                 const data = await r.json();
@@ -89,7 +89,7 @@ export function WritingTasksPage() {
       // global needs-human
       try {
         const nh = await fetch("/api/chapters/needs-human", {
-          headers: { Authorization: `Bearer ${sessionStorage.getItem("novelforge_admin_token") || ""}` },
+          headers: { Authorization: `Bearer ${getAdminToken() || ""}` },
         });
         if (nh.ok) {
           const data = await nh.json();

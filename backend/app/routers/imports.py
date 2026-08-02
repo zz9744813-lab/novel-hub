@@ -9,7 +9,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -48,6 +48,21 @@ async def _transition(db: AsyncSession, sess: ImportSession, to_status: str, ste
     sess.status = to_status
     sess.current_step = step
     sess.updated_at = _utcnow()
+    try:
+        from app.events import publish_event
+        await publish_event(
+            "import_session.updated",
+            {
+                "import_session_id": str(sess.id),
+                "status": to_status,
+                "current_step": step,
+                "progress": sess.progress,
+                "detail": detail or {},
+            },
+        )
+    except Exception:
+        # Realtime delivery is advisory; import state remains durable in Postgres.
+        pass
 
 
 @router.get("")
@@ -370,10 +385,26 @@ async def resolve_conflict(
     ).scalar_one_or_none()
     if not c or str(c.import_session_id) != session_id:
         raise HTTPException(404, "conflict not found")
+    if c.status != "open":
+        raise HTTPException(409, "conflict already resolved")
+    if body.option_id not in {
+        o.get("id") for o in (c.options or []) if isinstance(o, dict) and o.get("id")
+    }:
+        raise HTTPException(400, "invalid conflict option")
     c.selected_option_id = body.option_id
     c.status = "resolved"
+    sess = (await db.execute(select(ImportSession).where(ImportSession.id == c.import_session_id))).scalar_one_or_none()
+    remaining_blocking = int((await db.execute(
+        select(func.count()).select_from(ImportConflict).where(
+            ImportConflict.import_session_id == c.import_session_id,
+            ImportConflict.status == "open",
+            ImportConflict.severity == "blocking",
+        )
+    )).scalar() or 0)
+    if sess and sess.status == "needs_human" and remaining_blocking == 0:
+        await _transition(db, sess, "preview_ready", "resolve_conflict", {"conflict_id": conflict_id})
     await db.commit()
-    return {"status": "resolved", "conflict_id": conflict_id, "option_id": body.option_id}
+    return {"status": "resolved", "conflict_id": conflict_id, "option_id": body.option_id, "session_status": sess.status if sess else None}
 
 
 def _pick_option(c: ImportConflict, preferred: str | None) -> str | None:

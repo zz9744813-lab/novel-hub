@@ -231,6 +231,17 @@ async def record_reuse(
     )
 
 
+async def record_success(
+    step_id: uuid.UUID,
+    *,
+    output: Any,
+    output_text: str | None = None,
+    artifact_ref: dict | None = None,
+) -> StepArtifact:
+    """Backward-compatible name used by the invariant suite."""
+    return await persist_success(step_id, output=output, output_text=output_text, artifact_ref=artifact_ref)
+
+
 async def persist_success(
     step_id: uuid.UUID,
     *,

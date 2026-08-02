@@ -376,6 +376,23 @@ async def run_chapter_pipeline(ctx, chapter_id: str, book_id: str, chapter_no: i
             task_status,
             run_status,
         )
+        try:
+            from app.events import publish_event
+            await publish_event(
+                "chapter_run.updated",
+                {
+                    "book_id": book_id,
+                    "chapter_id": chapter_id,
+                    "chapter_no": chapter_no,
+                    "run_id": chapter_run_id,
+                    "run_status": run_status,
+                    "task_status": task_status,
+                    "error_code": result.error_code,
+                    "current_step": getattr(result, "current_step", None),
+                },
+            )
+        except Exception:
+            logger.debug("chapter event publish failed", exc_info=True)
 
     except Exception as e:
         logger.error(f"Pipeline failed for chapter {chapter_no}: {e}", exc_info=True)

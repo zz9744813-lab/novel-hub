@@ -36,14 +36,14 @@ export function ReferencesLibraryPage({
             let genre_count = 0;
             let research_count = 0;
             try {
-              const g = await api.genre.list(b.book_id);
-              genre_count = Array.isArray(g) ? g.length : g?.profiles?.length || 0;
+              const g: any = await api.genre.list(b.book_id);
+              genre_count = Array.isArray(g) ? g.length : Array.isArray(g?.profiles) ? g.profiles.length : 0;
             } catch {
               /* ignore */
             }
             try {
-              const r = await api.research.list(b.book_id);
-              research_count = Array.isArray(r) ? r.length : r?.sessions?.length || 0;
+              const researchResponse: any = await api.research.list(b.book_id);
+              research_count = Array.isArray(researchResponse) ? researchResponse.length : Array.isArray(researchResponse?.sessions) ? researchResponse.sessions.length : 0;
             } catch {
               /* ignore */
             }

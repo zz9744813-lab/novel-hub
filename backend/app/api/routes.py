@@ -29,6 +29,8 @@ import os
 router = APIRouter()
 
 _DATA_ROOT = Path(os.environ.get("NOVELFORGE_DATA_DIR", "/app/data")).resolve()
+_REFERENCE_ROOT = Path(os.environ.get("NOVELFORGE_REFERENCE_DIR", "/data/references")).resolve()
+_ALLOWED_DATA_ROOTS = (_DATA_ROOT, _REFERENCE_ROOT)
 
 
 def gen_uuid():
@@ -42,22 +44,28 @@ def _parse_uuid(value: str, *, field: str = "id") -> uuid.UUID:
         raise HTTPException(400, f"Invalid {field}") from exc
 
 
-def _safe_data_file(path: str | None) -> Path | None:
-    """Only serve/delete files that live under the configured data root."""
+def _safe_data_file(path: str | None, *, roots: tuple[Path, ...] | None = None) -> Path | None:
+    """Only serve/delete files that live under configured data roots."""
     if not path:
         return None
     try:
         candidate = Path(path).resolve()
-        candidate.relative_to(_DATA_ROOT)
     except (OSError, ValueError):
         return None
-    return candidate if candidate.is_file() else None
+    allowed = roots or _ALLOWED_DATA_ROOTS
+    for root in allowed:
+        try:
+            candidate.relative_to(root)
+            return candidate if candidate.is_file() else None
+        except ValueError:
+            continue
+    return None
 
 
 def _cleanup_cover_files(paths: list[str | None]) -> None:
     dirs: set[Path] = set()
     for raw in paths:
-        safe = _safe_data_file(raw)
+        safe = _safe_data_file(raw, roots=(_DATA_ROOT,))
         if safe is None:
             continue
         try:
@@ -491,7 +499,7 @@ async def get_book_cover(book_id: str, thumb: int = 0, db: AsyncSession = Depend
     if not book:
         raise HTTPException(404, detail={"message": "Book not found"})
     path = book.cover_thumb_path if thumb else book.cover_path
-    safe = _safe_data_file(path)
+    safe = _safe_data_file(path, roots=(_DATA_ROOT,))
     if safe is None:
         raise HTTPException(404, detail={"message": "Cover not generated"})
     return FileResponse(
@@ -1687,6 +1695,42 @@ async def list_reference_samples(book_id: str, db: AsyncSession = Depends(get_db
         }
         for r in rows
     ]
+
+
+@router.delete("/api/books/{book_id}/reference-samples/{sample_id}")
+async def delete_reference_sample(
+    book_id: str, sample_id: str, db: AsyncSession = Depends(get_db)
+):
+    """Delete one uploaded reference sample and its compressed source file."""
+    from app.models.tables import ReferenceSample
+
+    bid = _parse_uuid(book_id, field="book id")
+    sid = _parse_uuid(sample_id, field="sample id")
+    sample = (
+        await db.execute(
+            select(ReferenceSample).where(
+                ReferenceSample.id == sid,
+                ReferenceSample.book_id == bid,
+            )
+        )
+    ).scalar_one_or_none()
+    if sample is None:
+        raise HTTPException(404, "Reference sample not found")
+
+    storage_path = sample.storage_path
+    await db.delete(sample)
+    await db.commit()
+    safe = _safe_data_file(storage_path)
+    if safe is not None:
+        try:
+            safe.unlink(missing_ok=True)
+            if safe.parent.is_dir() and not any(safe.parent.iterdir()):
+                safe.parent.rmdir()
+        except OSError:
+            # The database deletion is authoritative; a stale file is harmless
+            # and can be cleaned up by the data maintenance job.
+            pass
+    return {"deleted": True, "sample_id": str(sid), "book_id": str(bid)}
 
 
 @router.post("/api/books/{book_id}/reference-samples/{sample_id}/analyze")

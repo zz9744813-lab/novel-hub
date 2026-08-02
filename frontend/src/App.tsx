@@ -25,7 +25,8 @@ import {
   verifyAdminToken,
   api,
 } from "./api";
-import { ArrowLeft, Download, Loader2 } from "lucide-react";
+import { ArrowLeft, Download, Loader2, Moon, Sun } from "lucide-react";
+import { applyTheme, getStoredTheme, type ThemeMode } from "./theme";
 
 type Tab =
   | "library"
@@ -56,6 +57,11 @@ export default function App() {
   const [authBusy, setAuthBusy] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportMsg, setExportMsg] = useState<string | null>(null);
+  const [theme, setTheme] = useState<ThemeMode>(() => getStoredTheme());
+
+  useEffect(() => {
+    applyTheme(theme);
+  }, [theme]);
 
   useEffect(() => {
     const onUnauth = () => setAuthed(false);
@@ -309,6 +315,16 @@ export default function App() {
               </button>
             )}
             <ResourceBar />
+            <button
+              type="button"
+              className="theme-toggle"
+              title={theme === "dark" ? "切换到日间模式" : "切换到夜间模式"}
+              aria-label={theme === "dark" ? "切换到日间模式" : "切换到夜间模式"}
+              onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
+            >
+              {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
+              <span>{theme === "dark" ? "日间" : "夜间"}</span>
+            </button>
             <button
               onClick={handleLogout}
               className="text-2xs text-text-tertiary hover:text-text-primary px-1"

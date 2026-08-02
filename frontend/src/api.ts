@@ -226,6 +226,11 @@ export const api = {
         narrative_person?: string;
         prompt_injection_snippet?: string;
       }>(`/api/books/${bookId}/reference-samples/${sampleId}/analyze`, { method: "POST" }),
+    deleteSample: (bookId: string, sampleId: string) =>
+      fetchJSON<{ deleted: boolean; sample_id: string; book_id: string }>(
+        `/api/books/${bookId}/reference-samples/${sampleId}`,
+        { method: "DELETE" }
+      ),
     edit: (profileId: string, data: Partial<{ prompt_injection_snippet: string; narrative_person: string }>) =>
       fetchJSON<{ id: string; status: string }>(`/api/genre-profiles/${profileId}`, {
         method: "PATCH",

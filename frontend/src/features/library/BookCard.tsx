@@ -22,14 +22,10 @@ export function BookCard({
   book,
   onOpen,
   onDelete,
-  onPreview,
-  selected = false,
 }: {
   book: BookshelfBook;
   onOpen: (id: string) => void;
   onDelete: (book: BookshelfBook) => void;
-  onPreview: (book: BookshelfBook) => void;
-  selected?: boolean;
 }) {
   const [coverError, setCoverError] = useState(false);
   const [coverSrc, setCoverSrc] = useState<string | null>(null);
@@ -66,12 +62,7 @@ export function BookCard({
   }, [book.cover_url]);
 
   return (
-    <article
-      className={clsx("shelf-book", selected && "is-selected")}
-      style={cssVars}
-      onMouseEnter={() => onPreview(book)}
-      onFocus={() => onPreview(book)}
-    >
+    <article className="shelf-book" style={cssVars}>
       <div className="shelf-book-shadow" aria-hidden="true" />
       <button
         type="button"
@@ -100,13 +91,17 @@ export function BookCard({
           <span className="shelf-book-cover-title">{book.title}</span>
           {book.subtitle && <span className="shelf-book-cover-subtitle">{book.subtitle}</span>}
           <span className="shelf-book-cover-footer">
-            <span>{book.finalized_chapters}/{book.planned_chapters ?? "?"} 章</span>
+            <span>
+              {book.finalized_chapters}/{book.planned_chapters ?? "?"} 章
+            </span>
             <span>{pct}%</span>
           </span>
           <span className="shelf-book-progress" aria-hidden="true">
             <span style={{ width: `${pct}%` }} />
           </span>
-          <span className="shelf-book-open-hint"><ArrowUpRight size={13} /> 打开作品</span>
+          <span className="shelf-book-open-hint">
+            <ArrowUpRight size={13} /> 打开作品
+          </span>
         </span>
       </button>
 

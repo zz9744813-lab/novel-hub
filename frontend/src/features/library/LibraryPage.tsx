@@ -87,6 +87,19 @@ export function LibraryPage({
     return list;
   }, [books, q, filter, sort]);
 
+  useEffect(() => {
+    if (!previewBook) {
+      if (filtered[0]) setPreviewBook(filtered[0]);
+      return;
+    }
+    const stillVisible = filtered.find((book) => book.book_id === previewBook.book_id);
+    if (!stillVisible) {
+      setPreviewBook(filtered[0] || null);
+    } else if (stillVisible !== previewBook) {
+      setPreviewBook(stillVisible);
+    }
+  }, [filtered, previewBook]);
+
   const totalWords = books.reduce((sum, book) => sum + (book.finalized_words || 0), 0);
   const activeCount = books.filter((book) => ["writing", "importing"].includes(book.lifecycle_status)).length;
   const riskCount = books.reduce((sum, book) => sum + (book.unresolved_risk_count || 0), 0);

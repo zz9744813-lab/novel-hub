@@ -5,7 +5,8 @@ import asyncio
 from datetime import datetime, timezone
 from fastapi import Request, APIRouter, HTTPException, Depends, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.responses import FileResponse
-from sqlalchemy import select, update, func, delete
+from pathlib import Path
+from sqlalchemy import select, update, func, delete, text, bindparam
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, async_session_factory
 from app.models import (
@@ -25,13 +26,111 @@ from pydantic import BaseModel
 from typing import Any
 import os
 
-from app.models.base import Base
-
 router = APIRouter()
+
+_DATA_ROOT = Path(os.environ.get("NOVELFORGE_DATA_DIR", "/app/data")).resolve()
 
 
 def gen_uuid():
     return uuid.uuid4()
+
+
+def _parse_uuid(value: str, *, field: str = "id") -> uuid.UUID:
+    try:
+        return uuid.UUID(value)
+    except ValueError as exc:
+        raise HTTPException(400, f"Invalid {field}") from exc
+
+
+def _safe_data_file(path: str | None) -> Path | None:
+    """Only serve/delete files that live under the configured data root."""
+    if not path:
+        return None
+    try:
+        candidate = Path(path).resolve()
+        candidate.relative_to(_DATA_ROOT)
+    except (OSError, ValueError):
+        return None
+    return candidate if candidate.is_file() else None
+
+
+def _cleanup_cover_files(paths: list[str | None]) -> None:
+    dirs: set[Path] = set()
+    for raw in paths:
+        safe = _safe_data_file(raw)
+        if safe is None:
+            continue
+        try:
+            safe.unlink(missing_ok=True)
+        except OSError:
+            continue
+        dirs.add(safe.parent)
+    for directory in dirs:
+        try:
+            if directory.is_dir() and not any(directory.iterdir()):
+                directory.rmdir()
+        except OSError:
+            pass
+
+
+async def _live_foreign_keys(db: AsyncSession) -> list[dict[str, str]]:
+    rows = (
+        await db.execute(
+            text(
+                """
+                SELECT
+                  tc.table_name AS child_table,
+                  kcu.column_name AS child_column,
+                  ccu.table_name AS parent_table,
+                  ccu.column_name AS parent_column
+                FROM information_schema.table_constraints AS tc
+                JOIN information_schema.key_column_usage AS kcu
+                  ON tc.constraint_name = kcu.constraint_name
+                 AND tc.table_schema = kcu.table_schema
+                JOIN information_schema.constraint_column_usage AS ccu
+                  ON ccu.constraint_name = tc.constraint_name
+                 AND ccu.table_schema = tc.table_schema
+                WHERE tc.constraint_type = 'FOREIGN KEY'
+                  AND tc.table_schema = 'public'
+                """
+            )
+        )
+    ).mappings().all()
+    return [dict(row) for row in rows]
+
+
+async def _tables_with_column(db: AsyncSession, column_name: str) -> list[str]:
+    rows = await db.execute(
+        text(
+            """
+            SELECT table_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND column_name = :column_name
+            ORDER BY table_name
+            """
+        ),
+        {"column_name": column_name},
+    )
+    return [row[0] for row in rows]
+
+
+async def _table_has_column(db: AsyncSession, table_name: str, column_name: str) -> bool:
+    row = (
+        await db.execute(
+            text(
+                """
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = :table_name
+                  AND column_name = :column_name
+                LIMIT 1
+                """
+            ),
+            {"table_name": table_name, "column_name": column_name},
+        )
+    ).first()
+    return row is not None
 
 
 class BookCreate(BaseModel):
@@ -115,141 +214,143 @@ async def get_book(book_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.delete("/api/books/{book_id}")
 async def delete_book(book_id: str, db: AsyncSession = Depends(get_db)):
-    """Delete a book and its book-scoped records, including generated covers."""
-    try:
-        bid = uuid.UUID(book_id)
-    except ValueError as exc:
-        raise HTTPException(400, "Invalid book id") from exc
+    """Delete a book and its book-scoped records, including generated covers.
+
+    Ownership and delete order are derived from live PostgreSQL foreign keys so
+    legacy constraints that are missing from the ORM still block unsafe deletes
+    instead of leaking a 500.
+    """
+    bid = _parse_uuid(book_id, field="book id")
 
     book = (await db.execute(select(Book).where(Book.id == bid))).scalar_one_or_none()
     if not book:
         raise HTTPException(404, "Book not found")
 
     cover_paths = [book.cover_path, book.cover_thumb_path]
+    fks = await _live_foreign_keys(db)
+    owned: dict[str, set[Any]] = {"books": {bid}}
 
-    # Build the complete dependent-row closure from Book through every FK.
-    # This covers legacy tables whose rows are scoped indirectly by chapter,
-    # run, scene, outline, or import-session rather than by book_id itself.
-    owned: dict[Any, set[Any]] = {Base.metadata.tables["books"]: {bid}}
-    for table in Base.metadata.sorted_tables:
-        if table.name == "books" or "book_id" not in table.c:
+    # Seed ownership from every live table that still carries book_id, even if
+    # that table is not declared in the current ORM metadata.
+    for table_name in await _tables_with_column(db, "book_id"):
+        if table_name == "books" or not await _table_has_column(db, table_name, "id"):
             continue
-        pk = next(iter(table.primary_key.columns), None)
-        if pk is None:
-            continue
-        rows = await db.execute(select(pk).where(table.c.book_id == bid))
+        rows = await db.execute(
+            text(f'SELECT id FROM "{table_name}" WHERE book_id = :bid'),
+            {"bid": bid},
+        )
         ids = {row[0] for row in rows}
         if ids:
-            owned.setdefault(table, set()).update(ids)
+            owned.setdefault(table_name, set()).update(ids)
 
+    # Expand ownership through live FK edges for indirect dependents such as
+    # import artifacts, step runs, and research evidence.
     changed = True
     while changed:
         changed = False
-        for table in Base.metadata.sorted_tables:
-            pk = next(iter(table.primary_key.columns), None)
-            if pk is None:
+        for edge in fks:
+            parent_ids = owned.get(edge["parent_table"])
+            if not parent_ids:
                 continue
-            for column in table.columns:
-                for fk in column.foreign_keys:
-                    parent = fk.column.table
-                    parent_ids = owned.get(parent)
-                    if not parent_ids:
-                        continue
-                    rows = await db.execute(select(pk).where(column.in_(list(parent_ids))))
-                    ids = {row[0] for row in rows}
-                    before = len(owned.setdefault(table, set()))
-                    owned[table].update(ids)
-                    changed = changed or len(owned[table]) != before
+            child_table = edge["child_table"]
+            if not await _table_has_column(db, child_table, "id"):
+                continue
+            rows = await db.execute(
+                text(
+                    f'SELECT id FROM "{child_table}" '
+                    f'WHERE "{edge["child_column"]}" IN :parent_ids'
+                ).bindparams(bindparam("parent_ids", expanding=True)),
+                {"parent_ids": list(parent_ids)},
+            )
+            ids = {row[0] for row in rows}
+            if not ids:
+                continue
+            before = len(owned.setdefault(child_table, set()))
+            owned[child_table].update(ids)
+            changed = changed or len(owned[child_table]) != before
 
-    # chapters.active_run_id is a database FK to chapter_runs but is not
-    # represented as a ForeignKey in the legacy ORM model. Null it before
-    # removing runs, otherwise PostgreSQL rejects the child deletion.
-    chapter_table = Base.metadata.tables.get("chapters")
-    chapter_ids = owned.get(chapter_table, set()) if chapter_table is not None else set()
-    # Clear both database-level references that point from a chapter to its run
-    # before deleting chapter_runs. The second one (run_id) is legacy and may
-    # not be present in SQLAlchemy's ForeignKey metadata.
-    if chapter_ids:
+    # Break known cycles / reverse refs before child-first deletes.
+    if owned.get("chapters") and await _table_has_column(db, "chapters", "active_run_id"):
         await db.execute(
-            update(Chapter)
-            .where(Chapter.id.in_(list(chapter_ids)))
-            .values(active_run_id=None, run_id=None)
+            text('UPDATE chapters SET active_run_id = NULL WHERE id IN :ids').bindparams(
+                bindparam("ids", expanding=True)
+            ),
+            {"ids": list(owned["chapters"])},
         )
+    if await _table_has_column(db, "chapter_tasks", "run_id"):
         await db.execute(
-            update(ChapterTask)
-            .where(ChapterTask.book_id == bid)
-            .values(run_id=None)
+            text('UPDATE chapter_tasks SET run_id = NULL WHERE book_id = :bid'),
+            {"bid": bid},
+        )
+    if owned.get("chapter_runs") and await _table_has_column(db, "chapter_runs", "resume_from_run_id"):
+        await db.execute(
+            text('UPDATE chapter_runs SET resume_from_run_id = NULL WHERE id IN :ids').bindparams(
+                bindparam("ids", expanding=True)
+            ),
+            {"ids": list(owned["chapter_runs"])},
+        )
+    if owned.get("chapter_step_runs") and await _table_has_column(db, "chapter_step_runs", "reused_from_step_id"):
+        await db.execute(
+            text('UPDATE chapter_step_runs SET reused_from_step_id = NULL WHERE id IN :ids').bindparams(
+                bindparam("ids", expanding=True)
+            ),
+            {"ids": list(owned["chapter_step_runs"])},
         )
 
-    # The run graph contains a cycle in the live schema:
-    # chapters.active_run_id -> chapter_runs, while chapter_runs.chapter_id
-    # -> chapters. Break both directions before deleting either side.
-    run_table = Base.metadata.tables.get("chapter_runs")
-    run_ids = owned.get(run_table, set()) if run_table is not None else set()
-    if run_ids and run_table is not None:
-        await db.execute(
-            update(run_table)
-            .where(run_table.c.id.in_(list(run_ids)))
-            .values(resume_from_run_id=None)
-        )
-        for dependent_name in ("chapter_dispatch_outbox", "chapter_step_runs"):
-            dependent = Base.metadata.tables.get(dependent_name)
-            if dependent is not None:
-                fk_col = dependent.c.chapter_run_id
-                await db.execute(delete(dependent).where(fk_col.in_(list(run_ids))))
-        await db.execute(delete(run_table).where(run_table.c.id.in_(list(run_ids))))
-        owned.pop(run_table, None)
-
-    # Delete rows in dependency order based on actual live FK metadata. The
-    # run/chapter cycle was broken above; all remaining NO ACTION edges are
-    # handled by this topological child-first pass.
-    deleted_tables: set[Any] = set()
+    deleted_tables: set[str] = set()
     table_ids = {table: ids for table, ids in owned.items() if ids}
-    for _ in range(len(table_ids) + 1):
+    child_to_parents: dict[str, set[str]] = {}
+    for edge in fks:
+        # active_run_id is explicitly nulled above before deleting chapter_runs;
+        # it must not keep the otherwise removable chapter/run cycle blocked.
+        if (
+            edge["child_table"] == "chapters"
+            and edge["child_column"] == "active_run_id"
+            and edge["parent_table"] == "chapter_runs"
+        ):
+            continue
+        child_to_parents.setdefault(edge["child_table"], set()).add(edge["parent_table"])
+
+    for _ in range(len(table_ids) + 2):
         progress = False
-        for table, ids in list(table_ids.items()):
-            if table.name == "books" or table in deleted_tables:
+        for table_name, ids in list(table_ids.items()):
+            if table_name == "books" or table_name in deleted_tables:
                 continue
-            # A table can be deleted only after every owned child table that
-            # references it has been deleted.
+            # Delete a table only after every owned child table that has an FK
+            # pointing at it has already been deleted.
             blocked = any(
-                other is not table
+                other != table_name
                 and other not in deleted_tables
-                and any(fk.column.table is table for fk in other.foreign_keys)
+                and table_name in child_to_parents.get(other, set())
                 for other in table_ids
             )
             if blocked:
                 continue
-            pk = next(iter(table.primary_key.columns), None)
-            if pk is not None:
-                await db.execute(delete(table).where(pk.in_(list(ids))))
-            deleted_tables.add(table)
+            await db.execute(
+                text(f'DELETE FROM "{table_name}" WHERE id IN :ids').bindparams(
+                    bindparam("ids", expanding=True)
+                ),
+                {"ids": list(ids)},
+            )
+            deleted_tables.add(table_name)
             progress = True
         if not progress:
             break
 
-    # Any residual dependency is an explicit data-integrity error, not a 500
-    # traceback leaked to the caller; rollback is handled by get_db.
-    unresolved = [table.name for table in table_ids if table not in deleted_tables and table.name != "books"]
+    unresolved = sorted(
+        name for name in table_ids if name not in deleted_tables and name != "books"
+    )
     if unresolved:
-        raise HTTPException(409, detail={"message": "Book has dependent records", "tables": unresolved})
+        raise HTTPException(
+            409,
+            detail={"message": "Book has dependent records", "tables": unresolved},
+        )
 
     await db.execute(delete(Book).where(Book.id == bid))
-    await db.flush()
-
-    for path in cover_paths:
-        if path and os.path.isfile(path):
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-    cover_dir = os.path.dirname(next((p for p in cover_paths if p), ""))
-    if cover_dir and os.path.isdir(cover_dir):
-        try:
-            if not os.listdir(cover_dir):
-                os.rmdir(cover_dir)
-        except OSError:
-            pass
+    # Commit the relational delete first. Cover files are cleaned only after a
+    # successful commit so a later rollback cannot leave orphaned DB rows.
+    await db.commit()
+    _cleanup_cover_files(cover_paths)
     return {"deleted": True, "book_id": str(bid)}
 
 
@@ -357,7 +458,7 @@ async def generate_book_cover(book_id: str, db: AsyncSession = Depends(get_db)):
     from app.services.library_service import stable_cover_style
     import hashlib
 
-    bid = uuid.UUID(book_id)
+    bid = _parse_uuid(book_id, field="book id")
     book = (await db.execute(select(Book).where(Book.id == bid))).scalar_one_or_none()
     if not book:
         raise HTTPException(404, detail={"message": "Book not found"})
@@ -385,14 +486,19 @@ async def generate_book_cover(book_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.get("/api/library/books/{book_id}/cover")
 async def get_book_cover(book_id: str, thumb: int = 0, db: AsyncSession = Depends(get_db)):
-    bid = uuid.UUID(book_id)
+    bid = _parse_uuid(book_id, field="book id")
     book = (await db.execute(select(Book).where(Book.id == bid))).scalar_one_or_none()
     if not book:
         raise HTTPException(404, detail={"message": "Book not found"})
     path = book.cover_thumb_path if thumb else book.cover_path
-    if not path or not os.path.isfile(path):
+    safe = _safe_data_file(path)
+    if safe is None:
         raise HTTPException(404, detail={"message": "Cover not generated"})
-    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
+    return FileResponse(
+        safe,
+        media_type="image/png",
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @router.get("/api/books/{book_id}/outline")

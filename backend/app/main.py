@@ -191,33 +191,58 @@ async def _event_listener():
 
 @app.websocket("/ws/events")
 async def websocket_events(websocket: WebSocket):
-    """WebSocket endpoint for real-time chapter/import events."""
+    """WebSocket endpoint for real-time chapter/import events.
+
+    Auth is done after accept via the first JSON frame so the long-lived admin
+    token never lands in query strings, access logs, or browser history.
+    Expected first message: {"type":"auth","token":"<ADMIN_API_TOKEN>"}.
+    """
     configured_token = (os.environ.get("ADMIN_API_TOKEN") or "").strip()
-    supplied_token = websocket.query_params.get("token", "")
-    if configured_token and not configured_token.startswith("replace-") and supplied_token != configured_token:
-        await websocket.close(code=1008, reason="unauthorized")
-        return
     await websocket.accept()
     conn_id = uuid.uuid4().hex
-
-    # Register connection
-    if "events" not in _ws_connections:
-        _ws_connections["events"] = []
-    _ws_connections["events"].append(websocket)
+    authenticated = not (configured_token and not configured_token.startswith("replace-"))
 
     try:
-        # Send initial connection message
+        if not authenticated:
+            try:
+                raw = await asyncio.wait_for(websocket.receive_text(), timeout=10)
+                payload = json.loads(raw)
+            except Exception:
+                await websocket.close(code=1008, reason="unauthorized")
+                return
+            supplied = ""
+            if isinstance(payload, dict):
+                if payload.get("type") == "auth":
+                    supplied = str(payload.get("token") or "").strip()
+                else:
+                    supplied = str(payload.get("token") or payload.get("Authorization") or "").strip()
+                    if supplied.lower().startswith("bearer "):
+                        supplied = supplied[7:].strip()
+            if supplied != configured_token:
+                await websocket.close(code=1008, reason="unauthorized")
+                return
+            authenticated = True
+
+        if "events" not in _ws_connections:
+            _ws_connections["events"] = []
+        _ws_connections["events"].append(websocket)
+
         await websocket.send_json({"type": "connected", "conn_id": conn_id})
 
-        # Keep connection alive, receive ping/pong
         while True:
             data = await websocket.receive_text()
             if data == "ping":
                 await websocket.send_text("pong")
+                continue
+            try:
+                msg = json.loads(data)
+            except Exception:
+                continue
+            if isinstance(msg, dict) and msg.get("type") == "ping":
+                await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
         pass
     finally:
-        # Cleanup
         if websocket in _ws_connections.get("events", []):
             _ws_connections["events"].remove(websocket)
 

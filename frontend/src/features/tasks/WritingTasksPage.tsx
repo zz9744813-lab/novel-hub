@@ -23,7 +23,24 @@ interface ChapterRunItem {
   started_at?: string | null;
   finished_at?: string | null;
   error_code?: string | null;
-  error_detail?: string | null;
+  error_detail?: unknown;
+}
+
+function displayDetail(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (typeof value === "object") {
+    const detail = value as { message?: unknown };
+    if (typeof detail.message === "string") return detail.message;
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "详情不可用";
+    }
+  }
+  return String(value);
 }
 
 export function WritingTasksPage() {
@@ -101,7 +118,7 @@ export function WritingTasksPage() {
             run_status: "needs_human",
             current_step: c.current_step,
             error_code: c.error_code,
-            error_detail: c.error_detail || `${c.book_title || ""} needs_human`,
+            error_detail: displayDetail(c.error_detail) || `${c.book_title || ""} needs_human`,
           }));
           // merge unique
           setRuns((prev) => {
@@ -206,14 +223,15 @@ export function WritingTasksPage() {
             ) : (
               <div className="divide-y divide-border">
                 {runs.slice(0, 8).map((r) => (
-                  <div key={r.run_id} className="px-3 py-2 flex items-center gap-3">
+                  <div key={String(r.run_id)} className="px-3 py-2 flex items-center gap-3">
                     {statusIcon(r.run_status)}
                     <div className="flex-1 min-w-0">
                       <div className="text-xs text-text-primary truncate">
-                        Ch{r.chapter_no ?? "?"} · {r.current_step || r.run_status}
+                        Ch{r.chapter_no ?? "?"} · {displayDetail(r.current_step) || r.run_status}
                       </div>
                       <div className="text-2xs text-text-disabled font-mono">
-                        {r.run_status} · {r.run_id.slice(0, 8)}
+                        {r.run_status} · {String(r.run_id).slice(0, 8)}
+                        {r.error_code ? ` · ${r.error_code}` : ""}
                       </div>
                     </div>
                   </div>
@@ -239,8 +257,8 @@ export function WritingTasksPage() {
                     <AlertTriangle size={12} className="text-amber-400" />
                     <div className="flex-1 min-w-0">
                       <div className="text-xs text-text-primary truncate">Ch{r.chapter_no ?? "?"} 需要审核</div>
-                      <div className="text-2xs text-text-disabled font-mono">
-                        {r.error_detail || r.error_code || r.run_status}
+                      <div className="text-2xs text-text-disabled font-mono truncate">
+                        {displayDetail(r.error_detail) || r.error_code || r.run_status}
                       </div>
                     </div>
                   </div>

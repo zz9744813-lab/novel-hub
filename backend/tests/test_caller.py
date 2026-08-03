@@ -97,6 +97,23 @@ class TrackingSession:
         pass
 
 
+class ActiveTemplateSession(TrackingSession):
+    def __init__(self, template):
+        super().__init__("completed")
+        self.template = template
+        self.execute_count = 0
+
+    async def execute(self, *args, **kwargs):
+        self.execute_count += 1
+        m = MagicMock()
+        if self.execute_count == 1:
+            m.scalar_one_or_none.return_value = self.template
+        else:
+            m.scalar_one.return_value = _fake_run(self._status)
+            m.scalar_one_or_none.return_value = None
+        return m
+
+
 class TestCallAgentSessionPattern:
     def test_imports_async_session_factory(self):
         import app.agents.caller as caller_mod
@@ -190,3 +207,45 @@ class TestCallAgentSessionPattern:
 
             assert publishable is None
             assert run.status == "failed"
+
+    @pytest.mark.asyncio
+    async def test_active_studio_template_changes_gateway_system_and_user(self):
+        template = MagicMock(
+            id=uuid.UUID("00000000-0000-0000-0000-000000000009"),
+            version=9,
+            template_key="chapter_planner:system:global",
+            system_prompt="STUDIO SYSTEM {{chapter_plan}}",
+            user_prompt_template="STUDIO USER {{chapter_plan}}",
+        )
+        session = ActiveTemplateSession(template)
+        tracking_factory = MagicMock(return_value=session)
+        mock_result = StreamResult(
+            final_content='{"test": "output"}',
+            reasoning_text="",
+            reasoning_detected=False,
+            prompt_tokens=1,
+            completion_tokens=1,
+            actual_provider="new-api",
+            actual_model="deepseek-v4-flash",
+            attempts=[_attempt(True)],
+            provider_used="primary",
+            attempt=1,
+        )
+
+        with patch("app.agents.caller.async_session_factory", tracking_factory), \
+             patch("app.agents.caller.stream_with_retry", new_callable=AsyncMock) as mock_stream, \
+             patch("app.agents.caller.full_pipeline_async", new_callable=AsyncMock) as mock_pipeline, \
+             patch("app.agents.caller._resolve_model", new_callable=AsyncMock) as mock_resolve:
+            mock_resolve.return_value = ("new-api", "deepseek-v4-flash", None)
+            mock_stream.return_value = mock_result
+            mock_pipeline.return_value = ({"test": "output"}, MagicMock(value="publishable"), {})
+
+            await call_agent(
+                book_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+                agent_role="chapter_planner",
+                user_content='{"chapter_plan":"PLAN"}',
+            )
+
+        kwargs = mock_stream.call_args.kwargs
+        assert kwargs["system_prompt"] == "STUDIO SYSTEM PLAN"
+        assert kwargs["user_content"] == "STUDIO USER PLAN"

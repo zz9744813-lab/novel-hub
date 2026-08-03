@@ -799,6 +799,7 @@ class AgentContextPackage(Base):
     assembler_version: Mapped[str] = mapped_column(String(50), nullable=False)
     request_parameters: Mapped[dict] = mapped_column(JSONB, nullable=False)
     assembly_manifest: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    prompt_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
     l4_entity_refs: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
     l1_ledger_refs: Mapped[list] = mapped_column(ARRAY(UUID(as_uuid=True)), nullable=False, server_default="{}")
     l2_summary_refs: Mapped[list] = mapped_column(ARRAY(UUID(as_uuid=True)), nullable=False, server_default="{}")

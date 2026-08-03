@@ -352,6 +352,12 @@ export const api = {
       ),
     activate: (id: string) =>
       fetchJSON<any>(`/api/prompt-studio/templates/${id}/activate`, { method: "POST" }),
+    update: (id: string, body: any) =>
+      fetchJSON<any>(`/api/prompt-studio/templates/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+    clone: (id: string) =>
+      fetchJSON<any>(`/api/prompt-studio/templates/${id}/clone`, { method: "POST" }),
+    archive: (id: string) =>
+      fetchJSON<any>(`/api/prompt-studio/templates/${id}/archive`, { method: "POST" }),
     test: (id: string) =>
       fetchJSON<any>(`/api/prompt-studio/templates/${id}/test`, { method: "POST" }),
     testStructure: (id: string) =>

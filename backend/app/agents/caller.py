@@ -9,6 +9,7 @@ from __future__ import annotations
 import uuid
 import json
 import logging
+from types import SimpleNamespace
 from datetime import datetime, timezone
 
 from app.database import async_session_factory
@@ -36,6 +37,24 @@ STRICT_ROLES = {
     "aileak_judge",
     "drift_audit",
 }
+
+
+def _prompt_variables(user_content: str, assembly_manifest: dict | None) -> dict:
+    """Build the explicit variable package used by Prompt Studio templates."""
+    values: dict = {
+        "user_content": user_content,
+        "user_instruction": user_content,
+        "assembly_manifest": assembly_manifest or {},
+        "context_package": assembly_manifest or {},
+    }
+    try:
+        decoded = json.loads(user_content)
+    except (TypeError, json.JSONDecodeError):
+        return values
+    if isinstance(decoded, dict):
+        values.update(decoded)
+        values.setdefault("context_package", decoded.get("context_package", assembly_manifest or {}))
+    return values
 
 
 class ModelBindingMissingError(RuntimeError):
@@ -88,11 +107,12 @@ async def call_agent(
     """
     # v8 Prompt Studio: try active template first
     prompt_config = None
+    template_obj = None
     from app.models.tables import PromptTemplateVersion
     from sqlalchemy import select
     try:
         async with async_session_factory() as db_tpl:
-            tpl = (await db_tpl.execute(
+            template_obj = (await db_tpl.execute(
                 select(PromptTemplateVersion)
                 .where(PromptTemplateVersion.agent_role == agent_role)
                 .where(PromptTemplateVersion.status == "active")
@@ -100,26 +120,43 @@ async def call_agent(
                 .order_by(PromptTemplateVersion.version.desc())
                 .limit(1)
             )).scalar_one_or_none()
-            if tpl:
+            if template_obj:
                 prompt_config = {
-                    "version": f"v{tpl.version}",
-                    "system_prompt": tpl.system_prompt or "",
-                    "output_schema": getattr(tpl, "output_schema", None) or getattr(tpl, "compiled_schema", None),
+                    "version": f"v{template_obj.version}",
+                    "system_prompt": template_obj.system_prompt or "",
+                    "user_prompt_template": template_obj.user_prompt_template or "",
+                    "template_id": template_obj.id,
+                    "template_version": template_obj.version,
+                    "output_schema": getattr(template_obj, "output_schema", None) or getattr(template_obj, "compiled_schema", None),
                 }
-                logger.info("using PromptStudio template %s v%s for %s", tpl.template_key, tpl.version, agent_role)
+                logger.info("using PromptStudio template %s v%s for %s", template_obj.template_key, template_obj.version, agent_role)
     except Exception as e:
         logger.warning("PromptStudio lookup failed, fallback to PROMPTS: %s", e)
 
     if prompt_config is None:
         if agent_role not in PROMPTS:
-            prompt_config = PROMPTS.get("query_planner") or next(iter(PROMPTS.values()))
+            base_prompt = PROMPTS.get("query_planner") or next(iter(PROMPTS.values()))
             prompt_config = {
-                **prompt_config,
+                **base_prompt,
                 "version": f"{agent_role}-v1",
-                "system_prompt": prompt_config.get("system_prompt", ""),
+                "system_prompt": base_prompt.get("system_prompt", ""),
             }
         else:
-            prompt_config = PROMPTS[agent_role]
+            prompt_config = {**PROMPTS[agent_role]}
+        prompt_config.setdefault("template_id", f"builtin:{agent_role}")
+        prompt_config.setdefault("template_version", prompt_config.get("version", "v1"))
+
+    # Runtime compilation is shared by built-in and Prompt Studio templates.
+    # A Studio template's User Template is part of the model request, not UI-only metadata.
+    from app.prompt_runtime import compile_prompt, prompt_snapshot
+    prompt_config.setdefault("user_prompt_template", "{{user_content}}")
+    runtime_template = SimpleNamespace(
+        id=prompt_config.get("template_id", f"builtin:{agent_role}"),
+        version=prompt_config.get("template_version", prompt_config.get("version", "v1")),
+        system_prompt=prompt_config.get("system_prompt", ""),
+        user_prompt_template=prompt_config.get("user_prompt_template", "{{user_content}}"),
+    )
+    compiled_prompt = compile_prompt(runtime_template, _prompt_variables(user_content, assembly_manifest))
 
     temperature = (overrides or {}).get("temperature", AGENT_TEMPERATURES.get(agent_role, 0.7))
     is_json = AGENT_IS_JSON.get(agent_role, False)
@@ -179,8 +216,8 @@ async def call_agent(
             "agent_role": agent_role,
         }
 
-    system_prompt = prompt_config["system_prompt"]
-    rendered_prompt = f"{system_prompt}\n\n{user_content}"
+    system_prompt = compiled_prompt.system_text
+    rendered_prompt = compiled_prompt.rendered_text
 
     run_id = uuid.uuid4()
     run = AgentRun(
@@ -238,7 +275,7 @@ async def call_agent(
     # Phase 2: LLM — no session held
     result = await stream_with_retry(
         system_prompt=system_prompt,
-        user_content=user_content,
+        user_content=compiled_prompt.user_text,
         model=model,
         temperature=temperature,
         provider=provider,
@@ -312,6 +349,7 @@ async def call_agent(
                 l2_refs=l2_refs or [],
                 l3_refs=l3_refs or [],
                 genre_profile_id=genre_profile_id,
+                prompt_snapshot=prompt_snapshot(compiled_prompt),
                 chapter_id=chapter_id,
                 scene_id=scene_id,
             )

@@ -284,6 +284,7 @@ class CharacterCard(Base, TimestampMixin):
     role: Mapped[str | None] = mapped_column(String(200), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     card_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    source_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
@@ -321,6 +322,7 @@ class WorldRule(Base, TimestampMixin):
     rule_key: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     rule_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    source_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
@@ -333,6 +335,7 @@ class PlotThread(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(50), default="open", nullable=False, index=True)
     planted_chapter: Mapped[int | None] = mapped_column(Integer, nullable=True)
     resolved_chapter: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 

@@ -153,6 +153,18 @@ class OutlineParseRequest(BaseModel):
     target_chapter_count: int = 500
 
 
+class BlankPlanningRequest(BaseModel):
+    premise: str
+    genre: str | None = None
+    tone: str | None = None
+    themes: list[str] = []
+    target_chapter_count: int = 12
+
+
+class BlankPlanningConfirmRequest(BaseModel):
+    outline_version_id: str
+
+
 class L4ReviseRequest(BaseModel):
     entity_type: str
     entity_id: str
@@ -434,12 +446,146 @@ async def parse_outline(book_id: str, req: OutlineParseRequest, db: AsyncSession
 
 @router.post("/api/books/{book_id}/outlines/generate")
 async def generate_outline(book_id: str, req: dict, db: AsyncSession = Depends(get_db)):
-    # TODO: implement AI outline generation
-    version = OutlineVersion(id=gen_uuid(), book_id=uuid.UUID(book_id),
-                             version=1, status="draft", source="generate")
+    """Backward-compatible entry point; blank-book planning uses /planning/generate."""
+    return await generate_blank_planning(book_id, BlankPlanningRequest(**req), db)
+
+
+@router.post("/api/books/{book_id}/planning/generate")
+async def generate_blank_planning(
+    book_id: str, req: BlankPlanningRequest, db: AsyncSession = Depends(get_db)
+):
+    from app.agents.blank_planner import generate_planning_draft
+    from app.services.blank_planning import PlanningValidationError
+
+    bid = _parse_uuid(book_id, field="book id")
+    book = (await db.execute(select(Book).where(Book.id == bid))).scalar_one_or_none()
+    if not book:
+        raise HTTPException(404, "Book not found")
+    if not req.premise.strip():
+        raise HTTPException(422, "premise is required")
+    if not 1 <= req.target_chapter_count <= 500:
+        raise HTTPException(422, "target_chapter_count must be between 1 and 500")
+
+    existing = (await db.execute(
+        select(func.max(OutlineVersion.version)).where(OutlineVersion.book_id == bid)
+    )).scalar() or 0
+    version = OutlineVersion(
+        id=gen_uuid(), book_id=bid, version=int(existing) + 1,
+        status="planning", source="blank_planning",
+        raw_outline=req.premise.strip(),
+    )
     db.add(version)
     await db.flush()
-    return {"outline_version_id": str(version.id), "status": "draft"}
+    try:
+        draft = await generate_planning_draft(
+            book_id=bid,
+            premise=req.premise.strip(),
+            genre=req.genre or "",
+            tone=req.tone or "",
+            themes=req.themes,
+            target_chapter_count=req.target_chapter_count,
+        )
+    except PlanningValidationError as exc:
+        version.status = "error"
+        version.parsed_json = {"error": str(exc)}
+        await db.commit()
+        raise HTTPException(502, detail={"message": "Planning output invalid", "error": str(exc)}) from exc
+    except Exception as exc:
+        version.status = "error"
+        version.parsed_json = {"error": str(exc)}
+        await db.commit()
+        raise HTTPException(502, detail={"message": "Planning generation failed", "error": str(exc)}) from exc
+
+    version.status = "draft"
+    version.parsed_json = draft
+    await db.commit()
+    return {
+        "outline_version_id": str(version.id), "version": version.version,
+        "status": version.status, "draft": draft,
+    }
+
+
+@router.get("/api/books/{book_id}/planning")
+async def get_blank_planning(book_id: str, db: AsyncSession = Depends(get_db)):
+    bid = _parse_uuid(book_id, field="book id")
+    version = (await db.execute(
+        select(OutlineVersion).where(
+            OutlineVersion.book_id == bid,
+            OutlineVersion.source == "blank_planning",
+        ).order_by(OutlineVersion.version.desc()).limit(1)
+    )).scalar_one_or_none()
+    if not version:
+        return {"status": "not_started", "outline_version_id": None, "draft": None}
+    return {
+        "status": version.status, "outline_version_id": str(version.id),
+        "version": version.version, "draft": version.parsed_json,
+    }
+
+
+@router.post("/api/books/{book_id}/planning/confirm")
+async def confirm_blank_planning(
+    book_id: str, req: BlankPlanningConfirmRequest, db: AsyncSession = Depends(get_db)
+):
+    from app.engine.outline import validate_dag
+    from app.models import BookProfile
+    from app.services.blank_planning import build_outline_nodes, normalize_planning_draft
+
+    bid = _parse_uuid(book_id, field="book id")
+    try:
+        version_id = uuid.UUID(req.outline_version_id)
+    except ValueError as exc:
+        raise HTTPException(400, "Invalid outline_version_id") from exc
+    version = (await db.execute(select(OutlineVersion).where(
+        OutlineVersion.id == version_id, OutlineVersion.book_id == bid,
+        OutlineVersion.source == "blank_planning",
+    ))).scalar_one_or_none()
+    if not version:
+        raise HTTPException(404, "Planning draft not found")
+    if version.status == "approved":
+        return {"status": "approved", "version": version.version}
+    if version.status != "draft" or not version.parsed_json:
+        raise HTTPException(409, "Planning draft is not ready for confirmation")
+    try:
+        draft = normalize_planning_draft(
+            version.parsed_json,
+            target_chapter_count=len(version.parsed_json.get("chapters", [])),
+        )
+    except Exception as exc:
+        raise HTTPException(409, detail={"message": "Planning draft is invalid", "error": str(exc)}) from exc
+
+    nodes = build_outline_nodes(draft, book_id=str(bid), outline_version_id=str(version.id))
+    for node_data in nodes:
+        db.add(OutlineNode(id=gen_uuid(), book_id=bid, outline_version_id=version.id, **node_data))
+    await db.flush()
+    valid, errors = await validate_dag(db, bid, version.id)
+    if not valid:
+        await db.rollback()
+        raise HTTPException(409, detail={"message": "Planning DAG validation failed", "errors": errors})
+
+    book = (await db.execute(select(Book).where(Book.id == bid))).scalar_one()
+    book.title = draft["title"] or book.title
+    book.logline = draft["logline"]
+    book.synopsis = draft["synopsis"]
+    book.genre = draft["genre"] or book.genre
+    book.tone_summary = draft["tone"]
+    book.tags = draft["themes"]
+    book.planned_chapters = len(nodes)
+    book.lifecycle_status = "planned"
+    profile = (await db.execute(select(BookProfile).where(BookProfile.book_id == bid))).scalar_one_or_none()
+    if profile is None:
+        profile = BookProfile(id=gen_uuid(), book_id=bid)
+        db.add(profile)
+    profile.logline = draft["logline"]
+    profile.synopsis = draft["synopsis"]
+    profile.genre = draft["genre"] or None
+    profile.themes = draft["themes"]
+    profile.tone = draft["tone"] or None
+    version.status = "approved"
+    await db.commit()
+    return {
+        "status": "approved", "version": version.version,
+        "outline_version_id": str(version.id), "nodes": len(nodes),
+    }
 
 
 @router.post("/api/books/{book_id}/outlines/{version}/approve")

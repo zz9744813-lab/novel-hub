@@ -150,6 +150,28 @@ export const api = {
     approve: (bookId: string, version: number) =>
       fetchJSON<{ status: string }>(`/api/books/${bookId}/outlines/${version}/approve`, { method: "POST" }),
   },
+  planning: {
+    get: (bookId: string) =>
+      fetchJSON<{ status: string; outline_version_id: string | null; version?: number; draft?: any }>(
+        `/api/books/${bookId}/planning`
+      ),
+    generate: (bookId: string, data: {
+      premise: string;
+      genre?: string;
+      tone?: string;
+      themes?: string[];
+      target_chapter_count?: number;
+    }) =>
+      fetchJSON<{ status: string; outline_version_id: string; version: number; draft: any }>(
+        `/api/books/${bookId}/planning/generate`,
+        { method: "POST", body: JSON.stringify(data) }
+      ),
+    confirm: (bookId: string, outlineVersionId: string) =>
+      fetchJSON<{ status: string; outline_version_id: string; version: number; nodes: number }>(
+        `/api/books/${bookId}/planning/confirm`,
+        { method: "POST", body: JSON.stringify({ outline_version_id: outlineVersionId }) }
+      ),
+  },
   chapters: {
     list: (bookId: string) => fetchJSON<ChapterListItem[]>(`/api/books/${bookId}/chapters`),
     run: (bookId: string, chapterNo: number) =>

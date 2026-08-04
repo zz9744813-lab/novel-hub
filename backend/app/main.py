@@ -22,6 +22,7 @@ from app.config import settings
 from app.routers import library as library_router
 from app.routers import imports as imports_router
 from app.routers import prompt_studio as prompt_studio_router
+from app.routers import tasks as tasks_router
 
 logger = logging.getLogger("novelforge.main")
 
@@ -156,6 +157,7 @@ app.include_router(router)
 app.include_router(library_router.router)
 app.include_router(imports_router.router)
 app.include_router(prompt_studio_router.router)
+app.include_router(tasks_router.router)
 
 
 # WebSocket connection manager for real-time events

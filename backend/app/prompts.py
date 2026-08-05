@@ -1,6 +1,7 @@
 """Prompt templates for all 9 agents - stored in prompt_templates table on first run.
 Per §附录A v7.3 spec.
 """
+import os as _os
 
 PROMPTS = {
     "outline_parser": {
@@ -121,16 +122,22 @@ PROMPTS = {
         "input_variables": ["candidates", "semantic_questions", "chapter_goal", "scene_plan"],
         "output_schema": {"type": "object", "properties": {"ranked_candidates": {"type": "array"}, "missing_evidence": {"type": "array"}, "conflicts": {"type": "array"}}},
     },
+    "blank_planner": {
+        "version": "v1",
+        "system_prompt": "你是空白小说的企划规划 Agent。根据用户提供的 premise、题材、基调和主题，生成可审阅的 JSON 企划草案。\\n必须输出 title、logline、synopsis、genre、tone、themes、chapters。\\nchapters 必须恰好包含 target_chapter_count 个章节，chapter_no 从 1 连续到目标值。\\n每章必须有 title、goal、required_beats、forbidden_outcomes、depends_on、source_refs。\\n不要写正文，不要解释，不要 Markdown，不要编造外部资料；没有来源时 source_refs 输出空数组。输出只能是 JSON。",
+        "input_variables": ["premise", "genre", "tone", "themes", "target_chapter_count"],
+        "output_schema": {"type": "object", "properties": {"title": {"type": "string"}, "logline": {"type": "string"}, "synopsis": {"type": "string"}, "genre": {"type": "string"}, "tone": {"type": "string"}, "themes": {"type": "array"}, "chapters": {"type": "array"}}},
+    },
 }
 
 # Model assignment per agent
 # FIX: deepseek-ai/deepseek-v4-pro is too slow (>250s for chapter planning, often times out)
 # Switched to deepseek-v4-flash which returns valid JSON in ~18s.
 # Model names can be overridden via environment variables (PLANNER_MODEL, WRITER_MODEL, etc.)
-import os as _os
 
 _DEFAULT_MODELS = {
     "outline_parser": "deepseek-v4-flash",
+    "blank_planner": "deepseek-v4-flash",
     "chapter_planner": "deepseek-v4-flash",
     "draft_writer": "stepfun-ai/step-3.7-flash",
     "review_agent": "deepseek-v4-flash",
@@ -143,6 +150,7 @@ _DEFAULT_MODELS = {
 
 _ENV_MAP = {
     "outline_parser": "PLANNER_MODEL",
+    "blank_planner": "PLANNER_MODEL",
     "chapter_planner": "PLANNER_MODEL",
     "draft_writer": "WRITER_MODEL",
     "review_agent": "REVIEW_MODEL",
@@ -161,6 +169,7 @@ AGENT_MODELS = {
 # Temperature per agent
 AGENT_TEMPERATURES = {
     "outline_parser": 0.1,
+    "blank_planner": 0.1,
     "chapter_planner": 0.3,
     "draft_writer": 0.7,
     "review_agent": 0.1,
@@ -174,6 +183,7 @@ AGENT_TEMPERATURES = {
 # Whether agent outputs JSON or prose
 AGENT_IS_JSON = {
     "outline_parser": True,
+    "blank_planner": True,
     "chapter_planner": True,
     "draft_writer": False,
     "review_agent": True,

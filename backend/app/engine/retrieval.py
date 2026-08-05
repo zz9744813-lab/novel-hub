@@ -6,17 +6,16 @@ Key fixes:
 - candidate_merge_and_score now applies SCORE_WEIGHTS per §6.6
 """
 import uuid
-from sqlalchemy import select, text, or_, and_
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import (
-    OutlineNode, OutlineDependency, MemoryL4StateSnapshot,
-    PlotThread, StoryEvent, SceneSearchDocument, EntityAlias,
-    QueryPlan, RetrievalRun, RetrievalCandidate, Chapter,
+    OutlineDependency, MemoryL4StateSnapshot,
+    PlotThread, StoryEvent,
+    RetrievalCandidate, Chapter,
 )
 from app.agents.caller import call_agent
 from app.engine.chinese_tokenizer import tokenize_for_search
 import json
-import time
 
 
 # Rule scores per §6.6
@@ -40,7 +39,7 @@ async def dependency_resolver(db: AsyncSession, book_id: uuid.UUID, outline_node
         select(OutlineDependency).where(
             OutlineDependency.book_id == book_id,
             OutlineDependency.source_node_id == outline_node_id,
-            OutlineDependency.required == True,
+            OutlineDependency.required,
         )
     )
     deps = result.scalars().all()
@@ -236,6 +235,47 @@ def candidate_merge_and_score(event_candidates: list, ft_candidates: list,
     return scored[:24]
 
 
+def retrieval_candidate_key(candidate: dict) -> str:
+    """Return a stable source key for retrieval audit rows."""
+    raw = candidate.get("event_id") or candidate.get("id")
+    if raw:
+        return str(raw)
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(candidate, sort_keys=True, default=str)))
+
+
+def build_retrieval_candidates(
+    retrieval_run_id: uuid.UUID,
+    scored: list[dict],
+    selected: list[dict],
+) -> list[RetrievalCandidate]:
+    """Materialize scored and selected candidates for the retrieval audit."""
+    selected_keys = {retrieval_candidate_key(candidate) for candidate in selected}
+    rows = []
+    for rank, candidate in enumerate(scored, start=1):
+        source_key = retrieval_candidate_key(candidate)
+        try:
+            source_id = uuid.UUID(source_key)
+        except (ValueError, AttributeError):
+            source_id = uuid.uuid5(uuid.NAMESPACE_URL, source_key)
+        rows.append(
+            RetrievalCandidate(
+                id=uuid.uuid4(),
+                retrieval_run_id=retrieval_run_id,
+                source_type=str(candidate.get("source_type") or "unknown"),
+                source_chapter=candidate.get("chapter_no"),
+                source_scene=candidate.get("scene_no"),
+                source_id=source_id,
+                rule_score=float(candidate.get("rule_score") or 0),
+                full_text_rank=(float(candidate["rank"]) if candidate.get("rank") is not None else None),
+                llm_rank=rank if source_key in selected_keys else None,
+                forced=bool(candidate.get("forced")),
+                selected=source_key in selected_keys,
+                candidate_json=candidate,
+            )
+        )
+    return rows
+
+
 async def evidence_ranker_agent(
     book_id: uuid.UUID,
     candidates: list,
@@ -333,10 +373,23 @@ async def query_planner_agent(
         return None
 
     if isinstance(publishable, dict):
-        return publishable
+        return {
+            **publishable,
+            "_agent_run_id": str(run.id),
+            "_prompt_version": run.prompt_version,
+            "_model_name": run.model_name,
+        }
     if isinstance(publishable, str):
         from app.gateway.normalizer import normalize_json
-        return normalize_json(publishable)
+        parsed = normalize_json(publishable)
+        if parsed is None:
+            return None
+        return {
+            **parsed,
+            "_agent_run_id": str(run.id),
+            "_prompt_version": run.prompt_version,
+            "_model_name": run.model_name,
+        }
     return None
 
 

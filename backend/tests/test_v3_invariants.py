@@ -27,7 +27,7 @@ from app.engine.step_runner import (
     content_hash,
 )
 from app.gateway.normalizer import normalize_json
-from app.database import async_session_factory
+import app.database  # do NOT from-import async_session_factory — conftest patches the module
 from sqlalchemy import select, text, func
 from app.models import (
     Book,
@@ -50,28 +50,27 @@ def test_pipeline_returns_typed_outcome():
     assert r.outcome != PipelineOutcome.SUCCEEDED
 
 
-def test_patch_hash_mismatch_causes_zero_mutation():
+@pytest.mark.asyncio
+async def test_patch_hash_mismatch_causes_zero_mutation():
     original = "段落甲。\n\n段落乙。"
     bad = [{"expected_hash": "deadbeef", "replacement_text": "篡改", "paragraph_key": "p1"}]
     with pytest.raises(PatchStaleError):
-        asyncio.get_event_loop().run_until_complete(apply_patches(original, bad))
+        await apply_patches(original, bad)
     # content unchanged when applying nothing after error path — caller keeps original
     assert original == "段落甲。\n\n段落乙。"
 
 
-def test_patch_apply_success():
+@pytest.mark.asyncio
+async def test_patch_apply_success():
     p1 = "段落甲。"
     p2 = "段落乙。"
     original = f"{p1}\n\n{p2}"
     h = compute_hash(p1)
 
-    async def _run():
-        return await apply_patches(
-            original,
-            [{"expected_hash": h, "replacement_text": "段落甲改。", "paragraph_key": "p1"}],
-        )
-
-    out = asyncio.get_event_loop().run_until_complete(_run())
+    out = await apply_patches(
+        original,
+        [{"expected_hash": h, "replacement_text": "段落甲改。", "paragraph_key": "p1"}],
+    )
     assert out.startswith("段落甲改。")
     assert "段落乙。" in out
 
@@ -160,7 +159,7 @@ def test_final_artifact_no_squash():
 @pytest.mark.asyncio
 async def test_inv_sql_final_pointer_and_active_run():
     """§15.1 final pointer, §15.4 one active run — expect 0 violation rows."""
-    async with async_session_factory() as db:
+    async with app.database.async_session_factory() as db:
         # 15.1
         rows = (
             await db.execute(
@@ -235,7 +234,7 @@ async def test_inv_sql_final_pointer_and_active_run():
 
 @pytest.mark.asyncio
 async def test_finalize_replay_idempotent_and_atomic_shape():
-    async with async_session_factory() as db:
+    async with app.database.async_session_factory() as db:
         row = (
             await db.execute(
                 text(
@@ -326,7 +325,7 @@ async def test_finalize_replay_idempotent_and_atomic_shape():
     )
     assert snap2.ok and snap2.idempotent and snap2.version == snap1.version
 
-    async with async_session_factory() as db:
+    async with app.database.async_session_factory() as db:
         cv = (
             await db.execute(
                 select(func.count())
@@ -342,15 +341,28 @@ async def test_finalize_replay_idempotent_and_atomic_shape():
 
 @pytest.mark.asyncio
 async def test_lease_cas_and_checkpoint_reuse():
-    async with async_session_factory() as db:
+    async with app.database.async_session_factory() as db:
         book = (await db.execute(select(Book).limit(1))).scalar_one_or_none()
         if not book:
             pytest.skip("no book")
         ch = (
-            await db.execute(select(Chapter).where(Chapter.book_id == book.id).limit(1))
+            await db.execute(
+                select(Chapter).where(Chapter.book_id == book.id).limit(1)
+            )
         ).scalar_one_or_none()
         if not ch:
             pytest.skip("no chapter")
+        # Check no active run exists for this chapter
+        existing = (
+            await db.execute(
+                select(ChapterRun).where(
+                    ChapterRun.chapter_id == ch.id,
+                    ChapterRun.status.in_(["queued", "running"]),
+                ).limit(1)
+            )
+        ).scalar_one_or_none()
+        if existing:
+            pytest.skip("chapter already has active run")
         ov = (
             await db.execute(text("SELECT id FROM outline_versions WHERE book_id=:b LIMIT 1"), {"b": book.id})
         ).scalar()
@@ -415,7 +427,7 @@ async def test_lease_cas_and_checkpoint_reuse():
 async def test_export_excludes_non_final_default():
     """INV-02: get chapter without allow_draft should 404/empty for non-final."""
     # behavioral: query path in routes uses final-only — smoke via DB shape
-    async with async_session_factory() as db:
+    async with app.database.async_session_factory() as db:
         # any finalized chapter must have version_kind final at finalized_version
         rows = (
             await db.execute(

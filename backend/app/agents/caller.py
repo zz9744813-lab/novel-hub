@@ -32,6 +32,7 @@ STRICT_ROLES = {
     "state_extractor",
     "local_rewrite_editor",
     "outline_parser",
+    "blank_planner",
     "query_planner",
     "evidence_ranker",
     "aileak_judge",
@@ -66,13 +67,8 @@ async def _resolve_model(
     book_id: uuid.UUID,
     overrides: dict | None,
 ) -> tuple[str, str, str | None]:
-    if overrides and overrides.get("model"):
-        return (
-            overrides.get("provider", "new-api"),
-            overrides["model"],
-            overrides.get("fallback_model"),
-        )
-
+    # Model/provider selection is audit-controlled by DB bindings. Overrides may
+    # tune generation parameters, but cannot bypass the lock or its fallback.
     async with async_session_factory() as db:
         svc = ModelBindingService(db)
         binding = await svc.get_binding(agent_role, book_id)
@@ -168,7 +164,6 @@ async def call_agent(
         from app.contracts.agents import (
             get_contract,
             response_format_for_role,
-            schema_for_role,
         )
         response_contract = get_contract(agent_role)
         response_format = response_format_for_role(agent_role, strict=True)
@@ -303,6 +298,10 @@ async def call_agent(
             )
         ]
 
+    attempt_compiled_prompts = {
+        att.attempt_no: compiled_prompt for att in attempts
+    }
+
     successful = next((a for a in attempts if a.success), None)
     final_attempt = successful or attempts[-1]
     actual_provider = final_attempt.provider
@@ -334,8 +333,8 @@ async def call_agent(
                 provider=att.provider,
                 model=att.model,
                 prompt_version=prompt_config["version"],
-                system_prompt=system_prompt,
-                rendered_prompt=rendered_prompt,
+                system_prompt=attempt_compiled_prompts[att.attempt_no].system_text,
+                rendered_prompt=attempt_compiled_prompts[att.attempt_no].rendered_text,
                 request_params={
                     "temperature": temperature,
                     "is_json": is_json,
@@ -349,7 +348,7 @@ async def call_agent(
                 l2_refs=l2_refs or [],
                 l3_refs=l3_refs or [],
                 genre_profile_id=genre_profile_id,
-                prompt_snapshot=prompt_snapshot(compiled_prompt),
+                prompt_snapshot=prompt_snapshot(attempt_compiled_prompts[att.attempt_no]),
                 chapter_id=chapter_id,
                 scene_id=scene_id,
             )
@@ -385,18 +384,39 @@ async def call_agent(
             + (result.final_content or "")[:2000]
             + "\nReturn ONLY valid JSON matching the required schema. No markdown."
         )
-        repair_result = await stream_with_retry(
+        repair_template = SimpleNamespace(
+            id=f"{prompt_config.get('template_id', f'builtin:{agent_role}')}:repair",
+            version=prompt_config.get("template_version", prompt_config.get("version", "v1")),
             system_prompt=system_prompt,
-            user_content=repair_user,
+            user_prompt_template="{{user_content}}",
+        )
+        repair_compiled_prompt = compile_prompt(
+            repair_template,
+            {
+                "user_content": repair_user,
+                "user_instruction": repair_user,
+                "assembly_manifest": assembly_manifest or {},
+                "context_package": assembly_manifest or {},
+            },
+        )
+        repair_result = await stream_with_retry(
+            system_prompt=repair_compiled_prompt.system_text,
+            user_content=repair_compiled_prompt.user_text,
             model=model,
             temperature=min(float(temperature), 0.2),
             provider=provider,
             fallback_model=fallback_model,
             response_format=response_format,
         )
-        # append repair attempts to audit list
+        # Keep repair attempts globally ordered so route/context rows are unique.
         if getattr(repair_result, "attempts", None):
-            attempts = list(attempts) + list(repair_result.attempts)
+            repair_attempts = []
+            attempt_offset = max((a.attempt_no for a in attempts), default=0)
+            for repair_attempt in repair_result.attempts:
+                repair_attempt.attempt_no += attempt_offset
+                repair_attempts.append(repair_attempt)
+                attempt_compiled_prompts[repair_attempt.attempt_no] = repair_compiled_prompt
+            attempts = list(attempts) + repair_attempts
             successful = next((a for a in attempts if a.success), None)
             final_attempt = successful or attempts[-1]
             actual_provider = final_attempt.provider
@@ -404,6 +424,11 @@ async def call_agent(
             attempt_no = final_attempt.attempt_no
             route_type = final_attempt.route_type
         result = repair_result
+        result.attempts = attempts
+        result.attempt = final_attempt.attempt_no
+        result.successful_attempt_no = next(
+            (a.attempt_no for a in attempts if a.success), None
+        )
         publishable, state, meta = await full_pipeline_async(
             result,
             is_json=is_json,
@@ -471,26 +496,90 @@ async def call_agent(
         output_integrity=state.value if publishable else "blocked",
     )
 
-    # INV-10: every real attempt records Usage; missing provider counters => unknown (not fake 0 cost)
-    pt_u = int(result.prompt_tokens or 0)
-    ct_u = int(result.completion_tokens or 0)
-    rt_u = int(result.reasoning_tokens or 0)
-    tokens_unknown = not (result.prompt_tokens or result.completion_tokens)
-    usage = LlmUsageEvent(
-        id=uuid.uuid4(),
-        book_id=book_id,
-        run_id=run_id,
-        provider=actual_provider or provider or "unknown",
-        model_name=actual_model or model or "unknown",
-        prompt_tokens=pt_u,
-        completion_tokens=ct_u,
-        reasoning_tokens=rt_u,
-        total_tokens=pt_u + ct_u,
-        latency_ms=int(result.latency_ms or 0),
-    )
-    # stash unknown flag on raw_response_summary for UI/audit (column may not exist)
-    raw_response_summary["usage_status"] = "unknown" if tokens_unknown else "known"
-    raw_response_summary["usage_unknown"] = tokens_unknown
+    # INV-10: every real gateway attempt records its own Usage row.  The final
+    # StreamResult counters are not sufficient when a repair/fallback occurred.
+    usage_events = []
+    usage_unknown = False
+    for att in attempts:
+        pt_u = int(att.prompt_tokens or 0)
+        ct_u = int(att.completion_tokens or 0)
+        attempt_unknown = not (att.prompt_tokens or att.completion_tokens)
+        usage_unknown = usage_unknown or attempt_unknown
+        usage_events.append(
+            LlmUsageEvent(
+                id=uuid.uuid4(),
+                book_id=book_id,
+                run_id=run_id,
+                attempt_no=att.attempt_no,
+                provider=att.provider or provider or "unknown",
+                model_name=att.model or model or "unknown",
+                prompt_tokens=pt_u,
+                completion_tokens=ct_u,
+                reasoning_tokens=0,
+                total_tokens=pt_u + ct_u,
+                latency_ms=int(att.latency_ms or 0),
+            )
+        )
+    raw_response_summary["usage_status"] = "unknown" if usage_unknown else "known"
+    raw_response_summary["usage_unknown"] = usage_unknown
+
+    # Repair attempts were not known during the initial audit transaction.
+    # Persist their route/context rows before closing the run.
+    if len(attempts) > 0:
+        async with async_session_factory() as db_repair_audit:
+            existing_attempts = set()
+            from sqlalchemy import select
+            from app.models.tables import ModelRouteEvent
+
+            existing_rows = await db_repair_audit.execute(
+                select(ModelRouteEvent.attempt_no).where(ModelRouteEvent.run_id == run_id)
+            )
+            existing_attempts = set(existing_rows.scalars().all())
+            for att in attempts:
+                if att.attempt_no in existing_attempts:
+                    continue
+                await record_model_route(
+                    db=db_repair_audit,
+                    run_id=run_id,
+                    attempt_no=att.attempt_no,
+                    agent_role=agent_role,
+                    configured_provider=provider,
+                    configured_model=model,
+                    actual_provider=att.provider,
+                    actual_model=att.model,
+                    route_type=att.route_type,
+                    reason=att.error_code,
+                )
+                await save_context_package(
+                    db=db_repair_audit,
+                    run_id=run_id,
+                    attempt_no=att.attempt_no,
+                    book_id=book_id,
+                    agent_role=agent_role,
+                    provider=att.provider,
+                    model=att.model,
+                    prompt_version=prompt_config["version"],
+                    system_prompt=attempt_compiled_prompts[att.attempt_no].system_text,
+                    rendered_prompt=attempt_compiled_prompts[att.attempt_no].rendered_text,
+                    request_params={
+                        "temperature": temperature,
+                        "is_json": is_json,
+                        "route_type": att.route_type,
+                        "success": att.success,
+                        "response_format": bool(response_format),
+                        "schema_repair": att.attempt_no > max(existing_attempts or {0}),
+                    },
+                    assembly_manifest=default_manifest,
+                    l4_refs=l4_refs or [],
+                    l1_refs=l1_refs or [],
+                    l2_refs=l2_refs or [],
+                    l3_refs=l3_refs or [],
+                    genre_profile_id=genre_profile_id,
+                    prompt_snapshot=prompt_snapshot(attempt_compiled_prompts[att.attempt_no]),
+                    chapter_id=chapter_id,
+                    scene_id=scene_id,
+                )
+            await db_repair_audit.commit()
 
     # Phase 3: single short transaction for Output + Usage + Run status + package update
     async with async_session_factory() as db_out:
@@ -503,8 +592,7 @@ async def call_agent(
         managed_run.model_name = actual_model
 
         db_out.add(output)
-        if usage is not None:
-            db_out.add(usage)
+        db_out.add_all(usage_events)
 
         await db_out.execute(
             update(AgentContextPackage)

@@ -178,6 +178,26 @@ class OutlineParseContract(StrictModel):
     validation_errors: list[Any] = Field(default_factory=list)
 
 
+class BlankPlanningChapterContract(StrictModel):
+    chapter_no: int
+    title: str = ""
+    goal: str
+    required_beats: list[str] = Field(default_factory=list)
+    forbidden_outcomes: list[str] = Field(default_factory=list)
+    depends_on: list[int] = Field(default_factory=list)
+    source_refs: list[Any] = Field(default_factory=list)
+
+
+class BlankPlanningContract(StrictModel):
+    title: str
+    logline: str
+    synopsis: str
+    genre: str = ""
+    tone: str = ""
+    themes: list[str] = Field(default_factory=list)
+    chapters: list[BlankPlanningChapterContract] = Field(min_length=1)
+
+
 class DriftAuditContract(StrictModel):
     status: str
     metrics: dict[str, Any] = Field(default_factory=dict)
@@ -194,6 +214,7 @@ ROLE_CONTRACTS: dict[str, Type[BaseModel]] = {
     "query_planner": QueryPlanContract,
     "evidence_ranker": EvidenceRankContract,
     "outline_parser": OutlineParseContract,
+    "blank_planner": BlankPlanningContract,
     "drift_audit": DriftAuditContract,
     # research_synth / aileak_judge: soft — no strict contract yet
 }

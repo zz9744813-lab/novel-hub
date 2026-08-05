@@ -10,15 +10,14 @@ from sqlalchemy import select, update, func, delete, text, bindparam
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, async_session_factory
 from app.models import (
-    Book, BookSetting, OutlineVersion, OutlineNode, OutlineDependency,
-    ChapterTask, Chapter, ChapterVersion, Scene, Paragraph,
-    CharacterCard, CharacterStateSnapshot,
-    WorldRule, PlotThread, StoryEvent, EntityAlias,
-    MemoryL1ChapterLedger, MemoryL2StageSummary, MemoryL3VolumeSummary, MemoryL4StateSnapshot,
-    StyleVoiceCard, StyleToneAnchor,
-    QueryPlan, RetrievalRun, RetrievalCandidate, RetrievalJudgement,
-    ReviewIssue, RewritePatch, DriftAuditReport,
-    AgentRun, AgentRunOutput, LlmUsageEvent,
+    Book, OutlineVersion, OutlineNode,
+    ChapterTask, Chapter, ChapterVersion,
+    MemoryL4StateSnapshot,
+    QueryPlan, RetrievalRun,
+    RewritePatch,
+    DriftAuditReport,
+    StoryEvent,
+    AgentRun,
     HumanIntervention, PromptTemplate,
 )
 from app.state_machine import ChapterState
@@ -386,7 +385,7 @@ async def upload_outline_file(
 
     Supports: .txt .md .docx .pdf .rtf .csv .json .html .xml (max 5MB).
     """
-    from app.engine.file_extract import extract_text, ALLOWED_EXTENSIONS
+    from app.engine.file_extract import extract_text
 
     content = await file.read()
     if len(content) > 5 * 1024 * 1024:
@@ -621,12 +620,18 @@ async def generate_book_cover(book_id: str, db: AsyncSession = Depends(get_db)):
     cover_hash = hashlib.sha256(f"{bid}|{book.title}|{book.genre}|{book.logline}".encode()).hexdigest()[:16]
     cover_path = f"{cover_dir}/cover_{cover_hash}.png"
     thumb_path = f"{cover_dir}/thumb_{cover_hash}.png"
-    render_cover(cover_path, title=book.title or "Untitled", genre=book.genre or "", logline=book.logline or "")
-    render_cover(thumb_path, title=book.title or "Untitled", genre=book.genre or "", logline=book.logline or "", width=160, height=240)
-    book.cover_path = cover_path
-    book.cover_thumb_path = thumb_path
-    book.cover_hash = cover_hash
-    await db.commit()
+    existing_paths = {path: Path(path).exists() for path in (cover_path, thumb_path)}
+    try:
+        render_cover(cover_path, title=book.title or "Untitled", genre=book.genre or "", logline=book.logline or "")
+        render_cover(thumb_path, title=book.title or "Untitled", genre=book.genre or "", logline=book.logline or "", width=160, height=240)
+        book.cover_path = cover_path
+        book.cover_thumb_path = thumb_path
+        book.cover_hash = cover_hash
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        _cleanup_cover_files([path for path, existed in existing_paths.items() if not existed])
+        raise
     return {
         "status": "generated",
         "width": 320,
@@ -1041,7 +1046,6 @@ async def resume_chapter(chapter_id: str, db: AsyncSession = Depends(get_db)):
     """B-12: clear control, requeue chapter, write outbox for active/new run."""
     from app.models import ChapterRun
     from app.engine.state_transition import transition_chapter
-    from app.workers.outbox_dispatcher import create_run_and_outbox
 
     result = await db.execute(select(Chapter).where(Chapter.id == uuid.UUID(chapter_id)))
     chapter = result.scalar_one_or_none()
@@ -1350,7 +1354,39 @@ async def get_event(book_id: str, event_id: str, db: AsyncSession = Depends(get_
 # ---- Retrieval test ----
 @router.post("/api/books/{book_id}/retrieval/test")
 async def retrieval_test(book_id: str, req: dict, db: AsyncSession = Depends(get_db)):
-    return {"book_id": book_id, "results": [], "note": "TODO"}
+    from app.engine.retrieval import (
+        candidate_merge_and_score,
+        event_ledger_search,
+        full_text_search,
+    )
+
+    bid = _parse_uuid(book_id, field="book id")
+    if not (await db.execute(select(Book).where(Book.id == bid))).scalar_one_or_none():
+        raise HTTPException(404, "Book not found")
+    chapter_range = req.get("chapter_range") or {"from": 1, "to": 10**9}
+    if isinstance(chapter_range, list):
+        chapter_range = {
+            "from": chapter_range[0] if chapter_range else 1,
+            "to": chapter_range[1] if len(chapter_range) > 1 else 10**9,
+        }
+    bounds = (int(chapter_range.get("from", 1)), int(chapter_range.get("to", 10**9)))
+    try:
+        character_ids = [uuid.UUID(str(value)) for value in req.get("character_ids", [])]
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, "character_ids must contain UUIDs") from exc
+    event_candidates = await event_ledger_search(
+        db, bid, character_ids, req.get("event_types") or [], bounds
+    )
+    terms = req.get("exact_terms") or []
+    terms = [terms] if isinstance(terms, str) else terms
+    text_candidates = await full_text_search(db, bid, terms, bounds)
+    plan = {
+        "character_ids": [str(value) for value in character_ids],
+        "event_types": req.get("event_types") or [],
+        "chapter_range": chapter_range,
+    }
+    results = candidate_merge_and_score(event_candidates, text_candidates, plan)
+    return {"book_id": str(bid), "candidate_count": len(results), "results": results}
 
 
 @router.post("/api/books/{book_id}/retrieval/gold-samples")

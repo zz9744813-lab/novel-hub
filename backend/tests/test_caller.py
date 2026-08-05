@@ -69,6 +69,9 @@ class TrackingSession:
     def add(self, obj):
         self.added.append(obj)
 
+    def add_all(self, objects):
+        self.added.extend(objects)
+
     async def merge(self, obj):
         # mutate status like real code path
         if hasattr(obj, "status"):
@@ -127,12 +130,68 @@ class TestCallAgentSessionPattern:
         assert "book_id" in sig.parameters
 
     @pytest.mark.asyncio
+    async def test_model_resolution_does_not_allow_unbound_override(self):
+        from app.agents.caller import _resolve_model
+
+        binding = MagicMock(
+            provider="bound-provider",
+            primary_model="bound-model",
+            fallback_model="bound-fallback",
+        )
+        session = TrackingSession()
+        session.execute = AsyncMock()
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = binding
+        session.execute.return_value = result
+        with patch("app.agents.caller.async_session_factory", MagicMock(return_value=session)):
+            resolved = await _resolve_model(
+                "blank_planner",
+                uuid.UUID("00000000-0000-0000-0000-000000000001"),
+                {"provider": "unbound-provider", "model": "unbound-model"},
+            )
+        assert resolved == ("bound-provider", "bound-model", "bound-fallback")
+
+    @pytest.mark.asyncio
+    async def test_usage_event_is_recorded_for_each_gateway_attempt(self):
+        session = TrackingSession("completed")
+        tracking_factory = MagicMock(return_value=session)
+        first = _attempt(False, "HTTP_500")
+        second = _attempt(True)
+        first.attempt_no = 1
+        second.attempt_no = 2
+        first.prompt_tokens, first.completion_tokens = 11, 3
+        second.prompt_tokens, second.completion_tokens = 17, 5
+        mock_result = StreamResult(
+            final_content='{"test": "output"}',
+            actual_provider="new-api",
+            actual_model="deepseek-v4-flash",
+            successful_attempt_no=2,
+            attempts=[first, second],
+            provider_used="new-api",
+            attempt=2,
+        )
+        with patch("app.agents.caller.async_session_factory", tracking_factory), \
+             patch("app.agents.caller.stream_with_retry", new_callable=AsyncMock) as mock_stream, \
+             patch("app.agents.caller.full_pipeline_async", new_callable=AsyncMock) as mock_pipeline, \
+             patch("app.agents.caller._resolve_model", new_callable=AsyncMock) as mock_resolve:
+            mock_resolve.return_value = ("new-api", "deepseek-v4-flash", None)
+            mock_stream.return_value = mock_result
+            mock_pipeline.return_value = ({"test": "output"}, MagicMock(value="publishable"), {})
+            await call_agent(
+                book_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+                agent_role="chapter_planner",
+                user_content='{"test": true}',
+            )
+        usage = [obj for obj in session.added if obj.__class__.__name__ == "LlmUsageEvent"]
+        assert [event.attempt_no for event in usage] == [1, 2]
+        assert [(event.prompt_tokens, event.completion_tokens) for event in usage] == [(11, 3), (17, 5)]
+
+    @pytest.mark.asyncio
     async def test_llm_call_outside_session(self):
         session_events = []
         session = TrackingSession("completed")
         session.bind_events(session_events)
         tracking_factory = MagicMock(return_value=session)
-
         mock_result = StreamResult(
             final_content='{"test": "output"}',
             reasoning_text="",
@@ -207,6 +266,59 @@ class TestCallAgentSessionPattern:
 
             assert publishable is None
             assert run.status == "failed"
+
+    @pytest.mark.asyncio
+    async def test_schema_repair_audit_captures_repair_prompt_per_attempt(self):
+        session = TrackingSession("completed")
+        tracking_factory = MagicMock(return_value=session)
+        first = _attempt(True)
+        repaired = _attempt(True)
+        first.attempt_no = 1
+        repaired.attempt_no = 1
+        invalid = StreamResult(
+            final_content="not-json",
+            actual_provider="new-api",
+            actual_model="deepseek-v4-flash",
+            attempts=[first],
+            provider_used="new-api",
+            attempt=1,
+        )
+        valid = StreamResult(
+            final_content='{\"test\": \"repaired\"}',
+            actual_provider="new-api",
+            actual_model="deepseek-v4-flash",
+            attempts=[repaired],
+            provider_used="new-api",
+            attempt=1,
+        )
+
+        with patch("app.agents.caller.async_session_factory", tracking_factory), \
+             patch("app.agents.caller.stream_with_retry", new_callable=AsyncMock) as mock_stream, \
+             patch("app.agents.caller.full_pipeline_async", new_callable=AsyncMock) as mock_pipeline, \
+             patch("app.agents.caller._resolve_model", new_callable=AsyncMock) as mock_resolve, \
+             patch("app.agents.caller.record_model_route", new_callable=AsyncMock), \
+             patch("app.agents.caller.save_context_package", new_callable=AsyncMock) as mock_context:
+            mock_resolve.return_value = ("new-api", "deepseek-v4-flash", None)
+            mock_stream.side_effect = [invalid, valid]
+            mock_pipeline.side_effect = [
+                (None, MagicMock(value="blocked"), {"block_reason": "json_parse_failed"}),
+                ({"test": "repaired"}, MagicMock(value="publishable"), {}),
+            ]
+
+            await call_agent(
+                book_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+                agent_role="chapter_planner",
+                user_content='{"test": true}',
+            )
+
+        snapshots = [call.kwargs["prompt_snapshot"] for call in mock_context.await_args_list]
+        repair_snapshots = [
+            snapshot for snapshot in snapshots
+            if "[SCHEMA_REPAIR]" in snapshot["user_text"]
+        ]
+        assert len(repair_snapshots) == 1
+        assert repair_snapshots[0]["user_text"].startswith('{"test": true}')
+        assert "[SCHEMA_REPAIR]" in repair_snapshots[0]["user_text"]
 
     @pytest.mark.asyncio
     async def test_active_studio_template_changes_gateway_system_and_user(self):

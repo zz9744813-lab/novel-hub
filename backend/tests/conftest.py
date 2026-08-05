@@ -1,6 +1,7 @@
 """Pytest configuration and fixtures."""
 import sys
 import os
+import asyncio
 
 # Add backend to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -13,7 +14,45 @@ os.environ.setdefault("PRIMARY_BASE_URL", "http://127.0.0.1:3000/v1")
 os.environ.setdefault("PRIMARY_API_KEY", "sk-test-key")
 os.environ.setdefault("LOG_LEVEL", "DEBUG")
 
+# ── Session-scoped event loop (must run before any app module import) ──
+# pytest-asyncio 9.x uses per-function loop by default, but asyncpg engine
+# is a module-level singleton that creates Future objects on the import-time
+# loop.  We create a session-scoped loop here and patch the engine before
+# any test runs, so every test shares the same loop.
+_loop = asyncio.new_event_loop()
+asyncio.set_event_loop(_loop)
+
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy.pool import NullPool
+from app.config import settings
+import app.database as db_mod
+
+_engine = create_async_engine(
+    settings.database_url,
+    poolclass=NullPool,
+    echo=False,
+)
+db_mod.engine = _engine
+db_mod.async_session_factory = async_sessionmaker(
+    _engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
+
 import pytest
+
+
+@pytest.fixture(scope="session")
+def event_loop():
+    yield _loop
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _close_engine():
+    """Dispose engine at end of session."""
+    yield
+    _loop.run_until_complete(_engine.dispose())
+    _loop.close()
 
 
 @pytest.fixture

@@ -1,13 +1,12 @@
 """All ORM models for NovelForge - 40+ tables per v7.3 spec."""
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from sqlalchemy import (
     Integer, String, Text, Boolean, DateTime, Float, ForeignKey, Index, UniqueConstraint, func
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY, TSVECTOR
-from app.models.base import Base, utcnow, TimestampMixin, BookMixin, VersionMixin
-
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
+from app.models.base import Base, utcnow, TimestampMixin
 
 def gen_uuid():
     return uuid.uuid4()
@@ -682,6 +681,7 @@ class LlmUsageEvent(Base, TimestampMixin):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
     book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    attempt_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     provider: Mapped[str] = mapped_column(String(200), nullable=False)
     model_name: Mapped[str] = mapped_column(String(200), nullable=False)
     prompt_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

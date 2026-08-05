@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import uuid
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from app.services.blank_planning import (
@@ -7,6 +10,35 @@ from app.services.blank_planning import (
     build_outline_nodes,
     normalize_planning_draft,
 )
+
+
+@pytest.mark.asyncio
+async def test_planner_uses_unified_agent_caller_and_bound_role():
+    from app.agents.blank_planner import generate_planning_draft
+
+    draft = {
+        "title": "x",
+        "logline": "y",
+        "synopsis": "z",
+        "genre": "",
+        "tone": "",
+        "themes": [],
+        "chapters": [{"chapter_no": 1, "title": "一", "goal": "开始"}],
+    }
+    with patch("app.agents.blank_planner.call_agent", new_callable=AsyncMock) as caller:
+        caller.return_value = (None, draft, {"model_used": "locked-model"})
+        result = await generate_planning_draft(
+            book_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+            premise="premise",
+            genre="",
+            tone="",
+            themes=[],
+            target_chapter_count=1,
+        )
+
+    assert result["title"] == "x"
+    caller.assert_awaited_once()
+    assert caller.await_args.kwargs["agent_role"] == "blank_planner"
 
 
 def test_normalize_planning_draft_requires_core_metadata_and_chapters():

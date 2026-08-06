@@ -263,8 +263,8 @@ export default function App() {
       />
 
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-        <header className="flex items-center justify-between px-5 h-12 border-b border-border shrink-0 bg-bg-panel gap-3">
-          <div className="flex items-center gap-2 text-xs min-w-0">
+        <header className="flex items-center justify-between px-5 h-11 border-b border-border shrink-0 bg-bg-panel/80 backdrop-blur-sm gap-3">
+          <div className="flex items-center gap-2.5 text-xs min-w-0">
             {selectedBookId && tab !== "library" && (
               <button
                 onClick={handleBackToBooks}
@@ -275,15 +275,16 @@ export default function App() {
               </button>
             )}
             <span
-              className="font-semibold text-text-primary tracking-wide shrink-0"
+              className="font-semibold text-text-primary tracking-wide shrink-0 flex items-center gap-1.5"
               style={{ fontWeight: 510 }}
             >
+              <span className="inline-block w-1 h-3.5 rounded-sm bg-brand-accent" aria-hidden="true" />
               NovelForge
             </span>
-            <span className="text-text-disabled font-mono text-2xs shrink-0">v8.0</span>
+            <span className="text-text-disabled font-mono text-2xs shrink-0 px-1.5 py-0.5 rounded bg-bg-surface/60 border border-border-subtle">v8.0</span>
             {selectedBook && (
               <>
-                <span className="text-text-disabled mx-0.5">/</span>
+                <span className="text-text-disabled/60 shrink-0">/</span>
                 <span className="text-text-secondary truncate" style={{ fontWeight: 510 }}>
                   {(selectedBook as any).title || "未命名"}
                 </span>

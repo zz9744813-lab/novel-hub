@@ -185,12 +185,12 @@ export function BookHomePage({
             )}
           </div>
           <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-            <Stat label="已定稿" value={`${book?.finalized_chapters ?? 0} 章`} />
+            <Stat label="已定稿" value={`${book?.finalized_chapters ?? 0} 章`} accent="success" />
             <Stat label="计划" value={`${book?.planned_chapters ?? "—"} 章`} />
             <Stat label="字数" value={`${(book?.finalized_words || 0).toLocaleString()}`} />
             <Stat label="状态" value={book?.lifecycle_status || "—"} />
           </div>
-          <div className="mt-5 flex flex-wrap gap-2">
+          <div className="mt-5 pt-4 border-t border-border/50 flex flex-wrap gap-2">
             <button
               onClick={handleContinue}
               disabled={busy}
@@ -375,11 +375,18 @@ export function BookHomePage({
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value, accent }: { label: string; value: string; accent?: "success" | "brand" }) {
+  const accentClass = accent === "success"
+    ? "border-success/25 hover:border-success/40"
+    : accent === "brand"
+    ? "border-brand/25 hover:border-brand/40"
+    : "hover:border-border-strong";
   return (
-    <div className="panel-elevated rounded-md px-3 py-2">
+    <div className={`panel-elevated rounded-md px-3 py-2 transition-colors duration-150 ${accentClass}`}>
       <div className="text-2xs text-text-disabled">{label}</div>
-      <div className="text-sm text-text-primary mt-0.5 font-mono">{value}</div>
+      <div className={`text-sm mt-0.5 font-mono ${accent === "success" ? "text-emerald-300" : accent === "brand" ? "text-brand-accent" : "text-text-primary"}`}>
+        {value}
+      </div>
     </div>
   );
 }
@@ -396,9 +403,9 @@ function Mini({
   small?: boolean;
 }) {
   return (
-    <div className="panel rounded-md p-3 flex items-start gap-2">
-      <Icon size={14} className="text-brand-accent mt-0.5" />
-      <div>
+    <div className="panel rounded-md p-3 flex items-start gap-2 transition-colors duration-150 hover:border-border-strong">
+      <Icon size={14} className="text-brand-accent mt-0.5 shrink-0" />
+      <div className="min-w-0">
         <div className="text-2xs text-text-disabled">{label}</div>
         <div className={small ? "text-xs text-text-secondary mt-0.5" : "text-sm text-text-primary font-mono mt-0.5"}>
           {value}

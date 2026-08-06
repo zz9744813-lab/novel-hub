@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type TaskItem } from "../../api";
 import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Clock, Loader2, Pause, Play, RefreshCw, Square, Upload, PenTool, Search } from "lucide-react";
+import clsx from "clsx";
 
 function displayDetail(value: unknown): string {
   if (value == null) return "";
@@ -143,41 +144,50 @@ export function WritingTasksPage() {
             <span className="ml-auto text-2xs font-mono text-text-disabled">第 {page} / {Math.max(pages, 1)} 页</span>
           </div>
           <div className="divide-y divide-border">
-            {items.map((item) => (
-              <div key={item.task_id} className="px-3 py-3 flex items-center gap-3">
-                {statusIcon(item.status)}
-                {taskIcon(item.task_type)}
-                <div className="flex-1 min-w-0">
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-text-primary">
-                    <span>{taskTitle(item)}</span>
-                    <span className="text-2xs text-text-disabled">{typeLabels[item.task_type]}</span>
-                    {item.book_title && <span className="text-2xs text-text-disabled truncate">· {item.book_title}</span>}
+            {items.map((item) => {
+              const isFailed = ["failed", "needs_human", "resource_blocked", "blocked_by_dependency"].includes(item.status);
+              const isRunning = ["analyzing", "running", "drafting", "planning", "searching", "synthesizing"].includes(item.status);
+              return (
+                <div key={item.task_id} className={clsx(
+                  "px-3 py-3 flex items-center gap-3 transition-colors duration-150",
+                  isRunning && "bg-brand-muted/30",
+                  isFailed && "bg-danger-muted/30",
+                  !isFailed && !isRunning && "hover:bg-bg-hover/40"
+                )}>
+                  {statusIcon(item.status)}
+                  {taskIcon(item.task_type)}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-text-primary">
+                      <span>{taskTitle(item)}</span>
+                      <span className="text-2xs text-text-disabled">{typeLabels[item.task_type]}</span>
+                      {item.book_title && <span className="text-2xs text-text-disabled truncate">· {item.book_title}</span>}
+                    </div>
+                    <div className="text-2xs text-text-disabled font-mono truncate mt-0.5">
+                      {item.status} · {displayDetail(item.current_step) || "等待处理"} · {item.task_id.slice(0, 18)}
+                      {item.error?.code ? ` · ${item.error.code}` : ""}
+                    </div>
+                    {item.error && <div className="text-2xs text-amber-300/80 truncate mt-0.5">{displayDetail(item.error.detail)}</div>}
                   </div>
-                  <div className="text-2xs text-text-disabled font-mono truncate mt-0.5">
-                    {item.status} · {displayDetail(item.current_step) || "等待处理"} · {item.task_id.slice(0, 18)}
-                    {item.error?.code ? ` · ${item.error.code}` : ""}
+                  <div className="flex items-center gap-1 shrink-0">
+                    {item.actions.map((action) => (
+                      <button
+                        key={action}
+                        className="btn-ghost text-2xs py-1 px-2 flex items-center gap-1"
+                        disabled={busyTask === item.task_id}
+                        onClick={() => void operate(item, action)}
+                        title={actionLabels[action] || action}
+                      >
+                        {action === "pause" && <Pause size={11} />}
+                        {action === "resume" && <Play size={11} />}
+                        {action === "cancel" && <Square size={11} />}
+                        {action === "retry" && <RefreshCw size={11} />}
+                        {actionLabels[action] || action}
+                      </button>
+                    ))}
                   </div>
-                  {item.error && <div className="text-2xs text-amber-300/80 truncate mt-0.5">{displayDetail(item.error.detail)}</div>}
                 </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  {item.actions.map((action) => (
-                    <button
-                      key={action}
-                      className="btn-ghost text-2xs py-1 px-2 flex items-center gap-1"
-                      disabled={busyTask === item.task_id}
-                      onClick={() => void operate(item, action)}
-                      title={actionLabels[action] || action}
-                    >
-                      {action === "pause" && <Pause size={11} />}
-                      {action === "resume" && <Play size={11} />}
-                      {action === "cancel" && <Square size={11} />}
-                      {action === "retry" && <RefreshCw size={11} />}
-                      {actionLabels[action] || action}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
           <div className="px-3 py-2 border-t border-border flex justify-end gap-2">
             <button className="btn-ghost text-xs py-1 px-2" disabled={page <= 1 || loading} onClick={() => setPage((value) => value - 1)}><ChevronLeft size={13} /></button>

@@ -4,7 +4,7 @@ import { api } from "../../api";
 import { BookCard } from "./BookCard";
 import { BookshelfBook, LIFECYCLE_LABEL } from "./library.types";
 import { LibraryEmptyState } from "./LibraryEmptyState";
-import { BookOpen, Filter, LayoutGrid, Loader2, Plus, Search, X } from "lucide-react";
+import { BookOpen, Filter, LayoutGrid, Loader2, Plus, Search, X, ArrowUpRight, BookText, FileText, ListChecks } from "lucide-react";
 
 function formatWords(value: number): string {
   if (value >= 10000) return `${(value / 10000).toFixed(1)} 万`;
@@ -26,6 +26,7 @@ export function LibraryPage({
   const [sort, setSort] = useState<"updated" | "title" | "progress" | "words">("updated");
   const [deletingBook, setDeletingBook] = useState<BookshelfBook | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const [selectedBook, setSelectedBook] = useState<BookshelfBook | null>(null);
   const shelfRef = useRef<HTMLDivElement>(null);
   const [shelfColumns, setShelfColumns] = useState(1);
 
@@ -54,6 +55,7 @@ export function LibraryPage({
       await api.books.delete(deletingBook.book_id);
       setBooks((prev) => prev.filter((book) => book.book_id !== deletingBook.book_id));
       setDeletingBook(null);
+      if (selectedBook?.book_id === deletingBook.book_id) setSelectedBook(null);
     } catch (e: any) {
       setError(e?.message || String(e));
     } finally {
@@ -113,76 +115,77 @@ export function LibraryPage({
   return (
     <div className="library-page h-full overflow-auto">
       <div className="library-page-inner">
-        <header className="library-heading">
-          <div>
+        {/* ── 左主右辅工作台头部 ── */}
+        <header className="library-workspace-head">
+          <div className="library-workspace-primary">
             <div className="library-eyebrow">
               <BookOpen size={13} /> 创作档案 · 书架
             </div>
             <h1>我的书架</h1>
             <p>把正在写的、准备写的和已经写完的故事，放回它们应该在的位置。</p>
           </div>
-          <button onClick={onNewBook} className="btn-primary library-new-book">
-            <Plus size={14} /> 新建作品
-          </button>
+          <div className="library-workspace-actions">
+            <button onClick={onNewBook} className="btn-primary library-new-book">
+              <Plus size={14} /> 新建作品
+            </button>
+          </div>
+          <div className="library-workspace-stats">
+            <div className="ws-stat">
+              <span className="ws-stat-label">作品</span>
+              <strong className="ws-stat-value">{books.length}</strong>
+            </div>
+            <div className="ws-stat">
+              <span className="ws-stat-label">字数</span>
+              <strong className="ws-stat-value">{formatWords(totalWords)}</strong>
+            </div>
+            <div className="ws-stat">
+              <span className="ws-stat-label">进行中</span>
+              <strong className="ws-stat-value">{activeCount}</strong>
+            </div>
+            <div className={`ws-stat${riskCount ? " has-risk" : ""}`}>
+              <span className="ws-stat-label">风险</span>
+              <strong className="ws-stat-value">{riskCount}</strong>
+            </div>
+          </div>
         </header>
 
-        <section className="library-stats" aria-label="书架概览">
-          <div>
-            <span>作品</span>
-            <strong>{books.length}</strong>
-            <small>本</small>
-          </div>
-          <div>
-            <span>已完成字数</span>
-            <strong>{formatWords(totalWords)}</strong>
-            <small>字</small>
-          </div>
-          <div>
-            <span>正在创作</span>
-            <strong>{activeCount}</strong>
-            <small>本</small>
-          </div>
-          <div className={riskCount ? "has-risk" : ""}>
-            <span>待处理风险</span>
-            <strong>{riskCount}</strong>
-            <small>项</small>
-          </div>
-        </section>
-
-        <section className="library-toolbar" aria-label="筛选和排序">
+        {/* ── 紧凑控制条 ── */}
+        <section className="library-control-bar" aria-label="筛选和排序">
           <div className="library-search">
-            <Search size={14} />
+            <Search size={13} />
             <input value={q} onChange={(event) => setQ(event.target.value)} placeholder="查找作品、标签或梗概" />
             {q && (
               <button type="button" aria-label="清空搜索" onClick={() => setQ("")}>
-                <X size={13} />
+                <X size={12} />
               </button>
             )}
           </div>
-          <div className="library-toolbar-select">
-            <Filter size={13} />
-            <select value={filter} onChange={(event) => setFilter(event.target.value)}>
-              <option value="all">全部作品</option>
-              {Object.entries(LIFECYCLE_LABEL).map(([key, label]) => (
-                <option key={key} value={key}>
-                  {label}
-                </option>
-              ))}
+          <div className="library-control-group">
+            <div className="library-control-select">
+              <Filter size={12} />
+              <select value={filter} onChange={(event) => setFilter(event.target.value)}>
+                <option value="all">全部作品</option>
+                {Object.entries(LIFECYCLE_LABEL).map(([key, label]) => (
+                  <option key={key} value={key}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <select
+              className="library-control-sort"
+              value={sort}
+              onChange={(event) => setSort(event.target.value as typeof sort)}
+            >
+              <option value="updated">最近活动</option>
+              <option value="title">按书名</option>
+              <option value="progress">按进度</option>
+              <option value="words">按字数</option>
             </select>
+            <span className="library-control-count">
+              {filtered.length}/{books.length}
+            </span>
           </div>
-          <select
-            className="library-sort"
-            value={sort}
-            onChange={(event) => setSort(event.target.value as typeof sort)}
-          >
-            <option value="updated">最近活动</option>
-            <option value="title">按书名</option>
-            <option value="progress">按进度</option>
-            <option value="words">按字数</option>
-          </select>
-          <span className="library-result-count">
-            显示 {filtered.length} / {books.length}
-          </span>
         </section>
 
         {error && (
@@ -196,7 +199,7 @@ export function LibraryPage({
 
         {loading ? (
           <div className="library-loading">
-            <Loader2 size={18} className="animate-spin" /> 正在整理书架…
+            <Loader2 size={16} className="animate-spin" /> 正在整理书架…
           </div>
         ) : filtered.length === 0 ? (
           <LibraryEmptyState onNew={onNewBook} />
@@ -220,6 +223,8 @@ export function LibraryPage({
                         book={book}
                         onOpen={onOpenBook}
                         onDelete={setDeletingBook}
+                        isSelected={selectedBook?.book_id === book.book_id}
+                        onSelect={setSelectedBook}
                       />
                     ))}
                   </div>
@@ -255,6 +260,50 @@ export function LibraryPage({
           </section>
         )}
 
+        {/* ── 选中作品工作台 ── */}
+        {selectedBook && (
+          <section className="library-selected-workspace" aria-label="选中作品操作区">
+            <div className="lsw-bar">
+              <span className="lsw-indicator" aria-hidden="true" />
+              <span className="lsw-title">{selectedBook.title}</span>
+              <span className="lsw-meta">
+                {selectedBook.finalized_chapters}/{selectedBook.planned_chapters ?? "?"} 章 · {formatWords(selectedBook.finalized_words || 0)} 字
+              </span>
+              <div className="lsw-actions">
+                <button
+                  type="button"
+                  className="lsw-action primary"
+                  onClick={() => onOpenBook(selectedBook.book_id)}
+                >
+                  <ArrowUpRight size={13} /> 打开作品
+                </button>
+                <button
+                  type="button"
+                  className="lsw-action"
+                  title="查看章节"
+                  onClick={() => onOpenBook(selectedBook.book_id)}
+                >
+                  <FileText size={13} /> 章节
+                </button>
+                <button
+                  type="button"
+                  className="lsw-action"
+                  title="查看大纲"
+                >
+                  <ListChecks size={13} /> 大纲
+                </button>
+                <button
+                  type="button"
+                  className="lsw-action"
+                  title="查看设定"
+                >
+                  <BookText size={13} /> 设定
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
+
         <footer className="library-footer">
           <LayoutGrid size={12} /> 书架数据实时来自 NovelForge 工作台
         </footer>
@@ -262,11 +311,11 @@ export function LibraryPage({
 
       {deletingBook && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
           onClick={() => !deleteBusy && setDeletingBook(null)}
         >
           <div
-            className="w-full max-w-sm rounded-lg border border-border bg-bg-panel p-5 shadow-2xl"
+            className="w-full max-w-sm rounded-xl border border-border bg-bg-panel p-5 shadow-2xl animate-modal-in"
             onClick={(event) => event.stopPropagation()}
           >
             <h2 className="text-sm text-text-primary font-medium">移出这本书</h2>

@@ -248,11 +248,20 @@ async def delete_book(book_id: str, db: AsyncSession = Depends(get_db)):
     cover_paths = [book.cover_path, book.cover_thumb_path]
     fks = await _live_foreign_keys(db)
     owned: dict[str, set[Any]] = {"books": {bid}}
+    # Tables without an id column (composite-key tables such as
+    # agent_run_outputs / genre_profile_sources) cannot be collected or
+    # deleted by id. They are queued here and deleted directly via a
+    # book_id / FK column before the id-based cascade loop runs, so their
+    # foreign keys cannot block removal of the parent rows.
+    direct_deletes: list[tuple[str, str, list[Any]]] = []
 
     # Seed ownership from every live table that still carries book_id, even if
     # that table is not declared in the current ORM metadata.
     for table_name in await _tables_with_column(db, "book_id"):
-        if table_name == "books" or not await _table_has_column(db, table_name, "id"):
+        if table_name == "books":
+            continue
+        if not await _table_has_column(db, table_name, "id"):
+            direct_deletes.append((table_name, "book_id", [bid]))
             continue
         rows = await db.execute(
             text(f'SELECT id FROM "{table_name}" WHERE book_id = :bid'),
@@ -273,6 +282,7 @@ async def delete_book(book_id: str, db: AsyncSession = Depends(get_db)):
                 continue
             child_table = edge["child_table"]
             if not await _table_has_column(db, child_table, "id"):
+                direct_deletes.append((child_table, edge["child_column"], list(parent_ids)))
                 continue
             rows = await db.execute(
                 text(
@@ -314,6 +324,24 @@ async def delete_book(book_id: str, db: AsyncSession = Depends(get_db)):
                 bindparam("ids", expanding=True)
             ),
             {"ids": list(owned["chapter_step_runs"])},
+        )
+
+    # Delete composite-key / id-less tables first: they reference parent rows
+    # (agent_runs, genre_profiles, reference_samples) that the cascade loop
+    # below is about to remove, and their FKs would otherwise block that pass.
+    # Dedupe on (table, column) because FK expansion can queue the same table
+    # more than once via different edges (e.g. genre_profile_sources).
+    seen_direct: set[tuple[str, str]] = set()
+    for table_name, column, ids in direct_deletes:
+        key = (table_name, column)
+        if key in seen_direct or not ids:
+            continue
+        seen_direct.add(key)
+        await db.execute(
+            text(f'DELETE FROM "{table_name}" WHERE "{column}" IN :ids').bindparams(
+                bindparam("ids", expanding=True)
+            ),
+            {"ids": list(dict.fromkeys(ids))},
         )
 
     deleted_tables: set[str] = set()

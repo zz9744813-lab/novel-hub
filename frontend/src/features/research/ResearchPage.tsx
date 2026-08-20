@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../api";
 import { Loader2, Globe, Play, CheckCircle, XCircle } from "lucide-react";
+import { SourceSelector } from "../../components/SourceSelector";
 interface ResearchSource {
   name: string;
   base_url: string;
@@ -155,46 +156,50 @@ export function ResearchPage({ bookId }: { bookId?: string }) {
       </div>
 
       {/* Create new task form */}
-      <div className="panel-elevated rounded-md p-4 space-y-3">
-        <div className="flex gap-2">
-          <input
-            type="text"
-            placeholder="选择调研源（如：起点中文网）"
+      <div className="panel-elevated rounded-card p-5 space-y-4">
+        <h3 className="text-sm text-text-primary font-medium">新建调研任务</h3>
+        
+        <div className="space-y-3">
+          <SourceSelector
             value={newSourceName}
-            onChange={(e) => setNewSourceName(e.target.value)}
-            list="source-options"
-            className="flex-1 input text-xs"
+            onChange={setNewSourceName}
             disabled={!!creatingTask}
+            sources={sources}
           />
-          <datalist id="source-options">
-            {sources.map((s) => (
-              <option key={s.name} value={s.name} />
-            ))}
-          </datalist>
+          
+          <div>
+            <label className="block text-xs font-medium text-text-secondary mb-1.5">
+              目标 URL
+            </label>
+            <input
+              type="url"
+              placeholder="https://example.com/novel/chapters"
+              value={newSourceUrl}
+              onChange={(e) => setNewSourceUrl(e.target.value)}
+              disabled={!!creatingTask}
+              className="w-full input text-xs focus:ring-2 focus:ring-brand-muted focus:border-brand-accent"
+            />
+            <p className="text-2xs text-text-disabled mt-1">
+              支持小说章节列表页或单章详情页
+            </p>
+          </div>
+          
+          <button
+            onClick={handleCreateTask}
+            disabled={!newSourceName || !newSourceUrl || !!creatingTask}
+            className="btn-primary w-full py-2.5 px-3 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {creatingTask ? (
+              <>
+                <Loader2 size={14} className="animate-spin" /> 创建中...
+              </>
+            ) : (
+              <>
+                <Play size={14} /> 开始调研
+              </>
+            )}
+          </button>
         </div>
-        <input
-          type="url"
-          placeholder="目标 URL（小说章节列表页或详情页）"
-          value={newSourceUrl}
-          onChange={(e) => setNewSourceUrl(e.target.value)}
-          className="w-full input text-xs"
-          disabled={!!creatingTask}
-        />
-        <button
-          onClick={handleCreateTask}
-          disabled={!newSourceName || !newSourceUrl || !!creatingTask}
-          className="btn-primary w-full py-2 px-3 text-xs flex items-center justify-center gap-2 disabled:opacity-50"
-        >
-          {creatingTask ? (
-            <>
-              <Loader2 size={14} className="animate-spin" /> 创建中...
-            </>
-          ) : (
-            <>
-              <Play size={14} /> 开始调研
-            </>
-          )}
-        </button>
       </div>
 
       {/* Task list */}

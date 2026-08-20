@@ -19,6 +19,7 @@ import { PromptStudioPage } from "./features/prompt-studio/PromptStudioPage";
 import { WritingTasksPage } from "./features/tasks/WritingTasksPage";
 import { ReferencesLibraryPage } from "./features/references/ReferencesLibraryPage";
 import { SystemSettingsPage } from "./features/settings/SystemSettingsPage";
+import { ResearchPage } from "./features/research/ResearchPage";
 import {
   clearAdminToken,
   getAdminToken,
@@ -207,6 +208,9 @@ export default function App() {
         />
       );
     }
+    if (tab === "research") {
+      return <ResearchPage bookId={selectedBookId} />;
+    }
     if (tab === "settings") {
       return <SystemSettingsPage initialTab="models" />;
     }
@@ -215,16 +219,8 @@ export default function App() {
     // System-level tabs: always mount (no book gate) — pick book inside panel if needed
     if (tab === "context") return <SystemSettingsPage initialTab="context" />;
     if (tab === "genre") return <SystemSettingsPage initialTab="genre" />;
-    if (tab === "research") return <SystemSettingsPage initialTab="research" />;
-    if (!selectedBookId) {
-      return (
-        <EmptyBookHint
-          title="尚未选择小说"
-          tip="请先在「我的书架」选择或新建"
-          onNew={() => setShowCreate(true)}
-        />
-      );
-    }
+    // Research page handled above (no book gate)
+    
     switch (tab) {
       case "home":
         return (

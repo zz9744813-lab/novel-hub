@@ -334,7 +334,7 @@ export function ChapterList({ bookId }: { bookId: string }) {
           <p className="text-xs">请先在「大纲依赖」中解析大纲</p>
         </div>
       ) : (
-        <div className="space-y-1.5">
+        <div className="space-y-2">
           {rows.map((n) => {
             const ch = chapters.get(n.chapter_no);
             const sc = getStatus(ch?.status);
@@ -351,7 +351,8 @@ export function ChapterList({ bookId }: { bookId: string }) {
                 className={clsx(
                   "row-item group/row",
                   ch?.status === "finalized" && "border-success/20",
-                  isActive ? "border-brand/30 bg-brand-muted/40" : ""
+                  isActive ? "border-brand/30 bg-brand-muted/40" : "",
+                  isActive && "shadow-[inset_3px_0_8px_-3px_rgba(139,142,255,0.5)]"
                 )}
               >
                 <div className="shrink-0 w-9 h-9 rounded-md bg-brand-muted/60 border border-brand/20 flex items-center justify-center transition-colors duration-150 group-hover/row:bg-brand-muted group-hover/row:border-brand/30">
@@ -474,8 +475,8 @@ export function ChapterList({ bookId }: { bookId: string }) {
       )}
 
       {(humanDetail || runDetail) && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => { setHumanDetail(null); setRunDetail(null); }}>
-          <div className="bg-bg-elevated border border-border rounded-lg max-w-lg w-full max-h-[80vh] overflow-auto p-4 space-y-3" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => { setHumanDetail(null); setRunDetail(null); }}>
+          <div className="bg-bg-elevated border border-border rounded-xl max-w-lg w-full max-h-[80vh] overflow-auto p-4 space-y-3 animate-modal-in" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
               <h3 className="text-sm text-text-primary" style={{ fontWeight: 510 }}>Run / 待人工</h3>
               <button className="text-2xs text-text-disabled" onClick={() => { setHumanDetail(null); setRunDetail(null); }}>关闭</button>

@@ -86,7 +86,7 @@ export function Sidebar({
         onClick={() => !disabled && setTab(t.id)}
         title={disabled ? "请先选择一本小说" : undefined}
         className={clsx(
-          "group w-full flex items-center gap-2.5 px-3 py-[7px] rounded text-xs text-left transition-all duration-100 relative",
+          "group w-full flex items-center gap-2.5 px-3 py-2.5 rounded text-xs text-left transition-all duration-150 relative",
           active
             ? "bg-brand-muted text-brand-accent"
             : disabled
@@ -94,7 +94,7 @@ export function Sidebar({
             : "text-text-tertiary hover:bg-bg-hover hover:text-text-secondary"
         )}
       >
-        {active && <span className="absolute left-0 top-1/2 -translate-y-1/2 h-4 w-0.5 rounded-r-full bg-brand-accent" aria-hidden="true" />}
+        {active && <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-0.5 rounded-r-full bg-brand-accent" style={{ boxShadow: "0 0 8px rgba(139,142,255,0.5)" }} aria-hidden="true" />}
         <Icon size={14} className={active ? "text-brand-accent" : disabled ? "text-text-disabled" : "text-text-disabled group-hover:text-text-tertiary"} />
         <div className="flex-1 min-w-0">
           <div style={{ fontWeight: active ? 510 : 400 }}>{t.label}</div>
@@ -105,9 +105,9 @@ export function Sidebar({
   };
 
   return (
-    <aside className="w-56 bg-bg-panel border-r border-border flex flex-col shrink-0">
+    <aside className="w-60 bg-bg-panel border-r border-border flex flex-col shrink-0">
       <div className="h-11 flex items-center px-4 border-b border-border">
-        <BookOpen size={15} className="text-brand" />
+        <BookOpen size={15} className="text-brand-accent" />
         <span className="ml-2 text-xs text-text-primary tracking-wide" style={{ fontWeight: 510 }}>
           NovelForge
         </span>
@@ -186,10 +186,12 @@ export function Sidebar({
         <button
           type="button"
           onClick={onNewBook}
-          className="btn-primary w-full flex items-center justify-center gap-1.5 py-[7px] text-xs rounded-md"
+          className="btn-primary w-full flex items-center justify-center gap-1.5 py-2.5 text-xs rounded-lg"
+          title="新建小说 (Ctrl/Cmd+N)"
         >
-          <Plus size={13} />
+          <Plus size={14} />
           新建小说
+          <kbd className="ml-1 text-2xs opacity-50 hidden sm:inline">⌘N</kbd>
         </button>
       </div>
     </aside>

@@ -155,10 +155,12 @@ export function BookHomePage({
   }
 
   return (
-    <div className="h-full overflow-auto p-4 md:p-6 space-y-5">
+    <div className="h-full overflow-auto p-4 md:p-6 space-y-6">
+      {/* Hero panel — 封面+标题+统计+按钮 整合 */}
+      <div className="panel-elevated rounded-xl p-5 md:p-6" style={{ background: "linear-gradient(135deg, rgba(107,122,255,0.04) 0%, rgba(255,255,255,0.02) 50%, rgba(139,142,255,0.02) 100%)" }}>
       <div className="flex flex-col md:flex-row gap-5">
         <div
-          className="w-full md:w-40 h-56 rounded-lg shrink-0 border border-border shadow-md"
+          className="w-full md:w-40 h-56 rounded-lg shrink-0 border border-border shadow-md overflow-hidden"
           style={{ background: style?.background || "#1a1a2e" }}
         >
           {coverSrc ? (
@@ -166,7 +168,7 @@ export function BookHomePage({
           ) : null}
         </div>
         <div className="flex-1 min-w-0">
-          <h1 className="text-lg text-text-primary" style={{ fontWeight: 510 }}>
+          <h1 className="text-xl text-text-primary" style={{ fontWeight: 590 }}>
             {book?.title}
           </h1>
           {(book?.logline || profile?.logline) && (
@@ -179,7 +181,7 @@ export function BookHomePage({
               </span>
             ))}
             {book?.genre && !(book?.tags || []).includes(book.genre) && (
-              <span className="text-2xs border border-border rounded px-2 py-0.5 text-text-secondary">
+              <span className="text-2xs border border-brand/30 rounded px-2 py-0.5 text-brand-accent">
                 {book.genre}
               </span>
             )}
@@ -216,6 +218,7 @@ export function BookHomePage({
             <p className="text-xs text-brand-accent mt-3">{book.active_task.label}</p>
           )}
         </div>
+      </div>
       </div>
 
       {isBlankBook && (planning?.status === "approved" ? (
@@ -318,15 +321,11 @@ export function BookHomePage({
         </section>
       ))}
 
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Mini icon={Users} label="人物" value={counts.characters ?? 0} />
         <Mini icon={MapPin} label="地点" value={counts.locations ?? 0} />
-        <Mini icon={Map} label="世界规则" value={counts.world_rules ?? 0} />
-        <Mini icon={GitBranch} label="大纲" value={counts.outline_nodes ?? 0} />
+        <Mini icon={GitBranch} label="大纲 / 卷" value={`${counts.outline_nodes ?? 0} / ${counts.volumes ?? 0}`} />
         <Mini icon={ScrollText} label="剧情线" value={counts.plot_threads ?? 0} />
-        <Mini icon={BookOpen} label="写作规则" value={counts.writing_constraints ?? 0} />
-        <Mini icon={GitBranch} label="卷" value={counts.volumes ?? 0} />
-        <Mini icon={Users} label="关系" value={counts.relationships ?? 0} />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -382,9 +381,9 @@ function Stat({ label, value, accent }: { label: string; value: string; accent?:
     ? "border-brand/25 hover:border-brand/40"
     : "hover:border-border-strong";
   return (
-    <div className={`panel-elevated rounded-md px-3 py-2 transition-colors duration-150 ${accentClass}`}>
+    <div className={`panel-elevated rounded-lg px-4 py-3 transition-all duration-150 ${accentClass} hover:translate-y-[-1px]`}>
       <div className="text-2xs text-text-disabled">{label}</div>
-      <div className={`text-sm mt-0.5 font-mono ${accent === "success" ? "text-emerald-300" : accent === "brand" ? "text-brand-accent" : "text-text-primary"}`}>
+      <div className={`text-base mt-1 font-mono ${accent === "success" ? "text-emerald-300" : accent === "brand" ? "text-brand-accent" : "text-text-primary"}`}>
         {value}
       </div>
     </div>
@@ -403,11 +402,11 @@ function Mini({
   small?: boolean;
 }) {
   return (
-    <div className="panel rounded-md p-3 flex items-start gap-2 transition-colors duration-150 hover:border-border-strong">
-      <Icon size={14} className="text-brand-accent mt-0.5 shrink-0" />
+    <div className="panel-elevated rounded-lg p-4 flex items-start gap-3 transition-all duration-150 hover:border-border-strong hover:translate-y-[-1px]">
+      <Icon size={18} className="text-brand-accent mt-0.5 shrink-0" />
       <div className="min-w-0">
         <div className="text-2xs text-text-disabled">{label}</div>
-        <div className={small ? "text-xs text-text-secondary mt-0.5" : "text-sm text-text-primary font-mono mt-0.5"}>
+        <div className={small ? "text-xs text-text-secondary mt-0.5" : "text-lg text-text-primary font-mono mt-0.5"}>
           {value}
         </div>
       </div>

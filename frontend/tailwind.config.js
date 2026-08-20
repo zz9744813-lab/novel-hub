@@ -3,33 +3,35 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Backgrounds — luminance stacking
+        // Backgrounds — luminance stacking (brightened for visible layers)
         bg: {
-          canvas:   "#08090a",
-          panel:    "#0f1011",
-          surface:  "#191a1b",
-          hover:    "#28282c",
+          canvas:   "#0c0d10",
+          panel:    "#131418",
+          surface:  "#1c1e23",
+          hover:    "#2a2d34",
+          elevated: "#222529",
+          base:     "#0a0b0e",
         },
-        // Borders — semi-transparent white
+        // Borders — visible white overlays
         border: {
-          DEFAULT:  "rgba(255,255,255,0.06)",
-          subtle:   "rgba(255,255,255,0.04)",
-          standard: "rgba(255,255,255,0.08)",
-          strong:   "rgba(255,255,255,0.12)",
+          DEFAULT:  "rgba(255,255,255,0.08)",
+          subtle:   "rgba(255,255,255,0.05)",
+          standard: "rgba(255,255,255,0.10)",
+          strong:   "rgba(255,255,255,0.16)",
         },
         // Text — four-tier
         text: {
-          primary:   "#f7f8f8",
-          secondary: "#d0d6e0",
-          tertiary:  "#8a8f98",
-          disabled:  "#62666d",
+          primary:   "#f5f6f8",
+          secondary: "#c8cdd6",
+          tertiary:  "#7a808c",
+          disabled:  "#50545c",
         },
-        // Brand — indigo-violet
+        // Brand — indigo-violet (brightened for dark bg)
         brand: {
-          DEFAULT: "#5e6ad2",
-          accent:  "#7170ff",
-          hover:   "#828fff",
-          muted:   "rgba(94,106,210,0.12)",
+          DEFAULT: "#6b7aff",
+          accent:  "#8b8eff",
+          hover:   "#a0a3ff",
+          muted:   "rgba(107,122,255,0.14)",
         },
         // Semantic — low saturation
         success: { DEFAULT: "#27a644", muted: "rgba(39,166,68,0.12)" },

@@ -25,7 +25,7 @@ import {
   verifyAdminToken,
   api,
 } from "./api";
-import { ArrowLeft, Download, Loader2, Moon, Sun } from "lucide-react";
+import { ArrowLeft, Download, Loader2, Moon, Sun, Plus } from "lucide-react";
 import { applyTheme, getStoredTheme, type ThemeMode } from "./theme";
 
 type Tab =
@@ -62,6 +62,21 @@ export default function App() {
   useEffect(() => {
     applyTheme(theme);
   }, [theme]);
+
+  useEffect(() => {
+    if (!authed) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "n") {
+        e.preventDefault();
+        setShowCreate(true);
+      }
+      if (e.key === "Escape") {
+        if (showCreate) setShowCreate(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [authed, showCreate]);
 
   useEffect(() => {
     const onUnauth = () => setAuthed(false);

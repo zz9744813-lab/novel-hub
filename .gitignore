@@ -11,6 +11,7 @@ deploy/.env
 
 # 数据目录
 data/
+!data/*.json  # 保留书源配置文件
 *.db
 *.sqlite
 *.sqlite3

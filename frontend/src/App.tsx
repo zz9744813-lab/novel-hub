@@ -11,6 +11,7 @@ import { ModelBindingPanel } from "./components/ModelBindingPanel";
 import { GenreProfilePanel } from "./components/GenreProfilePanel";
 import { ResearchPanel } from "./components/ResearchPanel";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { FluidBackground } from "./components/FluidBackground";
 import { LibraryPage } from "./features/library/LibraryPage";
 import { BookHomePage } from "./features/book/BookHomePage";
 import { ImportWizard } from "./features/import/ImportWizard";
@@ -156,8 +157,9 @@ export default function App() {
 
   if (!authed) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-bg-canvas p-6">
-        <div className="panel-elevated rounded-card p-8 w-full max-w-sm space-y-4">
+      <div className="login-shell min-h-screen flex items-center justify-center bg-bg-canvas p-6">
+        <FluidBackground />
+        <div className="panel-elevated rounded-card p-8 w-full max-w-sm space-y-4 relative z-10">
           <div>
             <h1 className="text-h2 text-text-primary" style={{ fontWeight: 590 }}>
               NovelForge 登录

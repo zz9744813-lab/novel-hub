@@ -4,6 +4,7 @@ import { BookCard } from "./BookCard";
 import { BookshelfBook, LIFECYCLE_LABEL } from "./library.types";
 import { LibraryEmptyState } from "./LibraryEmptyState";
 import { BookOpen, Filter, LayoutGrid, Loader2, Plus, Search, X, ArrowUpRight, BookText, FileText, ListChecks } from "lucide-react";
+import { FluidBackground } from "../../components/FluidBackground";
 
 function formatWords(value: number): string {
   if (value >= 10000) return `${(value / 10000).toFixed(1)} 万`;
@@ -92,6 +93,7 @@ export function LibraryPage({
 
   return (
     <div className="library-page h-full overflow-auto">
+      <FluidBackground />
       <div className="library-page-inner">
         {/* ── 左主右辅工作台头部 ── */}
         <header className="library-workspace-head">

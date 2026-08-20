@@ -327,8 +327,11 @@ input:focus, textarea:focus, button:focus-visible {
 }
 
 /* Library workspace (v8.1 baseline: flat cards on app tokens) */
-.library-page { background: radial-gradient(circle at 78% -22%, rgba(107,122,255,.07), transparent 42%), var(--app-canvas); }
-.library-page-inner { max-width: 1500px; margin: 0 auto; padding: 34px clamp(18px, 4vw, 56px) 44px; }
+/* Dark mode: background comes from the WebGL fluid canvas; keep this transparent */
+.library-page { background: transparent; }
+.library-page-inner { position: relative; z-index: 1; max-width: 1500px; margin: 0 auto; padding: 34px clamp(18px, 4vw, 56px) 44px; }
+/* Login screen shares the fluid backdrop in dark mode */
+.login-shell { background: transparent; }
 .library-eyebrow { display: flex; align-items: center; gap: 7px; color: #8b8eff; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; }
 .library-new-book { padding: 9px 14px; white-space: nowrap; }
 
@@ -524,6 +527,8 @@ button, a, .row-item, .panel, .stat-card {
 :root[data-theme="light"] .border-border-standard,
 :root[data-theme="light"] .border-border-subtle { border-color: var(--app-border) !important; }
 :root[data-theme="light"] .hover\:bg-bg-hover:hover { background-color: var(--app-hover) !important; }
+:root[data-theme="light"] .fluid-bg { display: none; }
+:root[data-theme="light"] .login-shell { background: var(--app-canvas); }
 :root[data-theme="light"] .library-page {
   background: radial-gradient(circle at 78% -22%, rgba(107,122,255,.08), transparent 42%), var(--app-canvas);
 }

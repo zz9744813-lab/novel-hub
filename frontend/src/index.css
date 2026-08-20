@@ -150,6 +150,12 @@ body {
   box-shadow: none;
 }
 
+/* ── Diff Viewer styles ── */
+.diff-viewer { font-family: "Source Han Serif SC", "Noto Serif SC", serif; }
+.diff-insert { background-color: rgba(39,166,68,0.08); border-left: 2px solid #27a644; padding-left: 8px; }
+.diff-delete { color: var(--app-disabled); border-bottom: 1px dashed var(--app-border); text-decoration: line-through; }
+.diff-equal { color: var(--app-text); margin: 0 0 8px; }
+
 .btn-danger {
   display: inline-flex;
   align-items: center;

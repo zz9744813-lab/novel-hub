@@ -241,7 +241,12 @@ export default function App() {
           />
         );
       case "outline":
-        return <OutlineGraph bookId={selectedBookId} />;
+        return (
+          <OutlineGraph
+            bookId={selectedBookId}
+            nodes={[]} // TODO: Fetch outline nodes from API (placeholder)
+          />
+        );
       case "chapters":
       case "writing":
         return <ChapterList bookId={selectedBookId} />;

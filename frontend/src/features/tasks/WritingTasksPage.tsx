@@ -98,19 +98,61 @@ export function WritingTasksPage() {
     }
   };
 
-  const activeCount = items.filter((item) => !["completed", "succeeded", "failed", "cancelled", "finalized"].includes(item.status)).length;
+  const completedCount = items.filter((item) => ["completed", "succeeded", "finalized"].includes(item.status)).length;
+  const failedCount = items.filter((item) => ["failed", "needs_human", "resource_blocked", "blocked_by_dependency"].includes(item.status)).length;
+  const activeCount = items.filter((item) => !["completed", "succeeded", "failed", "cancelled", "finalized", "needs_human"].includes(item.status)).length;
   const humanCount = items.filter((item) => item.status === "needs_human").length;
 
   return (
     <div className="h-full overflow-auto p-4 md:p-6 space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-base text-text-primary" style={{ fontWeight: 510 }}>写作任务</h1>
+          <h1 className="text-xl text-text-primary" style={{ fontWeight: 590 }}>写作任务</h1>
           <p className="text-xs text-text-tertiary mt-0.5">统一任务中心 · 可筛选、分页和控制运行状态</p>
         </div>
         <button onClick={() => void load()} className="btn-ghost text-xs py-1.5 px-3 flex items-center gap-1.5" disabled={loading}>
           <RefreshCw size={12} className={loading ? "animate-spin" : ""} /> 刷新
         </button>
+      </div>
+
+      {/* 概览面板 */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="panel-elevated rounded-lg p-4 flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-brand-muted flex items-center justify-center shrink-0">
+            <Loader2 size={18} className="text-brand-accent animate-spin" style={{ animationDuration: activeCount ? "1s" : "0s" }} />
+          </div>
+          <div>
+            <div className="text-2xs text-text-disabled">运行中</div>
+            <div className="text-lg text-text-primary font-mono">{activeCount}</div>
+          </div>
+        </div>
+        <div className="panel-elevated rounded-lg p-4 flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-warning-muted flex items-center justify-center shrink-0">
+            <AlertTriangle size={18} className="text-warning" />
+          </div>
+          <div>
+            <div className="text-2xs text-text-disabled">待人工</div>
+            <div className="text-lg text-text-primary font-mono">{humanCount}</div>
+          </div>
+        </div>
+        <div className="panel-elevated rounded-lg p-4 flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-success-muted flex items-center justify-center shrink-0">
+            <CheckCircle2 size={18} className="text-success" />
+          </div>
+          <div>
+            <div className="text-2xs text-text-disabled">已完成</div>
+            <div className="text-lg text-text-primary font-mono">{completedCount}</div>
+          </div>
+        </div>
+        <div className="panel-elevated rounded-lg p-4 flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-danger-muted flex items-center justify-center shrink-0">
+            <AlertTriangle size={18} className="text-danger" />
+          </div>
+          <div>
+            <div className="text-2xs text-text-disabled">失败</div>
+            <div className="text-lg text-text-primary font-mono">{failedCount}</div>
+          </div>
+        </div>
       </div>
 
       <div className="panel-elevated rounded-lg p-3 flex flex-wrap items-center gap-2">

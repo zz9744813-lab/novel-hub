@@ -199,10 +199,13 @@ export function ResearchPage({ bookId }: { bookId?: string }) {
       </div>
 
       {/* Create new task form */}
-      <div className="panel-elevated rounded-card p-5 space-y-4">
-        <h3 className="text-sm text-text-primary font-medium">新建调研任务</h3>
+      <div className="panel-elevated rounded-card p-5 space-y-4 animate-fade-in" style={{ animationDuration: "200ms" }}>
+        <h3 className="text-sm text-text-primary font-medium flex items-center gap-2">
+          <Play size={16} className="text-brand-accent" />
+          新建调研任务
+        </h3>
         
-        <div className="space-y-3">
+        <div className="space-y-4">
           <SourceSelector
             value={newSourceName}
             onChange={setNewSourceName}
@@ -220,9 +223,10 @@ export function ResearchPage({ bookId }: { bookId?: string }) {
               value={newSourceUrl}
               onChange={(e) => setNewSourceUrl(e.target.value)}
               disabled={!!creatingTask}
-              className="w-full input text-xs focus:ring-2 focus:ring-brand-muted focus:border-brand-accent"
+              className="w-full input text-xs py-2.5 px-3 focus:ring-2 focus:ring-brand-muted focus:border-brand-accent transition-all duration-150"
             />
-            <p className="text-2xs text-text-disabled mt-1">
+            <p className="text-2xs text-text-disabled mt-1.5 flex items-center gap-1">
+              <Globe size={10} />
               支持小说章节列表页或单章详情页
             </p>
           </div>
@@ -230,25 +234,47 @@ export function ResearchPage({ bookId }: { bookId?: string }) {
           <button
             onClick={handleCreateTask}
             disabled={!newSourceName || !newSourceUrl || !!creatingTask}
-            className="btn-primary w-full py-2.5 px-3 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="btn-primary w-full py-2.5 px-3 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl transition-all duration-200 transform hover:-translate-y-0.5"
           >
             {creatingTask ? (
               <>
-                <Loader2 size={14} className="animate-spin" /> 创建中...
+                <Loader2 size={14} className="animate-spin" />
+                创建中...
               </>
             ) : (
               <>
-                <Play size={14} /> 开始调研
+                <Play size={14} />
+                开始调研
               </>
             )}
           </button>
         </div>
       </div>
 
-      {/* Task list */}
+      {/* Task list header */}
+      <h2 className="text-sm text-text-secondary font-medium mb-3 flex items-center gap-2">
+        <Loader2 size={14} className="animate-spin" style={{ animationDuration: "3s" }} />
+        正在进行的任务
+      </h2>
+      
+      {/* Error notification */}
+      {error && (
+        <div className="flex items-start gap-2 px-4 py-3 bg-red-400/10 border border-red-400/20 rounded-md animate-fade-in">
+          <AlertTriangle size={16} className="text-danger shrink-0 mt-0.5" />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs text-danger font-medium">{error}</p>
+            <button
+              onClick={() => setError(null)}
+              className="mt-1 text-xs text-text-secondary underline hover:text-text-primary"
+            >
+              关闭提示
+            </button>
+          </div>
+        </div>
+      )}
+      
+      {/* Task list section */}
       <div className="space-y-3">
-        <h2 className="text-sm text-text-secondary font-medium">正在进行的任务</h2>
-        
         {loading ? (
           <div className="flex items-center justify-center py-8 text-text-tertiary text-xs gap-2">
             <Loader2 size={16} className="animate-spin" /> 加载中…
@@ -259,8 +285,12 @@ export function ResearchPage({ bookId }: { bookId?: string }) {
           </div>
         ) : (
           <div className="space-y-2">
-            {tasks.map((task) => (
-              <div key={task.id} className="panel-elevated rounded-md p-3.5">
+            {tasks.map((task, index) => (
+              <div
+                key={task.id}
+                className="panel-elevated rounded-card p-4 transition-all duration-200 hover:shadow-lg animate-modal-in"
+                style={{ animationDelay: `${index * 50}ms` }}
+              >
                 <div className="flex items-start gap-3">
                   <div className="mt-0.5">{getStatusIcon(task.status)}</div>
                   <div className="min-w-0 flex-1">
@@ -276,7 +306,7 @@ export function ResearchPage({ bookId }: { bookId?: string }) {
                     </div>
                     
                     {/* Progress bar */}
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 mb-2">
                       <div className="flex-1 h-2 bg-bg-surface rounded-full overflow-hidden">
                         <div
                           className={`h-full ${

@@ -1,58 +1,34 @@
 # Research Scraping Feature - Quick Start Guide
 
-This guide provides step-by-step instructions for setting up and using NovelForge's external research scraping functionality, which implements So Novel rule engine concepts in Python.
+Complete guide for setting up and using NovelForge's external research scraping functionality powered by So Novel rules engine.
+
+---
 
 ## Prerequisites
 
-- Python 3.10+ 
-- Node.js 18+ (for frontend)
+- Python 3.10+ installed
+- Node.js 18+ (for frontend development)
 - SQLite 3.x (bundled with Python)
 
-## Dependencies Installation
+---
 
-### Backend Dependencies
+## Installation Steps
+
+### Step 1: Install Backend Dependencies
 
 ```bash
 cd novel-hub/backend
 
-# Install Python dependencies
-pip install httpx beautifulsoup4 lxml aiohttp pydantic fastapi uvicorn ebooklib reportlab
+# Install all required Python packages
+pip install httpx beautifulsoup4 lxml aiohttp pydantic fastapi uvicorn ebooklib reportlab pytest pytest-asyncio
 
 # Verify installation
 python -c "import httpx; import bs4; print('✅ All dependencies installed')"
 ```
 
-### Frontend Dependencies
+### Step 2: Configure Research Sources
 
-```bash
-cd novel-hub/frontend
-
-# Install additional packages (if not already done)
-npm install @xyflow/react
-
-# Verify build works
-npm run build
-```
-
-## Step 1: Import Existing Rules (Optional)
-
-So Novel's rule configurations can be imported and converted:
-
-```bash
-cd novel-hub/backend
-
-# Run the importer script
-python -m scripts.import_sonovel_rules --dry-run
-
-# Or save to actual configuration file
-python -m scripts.import_sonovel_rules
-```
-
-This creates `data/research_sources.json` with sample rules.
-
-## Step 2: Configure Research Sources
-
-Edit `backend/data/research_sources.json` or add sources via API:
+Create a configuration file at `backend/data/research_sources.json`:
 
 ```json
 {
@@ -69,102 +45,221 @@ Edit `backend/data/research_sources.json` or add sources via API:
       "output_format": "txt",
       "encoding": "utf-8",
       "rate_limit": 1.0,
-      "description": "Mainstream Chinese web novel platform"
+      "description": "Mainstream Chinese web novel platform",
+      "tags": ["novel", "fiction", "chinese"]
     }
   ]
 }
 ```
 
-**Selector Tips:**
+**Selector Tips**:
+- **CSS Class**: `.chapter-title`
+- **CSS ID**: `#chapter-content`  
+- **Tag + Class**: `div.content`
+- **Attribute**: `a[href*="/ch"]`
 
-| Selector Type | Example | Purpose |
-|---|---|---|
-| CSS Class | `.chapter-title` | Match by class name |
-| CSS ID | `#chapter-content` | Match by ID |
-| Tag + Class | `div.content` | Combine tag and class |
-| Attribute | `a[href*="/ch"]` | Match attribute pattern |
-
-## Step 3: Start Backend Server
-
-```bash
-cd novel-hub/backend
-
-# Launch FastAPI dev server
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-Verify endpoints are available:
-
-```bash
-curl http://localhost:8000/api/research/sources
-# Should return list of configured sources
-```
-
-## Step 4: Start Frontend Application
+### Step 3: Install Frontend Dependencies
 
 ```bash
 cd novel-hub/frontend
 
-# Launch Vite dev server
+# Install additional UI libraries
+npm install @hookform/resolvers zod react-hook-form
+
+# Verify build works
+npm run build
+```
+
+Expected output:
+```
+dist/index.html                   1.00 kB ✓gzip:   0.62 kB
+dist/assets/index-*.css           61.98 kB ✓gzip:  12.93 kB
+dist/assets/index-*.js           486.34 kB ✓gzip: 147.37 kB
+built in X.XXs
+```
+
+---
+
+## Running the Application
+
+### Start Backend Server
+
+```bash
+cd novel-hub/backend
+
+# Option A: Using uvicorn directly
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+# Option B: Using Python module
+python -m uvicorn app.main:app --reload
+```
+
+Success indicator:
+```
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started server process [XXXX]
+INFO:     Waiting for application startup.
+Readiness OK: {...}
+```
+
+### Start Frontend Development Server
+
+Open another terminal window:
+
+```bash
+cd novel-hub/frontend
+
 npm run dev
 ```
 
-Navigate to `http://localhost:5173` and access the **"调研"** tab from sidebar.
+Success indicator:
+```
+VITE ready in XXX ms
+➜  Local:   http://localhost:5173/
+```
 
-## Step 5: Create Research Task
+---
 
-1. In ResearchPage UI, enter:
-   - **Source Name**: Select from dropdown (e.g., "起点中文网示例")
-   - **Target URL**: Full chapter listing page URL
-   
-2. Click **"开始调研"** button
+## Using the Research Feature
 
-3. Monitor progress in real-time:
-   - Progress bar shows percentage completed
-   - Chapter count updates as scraping advances
-   - Error messages appear if extraction fails
+### 1. Access Research Page
 
-## Step 6: Export Results
+1. Navigate to http://localhost:5173
+2. Click **"调研"** tab from sidebar navigation
+3. You should see the ResearchPage with Source Selector dropdown
 
-Once task status is "completed":
+### 2. Create New Scraping Task
 
-1. Open backend terminal where task was running
-2. Navigate to export directory:
-   ```bash
-   cd novel-hub/backend/data/research_exports
-   ls -l  # Should show exported files
-   ```
+Fill out the form:
 
-3. Export formats generated:
-   - `{task_id}_export.txt` - Plain text version
-   - `{task_id}_export.epub` - Readable eBook format
-   - `{task_id}_export.pdf` - A5 formatted document
+1. **Source Selection**: Choose from dropdown (e.g., "起点中文网示例")
+2. **Target URL**: Enter chapter list or single chapter page URL
+3. **Submit**: Click "开始调研" button
 
-## Common Issues & Solutions
+Form validation examples:
 
-### Issue 1: "Failed to fetch URL"
+✅ Valid:
+- Source: Any configured source name
+- URL: `https://example.com/novel/chapter-1`
 
-**Cause**: Target website blocked scraper's User-Agent
+❌ Invalid:
+- Empty source selection
+- URL: `example.com/no-scheme` → "URL 格式不正确，请以 https:// 开头"
+- Missing fields → "请选择调研源" / "请输入目标 URL"
 
-**Solution**: Add headers to request:
+### 3. Monitor Progress
+
+While task is running:
+
+- Progress bar fills smoothly (0% → 100%)
+- Chapter count updates in real-time
+- Spinner icon pulses until completion
+- Last error messages expandable if failures occur
+
+Status indicators:
+- 🟢 Green check = Completed successfully
+- 🟡 Yellow spinner = Currently scraping  
+- 🔴 Red X = Failed with error details
+- ⚪ Gray globe = Pending queue
+
+### 4. Export Results
+
+After completion, use the export endpoint:
+
+```bash
+curl -X POST "http://localhost:8000/api/research/tasks/{task_id}/export?format=epub" \
+  -H "Authorization: Bearer YOUR_TOKEN_HERE"
+```
+
+Export formats supported:
+- **TXT**: Plain text file with chapter structure
+- **EPUB**: Readable eBook format (requires Calibre for viewing)
+- **PDF**: A5 formatted document (professional layout)
+
+---
+
+## Configuration & Customization
+
+### Adjust Rate Limiting
+
+For faster scraping (risk of blocking), increase `rate_limit`:
+
+```json
+{
+  "rate_limit": 2.0,  // Allow 2 requests per second instead of default 0.5
+  ...
+}
+```
+
+Recommended range: `0.5 - 5.0`
+
+### Add Custom User-Agent
+
+Edit `workbench/collab/research_scraper.py`:
 
 ```python
-# In workbench/collab/research_scraper.py
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)...",
     "Accept-Language": "zh-CN,zh;q=0.9",
 }
 ```
 
+This prevents basic bot detection on some websites.
+
+### Custom Genre Extraction Heuristics
+
+Edit `backend/app/services/research_to_reference.py`:
+
+The `extract_genre_hint()` method uses keyword matching. Add your own patterns:
+
+```python
+genre_keywords = {
+    "奇幻": ["magic", "spell", "wizard", "dragon", "你的关键词"],
+    "科幻": ["robot", "space", "alien", "technology", "你的关键词"],
+    # ... etc
+}
+```
+
+For production-grade genre detection, replace with BERT/NLP model integration.
+
+---
+
+## Debugging Mode
+
+Enable detailed logging during scraping:
+
+```bash
+# Terminal 1: Backend with debug logs
+uvicorn app.main:app --reload --log-level debug
+
+# Terminal 2: Frontend
+npm run dev
+```
+
+Debug output shows:
+- Each HTTP request URL being fetched
+- Chapter extraction results
+- Error stack traces for parsing failures
+
+---
+
+## Common Issues & Solutions
+
+### Issue 1: "Failed to fetch URL"
+
+**Cause**: Target website blocks scraper's User-Agent
+
+**Solution**: Rotate User-Agents or add proxy support
+
 ### Issue 2: "No chapters found"
 
-**Cause**: Selectors don't match current page structure
+**Cause**: CSS selectors don't match current page structure
 
-**Solution**: Use browser DevTools to inspect and update selectors:
-
-1. Right-click chapter link → Inspect Element
-2. Copy CSS selector from highlighted element
-3. Update `chapter_list_selector` in config
+**Solution**: 
+1. Open browser DevTools
+2. Right-click target chapter → Inspect Element
+3. Copy CSS selector
+4. Update `chapter_list_selector` in config
 
 ### Issue 3: "Garbled text in extracted content"
 
@@ -174,30 +269,34 @@ headers = {
 
 ```json
 {
-  "encoding": "gb2312",  // or "big5" for Traditional Chinese
-  ...
+  "encoding": "gb2312",  // Traditional Chinese variant
+  "output_format": "txt"
 }
 ```
 
+Common encodings:
+- UTF-8 (default, modern sites)
+- GB2312 (legacy Simplified Chinese)
+- Big5 (Traditional Chinese/Taiwan)
+- Shift-JIS (Japanese sites)
+
+---
+
 ## Testing Locally
 
-Run unit tests to verify implementation:
+Run unit tests:
 
 ```bash
-cd novel-hub/tests
+cd novel-hub/backend
 
-# Run parser tests
-pytest test_research_parser.py -v
+# Run all research-related tests
+python -m pytest tests/test_research_parser.py tests/test_research_e2e.py -v
 
-# Run integration tests  
-pytest test_research_integration.py -v
-
-# Run both with coverage
+# With coverage metrics
 pytest tests/ -v --cov=app --cov=workbench
 ```
 
 Expected output:
-
 ```
 test_research_parser.py::TestResearchParser::test_initialization PASSED
 test_research_parser.py::TestResearchParser::test_parse_chapter_list_with_html PASSED
@@ -206,34 +305,66 @@ test_research_parser.py::TestResearchParser::test_parse_chapter_list_with_html P
 ===================== 8 passed in 0.34s =====================
 ```
 
-## Next Steps
+---
 
-### Production Deployment
+## Production Deployment Checklist
 
-1. **Task Queue**: Replace in-memory queue with Redis/RabbitMQ
-2. **Proxy Pool**: Add rotating proxy support for large-scale scraping
-3. **Rate Limiting**: Implement global rate limiter across all sources
-4. **Database Migration**: Switch from SQLite to PostgreSQL for multi-user support
+Before deploying to production environment:
 
-### Extending to New Sources
+- [ ] Set `ADMIN_API_TOKEN` environment variable
+- [ ] Configure CORS origins (`ADMIN_CORS_ORIGINS`)
+- [ ] Switch from SQLite to PostgreSQL for multi-user support
+- [ ] Replace Redis queue system for background tasks
+- [ ] Implement rotating proxy pool for anti-blocking
+- [ ] Set up monitoring/logging service
+- [ ] Test with real-world URLs under load
 
-For each new target website:
-
-1. Visit target site and identify page structure
-2. Extract CSS/XPath selectors using browser tools
-3. Test selectors with Sample HTML
-4. Add to `research_sources.json`
-5. Validate with `import_sonovel_rules.py --dry-run`
+---
 
 ## API Reference
 
-Full API specification: [`docs/contracts/research-api.md`](./docs/contracts/research-api.md)
+Full API specification available at: [`docs/contracts/research-api.md`](./docs/contracts/research-api.md)
+
+Includes curl command examples, authentication requirements, and rate limiting policies.
+
+---
 
 ## Contributing
 
-When adding new source rules:
+When adding new research source rules:
 
-- Include detailed comments explaining selector rationale
-- Provide sample URLs for testing
-- Update documentation with any new features
-- Add unit tests covering edge cases
+1. ✅ Include detailed comments explaining selector rationale
+2. ✅ Provide sample URLs for testing each source type
+3. ✅ Update documentation with any new features added
+4. ✅ Add unit tests covering edge cases (empty pages, timeouts, errors)
+
+Example rule template:
+```json
+{
+  "name": "TargetWebsiteName",
+  "base_url": "https://target.website",
+  "chapter_list_selector": "li.chapter-item > a[href]",
+  "title_selector": ".chapter-title",
+  "content_selector": ".chapter-content p",
+  "pagination_selector": "a.next-page[rel='next']",
+  "output_format": "txt",
+  "encoding": "utf-8",
+  "rate_limit": 1.0,
+  "description": "Description of what this source provides",
+  "tags": ["webnovel", "fantasy", "popular"]
+}
+```
+
+---
+
+## Next Steps (Roadmap)
+
+Planned enhancements for future releases:
+
+- [ ] WebSocket real-time progress updates (replace polling)
+- [ ] Parallel task queue (scrape multiple sources concurrently)
+- [ ] AI-powered content analysis (sentiment, style detection)
+- [ ] Browser automation integration (Playwright/Puppeteer)
+- [ ] Export preview viewer (PDF rendering in browser)
+
+Current release focuses on core stability and correctness first.

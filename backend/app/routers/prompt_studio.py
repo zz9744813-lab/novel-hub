@@ -254,6 +254,125 @@ class TemplateCreate(BaseModel):
     description: str | None = None
 
 
+class TemplatePatch(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    system_prompt: str | None = None
+    user_prompt_template: str | None = None
+    input_contract_key: str | None = None
+    output_contract_key: str | None = None
+    allowed_context_kinds: list[str] | None = None
+    required_context_kinds: list[str] | None = None
+    forbidden_context_kinds: list[str] | None = None
+
+
+def _template_values(t: PromptTemplateVersion) -> dict[str, Any]:
+    return {
+        "agent_role": t.agent_role,
+        "name": t.name,
+        "description": t.description,
+        "system_prompt": t.system_prompt,
+        "user_prompt_template": t.user_prompt_template,
+        "scope_type": t.scope_type,
+        "scope_id": t.scope_id,
+        "input_contract_key": t.input_contract_key,
+        "output_contract_key": t.output_contract_key,
+        "allowed_context_kinds": list(t.allowed_context_kinds or []),
+        "required_context_kinds": list(t.required_context_kinds or []),
+        "forbidden_context_kinds": list(t.forbidden_context_kinds or []),
+    }
+
+
+async def _clone_template(t: PromptTemplateVersion, db: AsyncSession) -> PromptTemplateVersion:
+    latest = (
+        await db.execute(
+            select(PromptTemplateVersion)
+            .where(
+                PromptTemplateVersion.template_key == t.template_key,
+                PromptTemplateVersion.scope_type == t.scope_type,
+            )
+            .order_by(PromptTemplateVersion.version.desc())
+            .limit(1)
+        )
+    ).scalar_one()
+    values = _template_values(t)
+    system = values["system_prompt"] or ""
+    user = values["user_prompt_template"] or ""
+    clone = PromptTemplateVersion(
+        id=gen_uuid(),
+        template_key=t.template_key,
+        agent_role=values["agent_role"],
+        scope_type=values["scope_type"],
+        scope_id=values["scope_id"],
+        version=int(latest.version) + 1,
+        status="draft",
+        name=f"{values['name']}（副本）",
+        description=values["description"],
+        system_prompt=system,
+        user_prompt_template=user,
+        input_contract_key=values["input_contract_key"],
+        output_contract_key=values["output_contract_key"],
+        allowed_context_kinds=values["allowed_context_kinds"],
+        required_context_kinds=values["required_context_kinds"],
+        forbidden_context_kinds=values["forbidden_context_kinds"],
+        variables=sorted(_vars_in_template(system) | _vars_in_template(user)),
+        template_hash=_hash_template(system, user),
+        created_by="clone",
+        supersedes_id=t.id,
+    )
+    db.add(clone)
+    await db.flush()
+    return clone
+
+
+async def _get_template_or_404(template_id: str, db: AsyncSession) -> PromptTemplateVersion:
+    try:
+        parsed_id = uuid.UUID(template_id)
+    except ValueError:
+        raise HTTPException(400, "invalid template id")
+    t = (
+        await db.execute(select(PromptTemplateVersion).where(PromptTemplateVersion.id == parsed_id))
+    ).scalar_one_or_none()
+    if not t:
+        raise HTTPException(404, "not found")
+    return t
+
+
+@router.patch("/templates/{template_id}")
+async def patch_template(template_id: str, body: TemplatePatch, db: AsyncSession = Depends(get_db)):
+    t = await _get_template_or_404(template_id, db)
+    if t.status == "active":
+        raise HTTPException(409, detail={"code": "ACTIVE_IMMUTABLE", "message": "active 模板不可原地修改，请先复制"})
+    values = body.model_dump(exclude_unset=True)
+    for key, value in values.items():
+        setattr(t, key, value)
+    system = t.system_prompt or ""
+    user = t.user_prompt_template or ""
+    t.variables = sorted(_vars_in_template(system) | _vars_in_template(user))
+    t.template_hash = _hash_template(system, user)
+    t.last_test_passed = None
+    await db.commit()
+    return {"id": str(t.id), "version": t.version, "status": t.status, "template_hash": t.template_hash}
+
+
+@router.post("/templates/{template_id}/clone")
+async def clone_template(template_id: str, db: AsyncSession = Depends(get_db)):
+    t = await _get_template_or_404(template_id, db)
+    clone = await _clone_template(t, db)
+    await db.commit()
+    return {"id": str(clone.id), "version": clone.version, "status": clone.status, "supersedes_id": str(t.id)}
+
+
+@router.post("/templates/{template_id}/archive")
+async def archive_template(template_id: str, db: AsyncSession = Depends(get_db)):
+    t = await _get_template_or_404(template_id, db)
+    if t.status == "active":
+        raise HTTPException(409, "active 模板不能直接归档，请先激活其他版本")
+    t.status = "archived"
+    await db.commit()
+    return {"id": str(t.id), "status": t.status}
+
+
 @router.post("/templates")
 async def create_template(body: TemplateCreate, db: AsyncSession = Depends(get_db)):
     key = f"{body.agent_role}:{body.scope_type}:{body.scope_id or 'global'}"
@@ -270,7 +389,6 @@ async def create_template(body: TemplateCreate, db: AsyncSession = Depends(get_d
     ).scalar_one_or_none()
     ver = (existing.version + 1) if existing else 1
     vars_found = sorted(_vars_in_template(body.system_prompt) | _vars_in_template(body.user_prompt_template))
-    # auto-bind output contract if omitted
     out_key = body.output_contract_key or _role_default_contract(body.agent_role)
     t = PromptTemplateVersion(
         id=gen_uuid(),

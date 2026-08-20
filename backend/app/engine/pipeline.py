@@ -11,13 +11,14 @@ from app.database import async_session_factory
 from app.state_machine import ChapterState
 from app.models import (
     Chapter, ChapterVersion, OutlineNode,
-    MemoryL4StateSnapshot,
+    MemoryL4StateSnapshot, QueryPlan, RetrievalRun,
 )
 from app.engine.outline import check_required_dependencies
 from app.engine.retrieval import (
     dependency_resolver, state_resolver, plot_thread_resolver,
     event_ledger_search, full_text_search, candidate_merge_and_score,
-    evidence_ranker_agent, query_planner_agent, deterministic_query_template
+    evidence_ranker_agent, query_planner_agent, deterministic_query_template,
+    build_retrieval_candidates,
 )
 from app.engine.context_assembler import assemble_context
 from app.agents.chapter_planner import plan_chapter
@@ -29,11 +30,12 @@ from app.agents.drift_audit import run_drift_audit
 from app.engine.memory_compiler import generate_l2
 from app.engine.outcomes import PipelineOutcome, PipelineResult
 from app.engine.step_runner import (
-    RunContext, run_step, canonical_hash, content_hash,
+    RunContext, run_step, content_hash,
     ControlRequestedError, LeaseLostError, RetryableStepError, PermanentStepError,
     PIPELINE_VERSION,
 )
-import os, socket
+import os
+import socket
 
 logger = logging.getLogger("novelforge.pipeline")
 
@@ -242,6 +244,44 @@ async def execute_pipeline(
         await _set_chapter_status(chapter_id, ChapterState.FAILED.value, e.code, chapter_run_id)
         return _result(PipelineOutcome.RETRYABLE_FAILURE, error_code=e.code, detail=e.detail)
 
+    # Persist the planner output before retrieval starts. Internal audit fields
+    # are removed from plan_json but retained as relational provenance.
+    query_plan = dict(query_plan)
+    source_run_id = query_plan.pop("_agent_run_id", None)
+    prompt_version = query_plan.pop("_prompt_version", None)
+    model_name = query_plan.pop("_model_name", None)
+    try:
+        source_run_id = uuid.UUID(str(source_run_id)) if source_run_id else None
+    except (ValueError, AttributeError):
+        source_run_id = None
+    source_run_id = source_run_id or chapter_run_id or uuid.uuid4()
+    plan_source = query_plan.get("source") or "agent"
+    prompt_version = str(prompt_version or ("deterministic-fallback-v1" if plan_source == "deterministic_fallback" else "unknown"))
+    model_name = str(model_name or ("deterministic" if plan_source == "deterministic_fallback" else "unknown"))
+
+    async with async_session_factory() as db:
+        query_plan_row = QueryPlan(
+            id=uuid.uuid4(),
+            book_id=book_id,
+            chapter_id=chapter_id,
+            plan_json=query_plan,
+            source_run_id=source_run_id,
+            prompt_version=prompt_version,
+            model_name=model_name,
+        )
+        db.add(query_plan_row)
+        await db.flush()
+        retrieval_run = RetrievalRun(
+            id=uuid.uuid4(),
+            book_id=book_id,
+            chapter_id=chapter_id,
+            query_plan_id=query_plan_row.id,
+            status="running",
+            degraded=plan_source == "deterministic_fallback",
+        )
+        db.add(retrieval_run)
+        await db.commit()
+
     # === Phase 3: Retrieval (SQL-first 9-step) ===
     await _set_chapter_status(chapter_id, ChapterState.CONTEXT_BUILDING.value, "enter context_building", chapter_run_id)
 
@@ -250,7 +290,7 @@ async def execute_pipeline(
                     for c in query_plan.get("character_ids", outline_data["involved_character_ids"])]
 
         l4_states = await state_resolver(db, book_id, char_ids, chapter_no)
-        open_threads = await plot_thread_resolver(db, book_id, [])
+        await plot_thread_resolver(db, book_id, [])
 
         event_types = query_plan.get("event_types", []) or []
         chap_range = query_plan.get("chapter_range") or {"from": 1, "to": max(chapter_no - 1, 1)}
@@ -294,6 +334,17 @@ async def execute_pipeline(
         chapter_id=chapter_id,
     )
     retrieved_evidence = ranked[:8]
+
+    async with async_session_factory() as db:
+        db.add_all(build_retrieval_candidates(retrieval_run.id, scored, retrieved_evidence))
+        retrieval_run_db = (await db.execute(
+            select(RetrievalRun).where(RetrievalRun.id == retrieval_run.id)
+        )).scalar_one()
+        retrieval_run_db.status = "completed"
+        retrieval_run_db.candidate_count = len(scored)
+        retrieval_run_db.selected_count = len(retrieved_evidence)
+        retrieval_run_db.latency_ms = 0
+        await db.commit()
 
     # === Phase 4: ContextAssembler ===
     async with async_session_factory() as db:

@@ -18,10 +18,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.routes import router, seed_prompt_templates
-from app.config import settings
 from app.routers import library as library_router
 from app.routers import imports as imports_router
 from app.routers import prompt_studio as prompt_studio_router
+from app.routers import tasks as tasks_router
 
 logger = logging.getLogger("novelforge.main")
 
@@ -58,11 +58,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"seed_prompt_templates: {e}")
 
-    # Ensure required bindings exist (explicit install step, not silent env defaults forever)
-    try:
-        await ensure_required_bindings()
-    except Exception as e:
-        logger.error(f"ensure_required_bindings failed: {e}")
+    # Model bindings are an approval-controlled production input. Bootstrap is
+    # available only as an explicit non-production opt-in, never during prod boot.
+    if (
+        not _is_production()
+        and os.environ.get("ALLOW_AUTO_BINDING_BOOTSTRAP", "").lower() == "true"
+    ):
+        try:
+            await ensure_required_bindings()
+        except Exception as e:
+            logger.error(f"ensure_required_bindings failed: {e}")
+    else:
+        logger.info("Skipping automatic model binding bootstrap")
 
     from app.startup_checks import run_all_checks
 
@@ -156,6 +163,7 @@ app.include_router(router)
 app.include_router(library_router.router)
 app.include_router(imports_router.router)
 app.include_router(prompt_studio_router.router)
+app.include_router(tasks_router.router)
 
 
 # WebSocket connection manager for real-time events

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session_factory
 from app.engine.document_blocks import sha256_bytes
+from app.engine.import_chunker import ImportChunk, chunk_document_blocks, coverage_report
 from app.engine.entity_resolver import (
     build_preview_bundle,
     detect_outline_conflicts,
@@ -83,7 +84,12 @@ def gen_uuid():
     return uuid.uuid4()
 
 
-def _blocks_text(blocks: list[dict], limit: int = 28000) -> str:
+def _sanitize_chunks(blocks: list[dict]) -> list[ImportChunk]:
+    """Split every sanitizer input block without sampling or truncating it."""
+    return chunk_document_blocks(blocks, target_chars=8_000, max_chars=12_000, overlap_chars=400)
+
+
+def _blocks_text(blocks: list[dict], limit: int | None = None) -> str:
     lines = []
     for b in blocks:
         bid = b.get("id") or b.get("block_id") or ""
@@ -92,9 +98,30 @@ def _blocks_text(blocks: list[dict], limit: int = 28000) -> str:
             continue
         lines.append(f"[{bid}] {t}")
     text = "\n".join(lines)
-    if len(text) > limit:
-        return text[:limit] + "\n…[truncated]"
-    return text
+    return text if limit is None else text[:limit]
+
+
+def _merge_chunk_payloads(payloads: list[dict]) -> dict:
+    """Merge map outputs without silently dropping later source chunks."""
+    merged: dict[str, Any] = {}
+    for payload in payloads:
+        for key, value in payload.items():
+            if isinstance(value, list):
+                current = merged.setdefault(key, [])
+                if not isinstance(current, list):
+                    current = merged[key] = []
+                seen = {
+                    json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)
+                    for item in current
+                }
+                for item in value:
+                    marker = json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)
+                    if marker not in seen:
+                        current.append(item)
+                        seen.add(marker)
+            elif value not in (None, "", False) or key not in merged:
+                merged[key] = value
+    return merged
 
 
 async def _transition(db: AsyncSession, sess: ImportSession, to_status: str, step: str | None = None, detail: dict | None = None):
@@ -222,6 +249,23 @@ async def run_import_pipeline(session_id: str) -> dict:
         else:
             kept_blocks = blocks
         body_text = _blocks_text(kept_blocks)
+        chunks = chunk_document_blocks(kept_blocks)
+        excluded_ids = {
+            str(b.get("block_id") or b.get("id"))
+            for b, candidate in zip(blocks, cand_items)
+            if candidate.get("action") == "exclude"
+        }
+        coverage = coverage_report(blocks, chunks, excluded_ids)
+        await _save_artifact(
+            db,
+            sid,
+            artifact_type="import_chunks",
+            key="import_chunks_v1",
+            payload={"chunks": [chunk.to_dict() for chunk in chunks], "coverage": coverage},
+            meta=[{"source": "document_blocks", "block_count": len(blocks)}],
+        )
+        await _save_artifact(db, sid, artifact_type="coverage_audit", key="coverage_v1", payload=coverage)
+        await db.commit()
         headings = [b for b in kept_blocks if b.get("type") == "heading"]
         title_hint = headings[0]["text"] if headings else "未命名"
 
@@ -232,16 +276,24 @@ async def run_import_pipeline(session_id: str) -> dict:
 
     # ── classify ──
     if not await done("classify_v1"):
-        data, meta = await call_import_agent(
-            role="document_classifier",
-            system_prompt=(
-                "你是小说企划文档分类器。只输出 JSON。"
-                "primary_type 可选: book_proposal|character_bible|world_bible|outline|"
-                "writing_rules|mixed_book_proposal|unknown。"
-                "sections 可为空数组。"
-            ),
-            user_content=f"标题提示: {title_hint}\n\n文档片段:\n{body_text[:12000]}",
-        )
+        classify_payloads: list[dict] = []
+        classify_calls: list[dict] = []
+        for chunk in chunks:
+            classified, classify_meta = await call_import_agent(
+                role="document_classifier",
+                system_prompt=(
+                    "你是小说企划文档分类器。只输出 JSON。"
+                    "primary_type 可选: book_proposal|character_bible|world_bible|outline|"
+                    "writing_rules|mixed_book_proposal|unknown。"
+                    "sections 可为空数组。"
+                ),
+                user_content=f"标题提示: {title_hint}\n\n文档块:\n{chunk.text}",
+            )
+            if classified:
+                classify_payloads.append(classified)
+            classify_calls.append({"chunk_index": chunk.chunk_index, **classify_meta})
+        data = _merge_chunk_payloads(classify_payloads) if classify_payloads else None
+        meta = {"ok": bool(classify_payloads), "chunks": len(chunks), "calls": classify_calls}
         async with async_session_factory() as db:
             sess = (await db.execute(select(ImportSession).where(ImportSession.id == sid))).scalar_one()
             if data:
@@ -289,16 +341,24 @@ async def run_import_pipeline(session_id: str) -> dict:
                 await db.commit()
                 report["steps"].append({"step": "sanitize_llm", "ok": True, "skipped": True})
         else:
-            sample = review_blocks[:40] if review_blocks else kept_blocks[:20]
-            data, meta = await call_import_agent(
-                role="import_sanitizer",
-                system_prompt=(
-                    "你是企划文档清洗器。对每个 block 判断是否为 AI 对话残留/噪声。"
-                    "classification: source_content|assistant_chatter|user_chatter|duplicate_summary|format_noise|uncertain。"
-                    "action: keep|exclude|review。只输出 JSON {items:[...]}。"
-                ),
-                user_content=_blocks_text(sample, 10000),
-            )
+            sanitize_chunks = _sanitize_chunks(review_blocks or kept_blocks)
+            sanitize_payloads: list[dict] = []
+            sanitize_calls: list[dict] = []
+            for chunk in sanitize_chunks:
+                mapped, mapped_meta = await call_import_agent(
+                    role="import_sanitizer",
+                    system_prompt=(
+                        "你是企划文档清洗器。对每个 block 判断是否为 AI 对话残留/噪声。"
+                        "classification: source_content|assistant_chatter|user_chatter|duplicate_summary|format_noise|uncertain。"
+                        "action: keep|exclude|review。只输出 JSON {items:[...]}。"
+                    ),
+                    user_content=chunk.text,
+                )
+                if mapped:
+                    sanitize_payloads.append(mapped)
+                sanitize_calls.append({"chunk_index": chunk.chunk_index, **mapped_meta})
+            data = _merge_chunk_payloads(sanitize_payloads) if sanitize_payloads else None
+            meta = {"ok": bool(sanitize_payloads), "chunks": len(sanitize_chunks), "calls": sanitize_calls}
             async with async_session_factory() as db:
                 sess = (await db.execute(select(ImportSession).where(ImportSession.id == sid))).scalar_one()
                 payload = data or {"items": cand_items}
@@ -339,6 +399,23 @@ async def run_import_pipeline(session_id: str) -> dict:
         if kept_art and kept_art.get("blocks"):
             kept_blocks = kept_art["blocks"]
             body_text = _blocks_text(kept_blocks)
+            chunks = chunk_document_blocks(kept_blocks)
+            final_excluded_ids = {
+                str(block.get("block_id") or block.get("id"))
+                for block in blocks
+                if str(block.get("block_id") or block.get("id"))
+                not in {chunk_block_id for chunk in chunks for chunk_block_id in chunk.block_ids}
+            }
+            final_coverage = coverage_report(blocks, chunks, final_excluded_ids)
+            await _save_artifact(
+                db,
+                sid,
+                artifact_type="import_chunks",
+                key="import_chunks_v1",
+                payload={"chunks": [chunk.to_dict() for chunk in chunks], "coverage": final_coverage},
+            )
+            await _save_artifact(db, sid, artifact_type="coverage_audit", key="coverage_v1", payload=final_coverage)
+            await db.commit()
 
     # helper for extract steps
     async def extract_step(
@@ -352,9 +429,27 @@ async def run_import_pipeline(session_id: str) -> dict:
         if await done(key):
             async with async_session_factory() as db:
                 return await _get_art(db, sid, key)
-        data, meta = await call_import_agent(
-            role=role, system_prompt=system, user_content=user, temperature=temp
-        )
+        if "文档:" in user and chunks:
+            marker = user.rfind("文档:")
+            prefix = user[: marker + len("文档:")]
+            mapped_payloads: list[dict] = []
+            mapped_meta: list[dict] = []
+            for chunk in chunks:
+                mapped, mapped_call_meta = await call_import_agent(
+                    role=role,
+                    system_prompt=system,
+                    user_content=f"{prefix}\n{chunk.text}",
+                    temperature=temp,
+                )
+                if mapped:
+                    mapped_payloads.append(mapped)
+                mapped_meta.append({"chunk_index": chunk.chunk_index, **mapped_call_meta})
+            data = _merge_chunk_payloads(mapped_payloads) if mapped_payloads else None
+            meta = {"ok": bool(mapped_payloads), "chunks": len(chunks), "calls": mapped_meta}
+        else:
+            data, meta = await call_import_agent(
+                role=role, system_prompt=system, user_content=user, temperature=temp
+            )
         async with async_session_factory() as db:
             sess = (await db.execute(select(ImportSession).where(ImportSession.id == sid))).scalar_one()
             await _save_artifact(
@@ -383,7 +478,7 @@ async def run_import_pipeline(session_id: str) -> dict:
             "必须尽量填写 title, logline, synopsis, genre, tags, tone, themes, core_loop, planned_chapters。"
             "title 取书名；logline 取一句话卖点；genre 取类型；planned_chapters 为整数或 null。"
         ),
-        f"文档:\n{body_text[:16000]}",
+        f"文档:\n{body_text}",
     )
     det_meta = deterministic_metadata_from_text(body_text)
     meta_out = merge_metadata(meta_out, det_meta)
@@ -406,7 +501,7 @@ async def run_import_pipeline(session_id: str) -> dict:
             "locations 每项必须含 name；description?, aliases?, rules?。"
             "文档里「规则：」「地点：」「X城/渊/谷」都要尽量收录。只输出 JSON。"
         ),
-        f"文档:\n{body_text[:16000]}",
+        f"文档:\n{body_text}",
     )
     det_world = deterministic_world_from_text(body_text)
     world_out = merge_world(world_out, det_world)
@@ -424,7 +519,7 @@ async def run_import_pipeline(session_id: str) -> dict:
         "characters_v1",
         "character_extractor",
         "提取人物列表。每项: temp_id(如 temp-char-001), canonical_name, aliases[], role, description, gender?。只输出 JSON。",
-        f"文档:\n{body_text[:16000]}",
+        f"文档:\n{body_text}",
     )
     # merge characters
     characters_raw = (char_out or {}).get("characters") or []
@@ -448,7 +543,7 @@ async def run_import_pipeline(session_id: str) -> dict:
         "relationships_v1",
         "relationship_extractor",
         "基于人物列表提取关系。from_temp_id/to_temp_id 必须引用已有 temp_id。只输出 JSON。",
-        f"人物:\n{char_brief}\n\n文档:\n{body_text[:12000]}",
+        f"人物:\n{char_brief}\n\n文档:\n{body_text}",
     )
     outline_out = await extract_step(
         "outline",
@@ -459,7 +554,7 @@ async def run_import_pipeline(session_id: str) -> dict:
             "volumes 可含 chapter_from/to。declared_total_chapters 为全文宣称总章数。"
             "只输出 JSON。"
         ),
-        f"文档:\n{body_text[:20000]}",
+        f"文档:\n{body_text}",
         0.05,
     )
     # merge deterministic regex fallback (第N章 / 第N卷)
@@ -484,14 +579,14 @@ async def run_import_pipeline(session_id: str) -> dict:
         "plots_v1",
         "plot_thread_extractor",
         "提取主线/支线/伏笔。threads 含 temp_id,name,description,status,plant_chapter?。只输出 JSON。",
-        f"文档:\n{body_text[:12000]}",
+        f"文档:\n{body_text}",
     )
     rules_out = await extract_step(
         "writing_rules",
         "writing_rules_v1",
         "writing_rule_extractor",
         "提取写作约束/风格要求/禁止事项。rules 项: constraint_type,title,body,is_hard,scope_type,priority。只输出 JSON。",
-        f"文档:\n{body_text[:12000]}",
+        f"文档:\n{body_text}",
     )
 
     # conflicts
@@ -506,8 +601,8 @@ async def run_import_pipeline(session_id: str) -> dict:
     # optional LLM audit — force auditor issues to warning unless known hard codes
     HARD_AUDIT_CODES = {"CHAPTER_NO_DUPLICATE", "chapter_no_duplicate"}
     audit_payload = {
-        "characters": characters[:30],
-        "volumes": (outline.get("volumes") or [])[:20],
+        "characters": characters,
+        "volumes": outline.get("volumes") or [],
         "chapters_count": len(outline.get("chapters") or []),
         "declared_total": outline.get("declared_total_chapters"),
         "det_conflicts": all_conflicts,
@@ -517,7 +612,7 @@ async def run_import_pipeline(session_id: str) -> dict:
         "audit_v1",
         "import_consistency_auditor",
         "审查导入结果一致性。输出 issues 列表与 ok 布尔。不要重复已列出的 det_conflicts 除非加重。只输出 JSON。",
-        json.dumps(audit_payload, ensure_ascii=False)[:12000],
+        json.dumps(audit_payload, ensure_ascii=False),
         0.0,
     )
     for iss in (audit_out or {}).get("issues") or []:
@@ -685,6 +780,7 @@ async def atomic_commit_import(
                 book_id=book.id,
                 rule_key=(r.get("rule_key") or "rule")[:200],
                 description=r.get("description") or "",
+                source_refs=r.get("source_refs") or [{"import_session_id": str(sess.id)}],
                 rule_json={
                     "category": r.get("category"),
                     "is_hard": r.get("is_hard", True),
@@ -721,6 +817,7 @@ async def atomic_commit_import(
                 name=(c.get("canonical_name") or "未命名")[:200],
                 role=c.get("role"),
                 description=c.get("description"),
+                source_refs=c.get("source_refs") or [{"import_session_id": str(sess.id)}],
                 card_json={
                     "aliases": c.get("aliases") or [],
                     "gender": c.get("gender"),
@@ -810,6 +907,7 @@ async def atomic_commit_import(
                 description=t.get("description"),
                 status=t.get("status") or "open",
                 planted_chapter=t.get("plant_chapter"),
+                source_refs=t.get("source_refs") or [{"import_session_id": str(sess.id)}],
             )
         )
 

@@ -9,6 +9,7 @@ logger = logging.getLogger("novelforge.startup")
 
 REQUIRED_ROLES = {
     "outline_parser",
+    "blank_planner",
     "chapter_planner",
     "draft_writer",
     "review_agent",

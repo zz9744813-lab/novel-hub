@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, fetchAuthenticatedAsset } from "../../api";
-import { Play, Loader2, BookOpen, Users, Map, GitBranch, MapPin, ScrollText } from "lucide-react";
+import { Play, Loader2, BookOpen, Users, Map, GitBranch, MapPin, ScrollText, Sparkles, Check } from "lucide-react";
 
 export function BookHomePage({
   bookId,
@@ -17,6 +17,14 @@ export function BookHomePage({
   const [busy, setBusy] = useState(false);
   const [coverBusy, setCoverBusy] = useState(false);
   const [coverSrc, setCoverSrc] = useState<string | null>(null);
+  const [planning, setPlanning] = useState<any>(null);
+  const [planningBusy, setPlanningBusy] = useState(false);
+  const [planningErr, setPlanningErr] = useState<string | null>(null);
+  const [premise, setPremise] = useState("");
+  const [planningGenre, setPlanningGenre] = useState("");
+  const [planningTone, setPlanningTone] = useState("");
+  const [planningThemes, setPlanningThemes] = useState("");
+  const [targetChapterCount, setTargetChapterCount] = useState(12);
 
   useEffect(() => {
     let active = true;
@@ -68,11 +76,60 @@ export function BookHomePage({
     }
   };
 
+  useEffect(() => {
+    let cancelled = false;
+    api.planning.get(bookId).then((p) => {
+      if (!cancelled) setPlanning(p);
+    }).catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [bookId]);
+
+  const handleGeneratePlanning = async () => {
+    if (!premise.trim()) {
+      setPlanningErr("请先输入故事 premise");
+      return;
+    }
+    setPlanningBusy(true);
+    setPlanningErr(null);
+    try {
+      const result = await api.planning.generate(bookId, {
+        premise: premise.trim(),
+        genre: planningGenre.trim() || undefined,
+        tone: planningTone.trim() || undefined,
+        themes: planningThemes.split(/[，,]/).map((item) => item.trim()).filter(Boolean),
+        target_chapter_count: targetChapterCount,
+      });
+      setPlanning(result);
+    } catch (e: any) {
+      setPlanningErr(e?.message || String(e));
+    } finally {
+      setPlanningBusy(false);
+    }
+  };
+
+  const handleConfirmPlanning = async () => {
+    if (!planning?.outline_version_id) return;
+    setPlanningBusy(true);
+    setPlanningErr(null);
+    try {
+      await api.planning.confirm(bookId, planning.outline_version_id);
+      setPlanning(await api.planning.get(bookId));
+      setData(await api.library.bookHome(bookId));
+    } catch (e: any) {
+      setPlanningErr(e?.message || String(e));
+    } finally {
+      setPlanningBusy(false);
+    }
+  };
+
   const book = data?.book;
   const style = book?.cover_style;
   const counts = data?.counts || {};
   const entities = data?.entities || {};
   const profile = data?.profile;
+  const isBlankBook = !book?.source_import_session_id && !book?.planned_chapters && book?.lifecycle_status === "draft";
 
   const handleContinue = async () => {
     setBusy(true);
@@ -128,12 +185,12 @@ export function BookHomePage({
             )}
           </div>
           <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-            <Stat label="已定稿" value={`${book?.finalized_chapters ?? 0} 章`} />
+            <Stat label="已定稿" value={`${book?.finalized_chapters ?? 0} 章`} accent="success" />
             <Stat label="计划" value={`${book?.planned_chapters ?? "—"} 章`} />
             <Stat label="字数" value={`${(book?.finalized_words || 0).toLocaleString()}`} />
             <Stat label="状态" value={book?.lifecycle_status || "—"} />
           </div>
-          <div className="mt-5 flex flex-wrap gap-2">
+          <div className="mt-5 pt-4 border-t border-border/50 flex flex-wrap gap-2">
             <button
               onClick={handleContinue}
               disabled={busy}
@@ -160,6 +217,106 @@ export function BookHomePage({
           )}
         </div>
       </div>
+
+      {isBlankBook && (planning?.status === "approved" ? (
+        <div className="panel p-4 flex items-center gap-2 text-xs text-emerald-300">
+          <Check size={14} />
+          AI 规划已确认 · {planning?.draft?.chapters?.length || planning?.version || 0} 章已写入正式章纲
+        </div>
+      ) : (
+        <section className="panel p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <Sparkles size={15} className="text-brand-accent" />
+            <div>
+              <h2 className="text-sm text-text-primary">空白作品 AI 规划</h2>
+              <p className="text-2xs text-text-tertiary mt-0.5">
+                先生成可审阅草案，确认后才会创建正式章纲和作品设定。
+              </p>
+            </div>
+          </div>
+          <textarea
+            value={premise}
+            onChange={(e) => setPremise(e.target.value)}
+            placeholder="输入故事 premise：主角、核心冲突、世界背景或你已有的灵感……"
+            className="w-full min-h-20 rounded-md border border-border bg-bg-base px-3 py-2 text-xs text-text-primary placeholder:text-text-disabled outline-none focus:border-brand-accent"
+          />
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+            <input
+              value={planningGenre}
+              onChange={(e) => setPlanningGenre(e.target.value)}
+              placeholder="题材（可选）"
+              className="rounded-md border border-border bg-bg-base px-3 py-2 text-xs text-text-primary placeholder:text-text-disabled outline-none focus:border-brand-accent"
+            />
+            <input
+              value={planningTone}
+              onChange={(e) => setPlanningTone(e.target.value)}
+              placeholder="基调（可选）"
+              className="rounded-md border border-border bg-bg-base px-3 py-2 text-xs text-text-primary placeholder:text-text-disabled outline-none focus:border-brand-accent"
+            />
+            <input
+              value={planningThemes}
+              onChange={(e) => setPlanningThemes(e.target.value)}
+              placeholder="主题，逗号分隔"
+              className="rounded-md border border-border bg-bg-base px-3 py-2 text-xs text-text-primary placeholder:text-text-disabled outline-none focus:border-brand-accent"
+            />
+            <input
+              type="number"
+              min={1}
+              max={500}
+              value={targetChapterCount}
+              onChange={(e) => setTargetChapterCount(Math.max(1, Math.min(500, Number(e.target.value) || 1)))}
+              aria-label="目标章节数"
+              className="rounded-md border border-border bg-bg-base px-3 py-2 text-xs text-text-primary outline-none focus:border-brand-accent"
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={handleGeneratePlanning}
+              disabled={planningBusy}
+              className="btn-primary text-xs py-2 px-3 flex items-center gap-1.5"
+            >
+              {planningBusy ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+              生成规划草案
+            </button>
+            {planning?.status === "draft" && planning?.outline_version_id && (
+              <button
+                onClick={handleConfirmPlanning}
+                disabled={planningBusy}
+                className="btn text-xs py-2 px-3 flex items-center gap-1.5"
+              >
+                <Check size={13} /> 确认并写入章纲
+              </button>
+            )}
+            {planning?.status && planning.status !== "not_started" && (
+              <span className="text-2xs text-text-disabled">状态：{planning.status}</span>
+            )}
+          </div>
+          {planningErr && <p className="text-xs text-red-400">{planningErr}</p>}
+          {planning?.draft && (
+            <div className="border-t border-border pt-3 space-y-2">
+              <div className="text-xs text-text-primary">
+                {planning.draft.title} · {planning.draft.logline}
+              </div>
+              <p className="text-2xs text-text-secondary">{planning.draft.synopsis}</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-72 overflow-auto">
+                {(planning.draft.chapters || []).map((chapter: any) => (
+                  <div key={chapter.chapter_no} className="rounded-md border border-border bg-bg-base p-2">
+                    <div className="text-2xs text-text-primary">
+                      第{chapter.chapter_no}章 · {chapter.title || "未命名"}
+                    </div>
+                    <div className="text-2xs text-text-tertiary mt-1">{chapter.goal}</div>
+                    {!!chapter.required_beats?.length && (
+                      <div className="text-2xs text-text-disabled mt-1">
+                        节拍：{chapter.required_beats.join("、")}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+      ))}
 
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
         <Mini icon={Users} label="人物" value={counts.characters ?? 0} />
@@ -218,11 +375,18 @@ export function BookHomePage({
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value, accent }: { label: string; value: string; accent?: "success" | "brand" }) {
+  const accentClass = accent === "success"
+    ? "border-success/25 hover:border-success/40"
+    : accent === "brand"
+    ? "border-brand/25 hover:border-brand/40"
+    : "hover:border-border-strong";
   return (
-    <div className="panel-elevated rounded-md px-3 py-2">
+    <div className={`panel-elevated rounded-md px-3 py-2 transition-colors duration-150 ${accentClass}`}>
       <div className="text-2xs text-text-disabled">{label}</div>
-      <div className="text-sm text-text-primary mt-0.5 font-mono">{value}</div>
+      <div className={`text-sm mt-0.5 font-mono ${accent === "success" ? "text-emerald-300" : accent === "brand" ? "text-brand-accent" : "text-text-primary"}`}>
+        {value}
+      </div>
     </div>
   );
 }
@@ -239,9 +403,9 @@ function Mini({
   small?: boolean;
 }) {
   return (
-    <div className="panel rounded-md p-3 flex items-start gap-2">
-      <Icon size={14} className="text-brand-accent mt-0.5" />
-      <div>
+    <div className="panel rounded-md p-3 flex items-start gap-2 transition-colors duration-150 hover:border-border-strong">
+      <Icon size={14} className="text-brand-accent mt-0.5 shrink-0" />
+      <div className="min-w-0">
         <div className="text-2xs text-text-disabled">{label}</div>
         <div className={small ? "text-xs text-text-secondary mt-0.5" : "text-sm text-text-primary font-mono mt-0.5"}>
           {value}

@@ -144,8 +144,8 @@ async def create_import_session(
         source_id=source_id,
         progress=0.05,
         current_step="uploaded",
-        parser_version="v8.0",
-        pipeline_version="v8.0",
+        parser_version="v8.1",
+        pipeline_version="v8.1",
     )
     db.add(sess)
     await db.flush()
@@ -167,7 +167,7 @@ async def create_import_session(
                 status="ready",
                 input_hash=sha,
                 output_json=doc,
-                source_refs=[],
+                source_refs=[{"source_id": str(source_id), "block_id": block.get("block_id")} for block in doc.get("blocks") or []],
             )
         )
 

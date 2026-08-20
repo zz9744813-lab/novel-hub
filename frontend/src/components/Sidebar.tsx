@@ -86,7 +86,7 @@ export function Sidebar({
         onClick={() => !disabled && setTab(t.id)}
         title={disabled ? "请先选择一本小说" : undefined}
         className={clsx(
-          "w-full flex items-center gap-2.5 px-3 py-[7px] rounded text-xs text-left transition-all duration-150",
+          "group w-full flex items-center gap-2.5 px-3 py-[7px] rounded text-xs text-left transition-all duration-100 relative",
           active
             ? "bg-brand-muted text-brand-accent"
             : disabled
@@ -94,7 +94,8 @@ export function Sidebar({
             : "text-text-tertiary hover:bg-bg-hover hover:text-text-secondary"
         )}
       >
-        <Icon size={14} className={active ? "text-brand-accent" : "text-text-disabled"} />
+        {active && <span className="absolute left-0 top-1/2 -translate-y-1/2 h-4 w-0.5 rounded-r-full bg-brand-accent" aria-hidden="true" />}
+        <Icon size={14} className={active ? "text-brand-accent" : disabled ? "text-text-disabled" : "text-text-disabled group-hover:text-text-tertiary"} />
         <div className="flex-1 min-w-0">
           <div style={{ fontWeight: active ? 510 : 400 }}>{t.label}</div>
         </div>
@@ -168,7 +169,7 @@ export function Sidebar({
                   type="button"
                   onClick={() => setTab(t.id)}
                   className={clsx(
-                    "w-full flex items-center gap-2.5 px-3 py-[7px] rounded text-xs text-left",
+                    "w-full flex items-center gap-2.5 px-3 py-[7px] rounded text-xs text-left transition-all duration-100",
                     active ? "bg-brand-muted text-brand-accent" : "text-text-tertiary hover:bg-bg-hover"
                   )}
                 >

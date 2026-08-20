@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api";
 import { agentRoleLabel } from "../../agentLabels";
-import { Loader2, CheckCircle2, AlertCircle, Shield } from "lucide-react";
+import { Loader2, CheckCircle2, AlertCircle, Shield, Copy, Archive, Save, Pencil, X } from "lucide-react";
 
 export function PromptStudioPage() {
   const [agents, setAgents] = useState<any[]>([]);
@@ -11,7 +11,8 @@ export function PromptStudioPage() {
   const [compat, setCompat] = useState<any | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState({ system_prompt: "", user_prompt_template: "" });
   const load = async () => {
     const a = await api.promptStudio.agents();
     setAgents(a.agents || []);
@@ -26,6 +27,8 @@ export function PromptStudioPage() {
   const open = async (id: string) => {
     const t = await api.promptStudio.getTemplate(id);
     setSelected(t);
+    setEditing(false);
+    setDraft({ system_prompt: t.system_prompt || "", user_prompt_template: t.user_prompt_template || "" });
     setCompat(t.compatibility || null);
     try {
       const c = await api.promptStudio.compatibility(id);
@@ -78,6 +81,51 @@ export function PromptStudioPage() {
       await open(selected.id);
     } catch (e: any) {
       setMsg(e.message || "激活被门禁拒绝");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clone = async () => {
+    if (!selected) return;
+    setBusy(true);
+    try {
+      const r = await api.promptStudio.clone(selected.id);
+      setMsg("已复制为新草稿版本");
+      await load();
+      await open(r.id);
+      setEditing(true);
+    } catch (e: any) {
+      setMsg(e.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveDraft = async () => {
+    if (!selected) return;
+    setBusy(true);
+    try {
+      await api.promptStudio.update(selected.id, draft);
+      setMsg("草稿已保存，需要重新测试后才能激活");
+      await open(selected.id);
+    } catch (e: any) {
+      setMsg(e.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const archiveDraft = async () => {
+    if (!selected) return;
+    setBusy(true);
+    try {
+      await api.promptStudio.archive(selected.id);
+      setMsg("草稿已归档");
+      setSelected(null);
+      await load();
+    } catch (e: any) {
+      setMsg(e.message || String(e));
     } finally {
       setBusy(false);
     }
@@ -201,18 +249,33 @@ export function PromptStudioPage() {
               )}
 
               <div>
-                <div className="text-2xs text-text-disabled mb-1">System</div>
-                <pre className="text-2xs bg-bg-canvas border border-border rounded p-2 max-h-40 overflow-auto whitespace-pre-wrap">
-                  {selected.system_prompt || "（空）"}
-                </pre>
+                <div className="flex items-center justify-between text-2xs text-text-disabled mb-1">
+                  <span>System</span>
+                  {selected.status === "active" ? (
+                    <button className="btn text-2xs py-1 px-2" disabled={busy} onClick={clone} title="复制为新草稿"><Copy size={11} />复制编辑</button>
+                  ) : (
+                    <div className="flex gap-1">
+                      <button className="btn text-2xs py-1 px-2" disabled={busy} onClick={() => setEditing((v) => !v)} title="编辑草稿">{editing ? <X size={11} /> : <Pencil size={11} />}{editing ? "取消" : "编辑"}</button>
+                      <button className="btn text-2xs py-1 px-2" disabled={busy} onClick={archiveDraft} title="归档草稿"><Archive size={11} />归档</button>
+                    </div>
+                  )}
+                </div>
+                {editing ? (
+                  <textarea className="w-full h-40 text-2xs bg-bg-canvas border border-border rounded p-2 font-mono" value={draft.system_prompt} onChange={(e) => setDraft({ ...draft, system_prompt: e.target.value })} />
+                ) : (
+                  <pre className="text-2xs bg-bg-canvas border border-border rounded p-2 max-h-40 overflow-auto whitespace-pre-wrap">{selected.system_prompt || "（空）"}</pre>
+                )}
               </div>
               <div>
                 <div className="text-2xs text-text-disabled mb-1">User Template</div>
-                <pre className="text-2xs bg-bg-canvas border border-border rounded p-2 max-h-40 overflow-auto whitespace-pre-wrap">
-                  {selected.user_prompt_template || "（空）"}
-                </pre>
+                {editing ? (
+                  <textarea className="w-full h-40 text-2xs bg-bg-canvas border border-border rounded p-2 font-mono" value={draft.user_prompt_template} onChange={(e) => setDraft({ ...draft, user_prompt_template: e.target.value })} />
+                ) : (
+                  <pre className="text-2xs bg-bg-canvas border border-border rounded p-2 max-h-40 overflow-auto whitespace-pre-wrap">{selected.user_prompt_template || "（空）"}</pre>
+                )}
               </div>
               <div className="flex gap-2 flex-wrap">
+                {editing ? <button className="btn-primary text-2xs py-1.5 px-3" disabled={busy} onClick={saveDraft}><Save size={11} />保存草稿</button> : null}
                 <button className="btn-primary text-2xs py-1.5 px-3" disabled={busy} onClick={runTest}>
                   {busy ? <Loader2 size={11} className="animate-spin" /> : null}
                   结构/合同测试

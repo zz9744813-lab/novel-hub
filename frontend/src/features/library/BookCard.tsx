@@ -22,10 +22,14 @@ export function BookCard({
   book,
   onOpen,
   onDelete,
+  isSelected,
+  onSelect,
 }: {
   book: BookshelfBook;
   onOpen: (id: string) => void;
   onDelete: (book: BookshelfBook) => void;
+  isSelected?: boolean;
+  onSelect?: (book: BookshelfBook | null) => void;
 }) {
   const [coverError, setCoverError] = useState(false);
   const [coverSrc, setCoverSrc] = useState<string | null>(null);
@@ -61,20 +65,37 @@ export function BookCard({
     };
   }, [book.cover_url]);
 
+  const handleClick = () => {
+    if (onSelect) {
+      onSelect(book);
+    } else {
+      onOpen(book.book_id);
+    }
+  };
+
+  const handleDoubleClick = () => {
+    onOpen(book.book_id);
+  };
+
   return (
-    <article className="shelf-book" style={cssVars}>
+    <article
+      className={clsx("shelf-book", isSelected && "is-selected")}
+      style={cssVars}
+    >
       <div className="shelf-book-shadow" aria-hidden="true" />
       <button
         type="button"
         className="shelf-book-button"
         aria-label={`打开《${book.title}》`}
-        onClick={() => onOpen(book.book_id)}
+        onClick={handleClick}
+        onDoubleClick={handleDoubleClick}
       >
         <span className="shelf-book-pages" aria-hidden="true">
           <span className="shelf-book-page-lines" />
         </span>
         <span className="shelf-book-spine" aria-hidden="true">
-          <span>{book.title}</span>
+          <span className="shelf-book-spine-title">{book.title}</span>
+          <span className="shelf-book-spine-brand" aria-hidden="true" />
         </span>
         <span className="shelf-book-cover">
           {showCoverImage && (
@@ -100,7 +121,7 @@ export function BookCard({
             <span style={{ width: `${pct}%` }} />
           </span>
           <span className="shelf-book-open-hint">
-            <ArrowUpRight size={13} /> 打开作品
+            <ArrowUpRight size={12} /> 打开作品
           </span>
         </span>
       </button>
@@ -113,7 +134,7 @@ export function BookCard({
         <span className="shelf-book-task" title={book.active_task?.label || "暂无活动任务"}>
           {book.active_task?.label || "点击翻开作品"}
         </span>
-        <BookOpen size={13} className="shelf-book-label-icon" aria-hidden="true" />
+        <BookOpen size={12} className="shelf-book-label-icon" aria-hidden="true" />
       </div>
 
       <div className="shelf-book-actions">
@@ -132,7 +153,7 @@ export function BookCard({
             onDelete(book);
           }}
         >
-          <Trash2 size={12} />
+          <Trash2 size={11} />
         </button>
       </div>
     </article>

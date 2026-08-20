@@ -349,12 +349,12 @@ export function ChapterList({ bookId }: { bookId: string }) {
               <div
                 key={n.node_id || n.chapter_no}
                 className={clsx(
-                  "row-item",
+                  "row-item group/row",
                   ch?.status === "finalized" && "border-success/20",
-                  isActive && "border-brand/20 bg-brand-muted/50"
+                  isActive ? "border-brand/30 bg-brand-muted/40" : ""
                 )}
               >
-                <div className="shrink-0 w-9 h-9 rounded-md bg-bg-canvas border border-border-standard flex items-center justify-center">
+                <div className="shrink-0 w-9 h-9 rounded-md bg-brand-muted/60 border border-brand/20 flex items-center justify-center transition-colors duration-150 group-hover/row:bg-brand-muted group-hover/row:border-brand/30">
                   <span className="text-sm font-bold text-brand-accent font-mono">
                     {n.chapter_no}
                   </span>

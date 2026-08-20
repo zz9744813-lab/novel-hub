@@ -150,6 +150,28 @@ export const api = {
     approve: (bookId: string, version: number) =>
       fetchJSON<{ status: string }>(`/api/books/${bookId}/outlines/${version}/approve`, { method: "POST" }),
   },
+  planning: {
+    get: (bookId: string) =>
+      fetchJSON<{ status: string; outline_version_id: string | null; version?: number; draft?: any }>(
+        `/api/books/${bookId}/planning`
+      ),
+    generate: (bookId: string, data: {
+      premise: string;
+      genre?: string;
+      tone?: string;
+      themes?: string[];
+      target_chapter_count?: number;
+    }) =>
+      fetchJSON<{ status: string; outline_version_id: string; version: number; draft: any }>(
+        `/api/books/${bookId}/planning/generate`,
+        { method: "POST", body: JSON.stringify(data) }
+      ),
+    confirm: (bookId: string, outlineVersionId: string) =>
+      fetchJSON<{ status: string; outline_version_id: string; version: number; nodes: number }>(
+        `/api/books/${bookId}/planning/confirm`,
+        { method: "POST", body: JSON.stringify({ outline_version_id: outlineVersionId }) }
+      ),
+  },
   chapters: {
     list: (bookId: string) => fetchJSON<ChapterListItem[]>(`/api/books/${bookId}/chapters`),
     run: (bookId: string, chapterNo: number) =>
@@ -268,6 +290,21 @@ export const api = {
   },
   resources: () => fetchJSON<{ available_mb: number; swap_used_pct: number; resource_safe: boolean }>("/api/admin/resources"),
   events: (bookId: string) => fetchJSON<any[]>(`/api/books/${bookId}/events`),
+  tasks: {
+    list: (params?: { task_type?: string; status?: string; book_id?: string; page?: number; page_size?: number }) => {
+      const q = new URLSearchParams();
+      for (const [key, value] of Object.entries(params || {})) {
+        if (value !== undefined && value !== "") q.set(key, String(value));
+      }
+      return fetchJSON<TaskListResponse>(`/api/tasks${q.toString() ? `?${q}` : ""}`);
+    },
+    get: (taskId: string) => fetchJSON<TaskItem>(`/api/tasks/${encodeURIComponent(taskId)}`),
+    operate: (taskId: string, action: string) =>
+      fetchJSON<{ task_id: string; status: string }>(
+        `/api/tasks/${encodeURIComponent(taskId)}/${encodeURIComponent(action)}`,
+        { method: "POST" }
+      ),
+  },
   library: {
     books: () => fetchJSON<LibraryBooksResponse>("/api/library/books"),
     bookHome: (bookId: string) => fetchJSON<any>(`/api/library/books/${bookId}/home`),
@@ -352,6 +389,12 @@ export const api = {
       ),
     activate: (id: string) =>
       fetchJSON<any>(`/api/prompt-studio/templates/${id}/activate`, { method: "POST" }),
+    update: (id: string, body: any) =>
+      fetchJSON<any>(`/api/prompt-studio/templates/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+    clone: (id: string) =>
+      fetchJSON<any>(`/api/prompt-studio/templates/${id}/clone`, { method: "POST" }),
+    archive: (id: string) =>
+      fetchJSON<any>(`/api/prompt-studio/templates/${id}/archive`, { method: "POST" }),
     test: (id: string) =>
       fetchJSON<any>(`/api/prompt-studio/templates/${id}/test`, { method: "POST" }),
     testStructure: (id: string) =>
@@ -362,6 +405,39 @@ export const api = {
   },
 
 };
+
+export interface TaskError {
+  code?: string | null;
+  detail?: unknown;
+}
+export interface TaskItem {
+  task_id: string;
+  task_type: "chapter" | "import" | "research";
+  entity_id: string;
+  book_id?: string | null;
+  book_title?: string | null;
+  chapter_id?: string | null;
+  chapter_no?: number | null;
+  status: string;
+  progress?: number | null;
+  current_step?: string | null;
+  control_requested?: string | null;
+  error?: TaskError | null;
+  actions: string[];
+  created_at?: string | null;
+  updated_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  topic?: string | null;
+}
+export interface TaskListResponse {
+  items: TaskItem[];
+  page: number;
+  page_size: number;
+  total: number;
+  pages: number;
+  task_types: string[];
+}
 
 export interface Book {
   book_id: string; title: string; status?: string;

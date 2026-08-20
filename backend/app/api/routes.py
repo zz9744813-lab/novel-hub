@@ -10,15 +10,14 @@ from sqlalchemy import select, update, func, delete, text, bindparam
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, async_session_factory
 from app.models import (
-    Book, BookSetting, OutlineVersion, OutlineNode, OutlineDependency,
-    ChapterTask, Chapter, ChapterVersion, Scene, Paragraph,
-    CharacterCard, CharacterStateSnapshot,
-    WorldRule, PlotThread, StoryEvent, EntityAlias,
-    MemoryL1ChapterLedger, MemoryL2StageSummary, MemoryL3VolumeSummary, MemoryL4StateSnapshot,
-    StyleVoiceCard, StyleToneAnchor,
-    QueryPlan, RetrievalRun, RetrievalCandidate, RetrievalJudgement,
-    ReviewIssue, RewritePatch, DriftAuditReport,
-    AgentRun, AgentRunOutput, LlmUsageEvent,
+    Book, OutlineVersion, OutlineNode,
+    ChapterTask, Chapter, ChapterVersion,
+    MemoryL4StateSnapshot,
+    QueryPlan, RetrievalRun,
+    RewritePatch,
+    DriftAuditReport,
+    StoryEvent,
+    AgentRun,
     HumanIntervention, PromptTemplate,
 )
 from app.state_machine import ChapterState
@@ -153,6 +152,18 @@ class OutlineParseRequest(BaseModel):
     target_chapter_count: int = 500
 
 
+class BlankPlanningRequest(BaseModel):
+    premise: str
+    genre: str | None = None
+    tone: str | None = None
+    themes: list[str] = []
+    target_chapter_count: int = 12
+
+
+class BlankPlanningConfirmRequest(BaseModel):
+    outline_version_id: str
+
+
 class L4ReviseRequest(BaseModel):
     entity_type: str
     entity_id: str
@@ -237,11 +248,20 @@ async def delete_book(book_id: str, db: AsyncSession = Depends(get_db)):
     cover_paths = [book.cover_path, book.cover_thumb_path]
     fks = await _live_foreign_keys(db)
     owned: dict[str, set[Any]] = {"books": {bid}}
+    # Tables without an id column (composite-key tables such as
+    # agent_run_outputs / genre_profile_sources) cannot be collected or
+    # deleted by id. They are queued here and deleted directly via a
+    # book_id / FK column before the id-based cascade loop runs, so their
+    # foreign keys cannot block removal of the parent rows.
+    direct_deletes: list[tuple[str, str, list[Any]]] = []
 
     # Seed ownership from every live table that still carries book_id, even if
     # that table is not declared in the current ORM metadata.
     for table_name in await _tables_with_column(db, "book_id"):
-        if table_name == "books" or not await _table_has_column(db, table_name, "id"):
+        if table_name == "books":
+            continue
+        if not await _table_has_column(db, table_name, "id"):
+            direct_deletes.append((table_name, "book_id", [bid]))
             continue
         rows = await db.execute(
             text(f'SELECT id FROM "{table_name}" WHERE book_id = :bid'),
@@ -262,6 +282,7 @@ async def delete_book(book_id: str, db: AsyncSession = Depends(get_db)):
                 continue
             child_table = edge["child_table"]
             if not await _table_has_column(db, child_table, "id"):
+                direct_deletes.append((child_table, edge["child_column"], list(parent_ids)))
                 continue
             rows = await db.execute(
                 text(
@@ -303,6 +324,24 @@ async def delete_book(book_id: str, db: AsyncSession = Depends(get_db)):
                 bindparam("ids", expanding=True)
             ),
             {"ids": list(owned["chapter_step_runs"])},
+        )
+
+    # Delete composite-key / id-less tables first: they reference parent rows
+    # (agent_runs, genre_profiles, reference_samples) that the cascade loop
+    # below is about to remove, and their FKs would otherwise block that pass.
+    # Dedupe on (table, column) because FK expansion can queue the same table
+    # more than once via different edges (e.g. genre_profile_sources).
+    seen_direct: set[tuple[str, str]] = set()
+    for table_name, column, ids in direct_deletes:
+        key = (table_name, column)
+        if key in seen_direct or not ids:
+            continue
+        seen_direct.add(key)
+        await db.execute(
+            text(f'DELETE FROM "{table_name}" WHERE "{column}" IN :ids').bindparams(
+                bindparam("ids", expanding=True)
+            ),
+            {"ids": list(dict.fromkeys(ids))},
         )
 
     deleted_tables: set[str] = set()
@@ -374,7 +413,7 @@ async def upload_outline_file(
 
     Supports: .txt .md .docx .pdf .rtf .csv .json .html .xml (max 5MB).
     """
-    from app.engine.file_extract import extract_text, ALLOWED_EXTENSIONS
+    from app.engine.file_extract import extract_text
 
     content = await file.read()
     if len(content) > 5 * 1024 * 1024:
@@ -434,12 +473,146 @@ async def parse_outline(book_id: str, req: OutlineParseRequest, db: AsyncSession
 
 @router.post("/api/books/{book_id}/outlines/generate")
 async def generate_outline(book_id: str, req: dict, db: AsyncSession = Depends(get_db)):
-    # TODO: implement AI outline generation
-    version = OutlineVersion(id=gen_uuid(), book_id=uuid.UUID(book_id),
-                             version=1, status="draft", source="generate")
+    """Backward-compatible entry point; blank-book planning uses /planning/generate."""
+    return await generate_blank_planning(book_id, BlankPlanningRequest(**req), db)
+
+
+@router.post("/api/books/{book_id}/planning/generate")
+async def generate_blank_planning(
+    book_id: str, req: BlankPlanningRequest, db: AsyncSession = Depends(get_db)
+):
+    from app.agents.blank_planner import generate_planning_draft
+    from app.services.blank_planning import PlanningValidationError
+
+    bid = _parse_uuid(book_id, field="book id")
+    book = (await db.execute(select(Book).where(Book.id == bid))).scalar_one_or_none()
+    if not book:
+        raise HTTPException(404, "Book not found")
+    if not req.premise.strip():
+        raise HTTPException(422, "premise is required")
+    if not 1 <= req.target_chapter_count <= 500:
+        raise HTTPException(422, "target_chapter_count must be between 1 and 500")
+
+    existing = (await db.execute(
+        select(func.max(OutlineVersion.version)).where(OutlineVersion.book_id == bid)
+    )).scalar() or 0
+    version = OutlineVersion(
+        id=gen_uuid(), book_id=bid, version=int(existing) + 1,
+        status="planning", source="blank_planning",
+        raw_outline=req.premise.strip(),
+    )
     db.add(version)
     await db.flush()
-    return {"outline_version_id": str(version.id), "status": "draft"}
+    try:
+        draft = await generate_planning_draft(
+            book_id=bid,
+            premise=req.premise.strip(),
+            genre=req.genre or "",
+            tone=req.tone or "",
+            themes=req.themes,
+            target_chapter_count=req.target_chapter_count,
+        )
+    except PlanningValidationError as exc:
+        version.status = "error"
+        version.parsed_json = {"error": str(exc)}
+        await db.commit()
+        raise HTTPException(502, detail={"message": "Planning output invalid", "error": str(exc)}) from exc
+    except Exception as exc:
+        version.status = "error"
+        version.parsed_json = {"error": str(exc)}
+        await db.commit()
+        raise HTTPException(502, detail={"message": "Planning generation failed", "error": str(exc)}) from exc
+
+    version.status = "draft"
+    version.parsed_json = draft
+    await db.commit()
+    return {
+        "outline_version_id": str(version.id), "version": version.version,
+        "status": version.status, "draft": draft,
+    }
+
+
+@router.get("/api/books/{book_id}/planning")
+async def get_blank_planning(book_id: str, db: AsyncSession = Depends(get_db)):
+    bid = _parse_uuid(book_id, field="book id")
+    version = (await db.execute(
+        select(OutlineVersion).where(
+            OutlineVersion.book_id == bid,
+            OutlineVersion.source == "blank_planning",
+        ).order_by(OutlineVersion.version.desc()).limit(1)
+    )).scalar_one_or_none()
+    if not version:
+        return {"status": "not_started", "outline_version_id": None, "draft": None}
+    return {
+        "status": version.status, "outline_version_id": str(version.id),
+        "version": version.version, "draft": version.parsed_json,
+    }
+
+
+@router.post("/api/books/{book_id}/planning/confirm")
+async def confirm_blank_planning(
+    book_id: str, req: BlankPlanningConfirmRequest, db: AsyncSession = Depends(get_db)
+):
+    from app.engine.outline import validate_dag
+    from app.models import BookProfile
+    from app.services.blank_planning import build_outline_nodes, normalize_planning_draft
+
+    bid = _parse_uuid(book_id, field="book id")
+    try:
+        version_id = uuid.UUID(req.outline_version_id)
+    except ValueError as exc:
+        raise HTTPException(400, "Invalid outline_version_id") from exc
+    version = (await db.execute(select(OutlineVersion).where(
+        OutlineVersion.id == version_id, OutlineVersion.book_id == bid,
+        OutlineVersion.source == "blank_planning",
+    ))).scalar_one_or_none()
+    if not version:
+        raise HTTPException(404, "Planning draft not found")
+    if version.status == "approved":
+        return {"status": "approved", "version": version.version}
+    if version.status != "draft" or not version.parsed_json:
+        raise HTTPException(409, "Planning draft is not ready for confirmation")
+    try:
+        draft = normalize_planning_draft(
+            version.parsed_json,
+            target_chapter_count=len(version.parsed_json.get("chapters", [])),
+        )
+    except Exception as exc:
+        raise HTTPException(409, detail={"message": "Planning draft is invalid", "error": str(exc)}) from exc
+
+    nodes = build_outline_nodes(draft, book_id=str(bid), outline_version_id=str(version.id))
+    for node_data in nodes:
+        db.add(OutlineNode(id=gen_uuid(), book_id=bid, outline_version_id=version.id, **node_data))
+    await db.flush()
+    valid, errors = await validate_dag(db, bid, version.id)
+    if not valid:
+        await db.rollback()
+        raise HTTPException(409, detail={"message": "Planning DAG validation failed", "errors": errors})
+
+    book = (await db.execute(select(Book).where(Book.id == bid))).scalar_one()
+    book.title = draft["title"] or book.title
+    book.logline = draft["logline"]
+    book.synopsis = draft["synopsis"]
+    book.genre = draft["genre"] or book.genre
+    book.tone_summary = draft["tone"]
+    book.tags = draft["themes"]
+    book.planned_chapters = len(nodes)
+    book.lifecycle_status = "planned"
+    profile = (await db.execute(select(BookProfile).where(BookProfile.book_id == bid))).scalar_one_or_none()
+    if profile is None:
+        profile = BookProfile(id=gen_uuid(), book_id=bid)
+        db.add(profile)
+    profile.logline = draft["logline"]
+    profile.synopsis = draft["synopsis"]
+    profile.genre = draft["genre"] or None
+    profile.themes = draft["themes"]
+    profile.tone = draft["tone"] or None
+    version.status = "approved"
+    await db.commit()
+    return {
+        "status": "approved", "version": version.version,
+        "outline_version_id": str(version.id), "nodes": len(nodes),
+    }
 
 
 @router.post("/api/books/{book_id}/outlines/{version}/approve")
@@ -475,12 +648,18 @@ async def generate_book_cover(book_id: str, db: AsyncSession = Depends(get_db)):
     cover_hash = hashlib.sha256(f"{bid}|{book.title}|{book.genre}|{book.logline}".encode()).hexdigest()[:16]
     cover_path = f"{cover_dir}/cover_{cover_hash}.png"
     thumb_path = f"{cover_dir}/thumb_{cover_hash}.png"
-    render_cover(cover_path, title=book.title or "Untitled", genre=book.genre or "", logline=book.logline or "")
-    render_cover(thumb_path, title=book.title or "Untitled", genre=book.genre or "", logline=book.logline or "", width=160, height=240)
-    book.cover_path = cover_path
-    book.cover_thumb_path = thumb_path
-    book.cover_hash = cover_hash
-    await db.commit()
+    existing_paths = {path: Path(path).exists() for path in (cover_path, thumb_path)}
+    try:
+        render_cover(cover_path, title=book.title or "Untitled", genre=book.genre or "", logline=book.logline or "")
+        render_cover(thumb_path, title=book.title or "Untitled", genre=book.genre or "", logline=book.logline or "", width=160, height=240)
+        book.cover_path = cover_path
+        book.cover_thumb_path = thumb_path
+        book.cover_hash = cover_hash
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        _cleanup_cover_files([path for path, existed in existing_paths.items() if not existed])
+        raise
     return {
         "status": "generated",
         "width": 320,
@@ -595,132 +774,75 @@ async def get_outline_graph(book_id: str, db: AsyncSession = Depends(get_db)):
     }
 
 
-# ---- Chapter operations ----
+@router.post("/api/books/{book_id}/chapters/next/run")
+async def run_next_chapter(book_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Select and enqueue the next chapter without inventing outline content."""
+    from app.services.next_chapter_selector import (
+        NextChapterSelectionError,
+        select_next_chapter,
+    )
+    from app.models import ChapterRun
 
-async def _ensure_outline_node(
-    db: AsyncSession,
-    bid: uuid.UUID,
-    chapter_no: int,
-    *,
-    title: str | None = None,
-    goal: str | None = None,
-) -> OutlineNode:
-    """Create a minimal outline node if missing so user can keep writing."""
-    from app.models import OutlineVersion
-
-    ov = (
-        await db.execute(
-            select(OutlineVersion)
-            .where(OutlineVersion.book_id == bid, OutlineVersion.status == "approved")
-            .order_by(OutlineVersion.version.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    if not ov:
-        ov = (
+    bid = _parse_uuid(book_id, field="book id")
+    request_id = request.headers.get("Idempotency-Key") or request.headers.get("idempotency-key")
+    if request_id:
+        existing_run = (
             await db.execute(
-                select(OutlineVersion)
-                .where(OutlineVersion.book_id == bid)
-                .order_by(OutlineVersion.version.desc())
+                select(ChapterRun)
+                .where(ChapterRun.book_id == bid, ChapterRun.request_id == request_id)
+                .order_by(ChapterRun.created_at.desc())
                 .limit(1)
             )
         ).scalar_one_or_none()
-    if not ov:
-        raise HTTPException(400, "请先上传并批准大纲（大纲依赖页）")
+        if existing_run is not None:
+            return {
+                "decision": "open_active_run" if existing_run.status in {"queued", "running", "paused", "retryable"} else "resume_unfinished",
+                "chapter_no": existing_run.chapter_no,
+                "chapter_id": str(existing_run.chapter_id),
+                "outline_node_id": None,
+                "run_id": str(existing_run.id),
+                "status": existing_run.status,
+                "reason": "idempotent replay",
+                "status_url": f"/api/chapter-runs/{existing_run.id}",
+            }
+    try:
+        decision = await select_next_chapter(db, bid, request_id=request_id)
+    except NextChapterSelectionError:
+        raise
 
-    node = (
-        await db.execute(
-            select(OutlineNode).where(
-                OutlineNode.book_id == bid,
-                OutlineNode.outline_version_id == ov.id,
-                OutlineNode.chapter_no == chapter_no,
+    if decision.action == "open_active_run":
+        active = (
+            await db.execute(
+                select(ChapterRun).where(ChapterRun.id == decision.active_run_id)
             )
-        )
-    ).scalar_one_or_none()
-    if node:
-        return node
+        ).scalar_one()
+        return {
+            "decision": decision.action,
+            "chapter_no": decision.chapter_no,
+            "chapter_id": str(decision.chapter_id),
+            "outline_node_id": str(decision.outline_node_id),
+            "run_id": str(active.id),
+            "status": active.status,
+            "reason": decision.reason,
+            "status_url": f"/api/chapter-runs/{active.id}",
+        }
 
-    prev = (
-        await db.execute(
-            select(OutlineNode).where(
-                OutlineNode.book_id == bid,
-                OutlineNode.outline_version_id == ov.id,
-                OutlineNode.chapter_no == chapter_no - 1,
-            )
-        )
-    ).scalar_one_or_none()
-    depends = []
-    if prev:
-        depends = [{"node_id": str(prev.id), "chapter_no": prev.chapter_no, "required": True}]
-    default_goal = goal or (
-        f"承接第{chapter_no - 1}章，推进主线与人物状态；保持与已定稿一致。"
-        if chapter_no > 1
-        else "开篇建立设定与主角动机。"
-    )
-    node = OutlineNode(
-        id=gen_uuid(),
-        book_id=bid,
-        outline_version_id=ov.id,
-        node_type="chapter",
-        volume_no=1,
-        chapter_no=chapter_no,
-        title=title or f"第{chapter_no}章",
-        goal=default_goal,
-        required_beats=[],
-        forbidden_outcomes=[],
-        involved_character_ids=[],
-        plot_thread_ids=[],
-        depends_on=depends,
-        expected_state_changes=[],
-    )
-    db.add(node)
-    await db.flush()
-    return node
+    if decision.action == "needs_human":
+        return {
+            "decision": decision.action,
+            "chapter_no": decision.chapter_no,
+            "chapter_id": str(decision.chapter_id),
+            "outline_node_id": str(decision.outline_node_id),
+            "run_id": None,
+            "status": ChapterState.NEEDS_HUMAN.value,
+            "reason": decision.reason,
+        }
 
-
-
-@router.post("/api/books/{book_id}/chapters/next/run")
-async def run_next_chapter(book_id: str, request: Request, db: AsyncSession = Depends(get_db)):
-    """Primary write button: find next chapter_no, ensure outline node, enqueue run."""
-    bid = uuid.UUID(book_id)
-    max_outline = (
-        await db.execute(
-            select(func.coalesce(func.max(OutlineNode.chapter_no), 0)).where(OutlineNode.book_id == bid)
-        )
-    ).scalar() or 0
-    max_final = (
-        await db.execute(
-            select(func.coalesce(func.max(Chapter.chapter_no), 0)).where(
-                Chapter.book_id == bid,
-                Chapter.status == ChapterState.FINALIZED.value,
-            )
-        )
-    ).scalar() or 0
-    max_any = (
-        await db.execute(
-            select(func.coalesce(func.max(Chapter.chapter_no), 0)).where(Chapter.book_id == bid)
-        )
-    ).scalar() or 0
-    # next after highest finalized among real story chapters (ignore huge test nos > max_outline+50)
-    story_max = max(max_outline, max_final if max_final <= max_outline + 20 else max_outline)
-    if story_max == 0:
-        next_no = 1
-    else:
-        next_no = int(story_max) + 1
-
-    # if next already exists unfinished, run that; if finalized, keep +1
-    existing = (
-        await db.execute(
-            select(Chapter).where(Chapter.book_id == bid, Chapter.chapter_no == next_no)
-        )
-    ).scalar_one_or_none()
-    if existing and existing.status == ChapterState.FINALIZED.value:
-        next_no = next_no + 1
-
-    await _ensure_outline_node(db, bid, next_no)
-    await db.commit()
-    # reuse run_chapter
-    return await run_chapter(book_id, next_no, request, db)
+    result = await run_chapter(book_id, decision.chapter_no, request, db)
+    result["decision"] = decision.action
+    result["outline_node_id"] = str(decision.outline_node_id)
+    result["reason"] = decision.reason
+    return result
 
 
 @router.post("/api/books/{book_id}/chapters/{chapter_no}/run")
@@ -738,7 +860,7 @@ async def run_chapter(
     bid = uuid.UUID(book_id)
     request_id = request.headers.get("Idempotency-Key") or request.headers.get("idempotency-key") or str(gen_uuid())
 
-    # Prefer approved outline version; fall back to latest
+    # Only an approved outline version may enter the writing pipeline.
     ov = (
         await db.execute(
             select(OutlineVersion)
@@ -748,16 +870,10 @@ async def run_chapter(
         )
     ).scalar_one_or_none()
     if not ov:
-        ov = (
-            await db.execute(
-                select(OutlineVersion)
-                .where(OutlineVersion.book_id == bid)
-                .order_by(OutlineVersion.version.desc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-    if not ov:
-        raise HTTPException(404, "Outline version not found")
+        raise HTTPException(
+            422,
+            detail={"code": "OUTLINE_NOT_APPROVED", "message": "请先批准大纲后再写作"},
+        )
 
     node = (
         await db.execute(
@@ -769,17 +885,14 @@ async def run_chapter(
         )
     ).scalar_one_or_none()
     if not node:
-        # fallback without version filter for legacy data
-        node = (
-            await db.execute(
-                select(OutlineNode).where(
-                    OutlineNode.book_id == bid, OutlineNode.chapter_no == chapter_no
-                )
-            )
-        ).scalar_one_or_none()
-    if not node:
-        # UX: allow continuing past short outlines by auto-creating next nodes
-        node = await _ensure_outline_node(db, bid, chapter_no)
+        raise HTTPException(
+            422,
+            detail={
+                "code": "OUTLINE_NODE_MISSING",
+                "chapter_no": chapter_no,
+                "message": f"第{chapter_no}章没有已批准章纲",
+            },
+        )
 
     # Idempotency: same chapter + request_id returns existing run
     existing_run = (
@@ -961,7 +1074,6 @@ async def resume_chapter(chapter_id: str, db: AsyncSession = Depends(get_db)):
     """B-12: clear control, requeue chapter, write outbox for active/new run."""
     from app.models import ChapterRun
     from app.engine.state_transition import transition_chapter
-    from app.workers.outbox_dispatcher import create_run_and_outbox
 
     result = await db.execute(select(Chapter).where(Chapter.id == uuid.UUID(chapter_id)))
     chapter = result.scalar_one_or_none()
@@ -1270,7 +1382,39 @@ async def get_event(book_id: str, event_id: str, db: AsyncSession = Depends(get_
 # ---- Retrieval test ----
 @router.post("/api/books/{book_id}/retrieval/test")
 async def retrieval_test(book_id: str, req: dict, db: AsyncSession = Depends(get_db)):
-    return {"book_id": book_id, "results": [], "note": "TODO"}
+    from app.engine.retrieval import (
+        candidate_merge_and_score,
+        event_ledger_search,
+        full_text_search,
+    )
+
+    bid = _parse_uuid(book_id, field="book id")
+    if not (await db.execute(select(Book).where(Book.id == bid))).scalar_one_or_none():
+        raise HTTPException(404, "Book not found")
+    chapter_range = req.get("chapter_range") or {"from": 1, "to": 10**9}
+    if isinstance(chapter_range, list):
+        chapter_range = {
+            "from": chapter_range[0] if chapter_range else 1,
+            "to": chapter_range[1] if len(chapter_range) > 1 else 10**9,
+        }
+    bounds = (int(chapter_range.get("from", 1)), int(chapter_range.get("to", 10**9)))
+    try:
+        character_ids = [uuid.UUID(str(value)) for value in req.get("character_ids", [])]
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, "character_ids must contain UUIDs") from exc
+    event_candidates = await event_ledger_search(
+        db, bid, character_ids, req.get("event_types") or [], bounds
+    )
+    terms = req.get("exact_terms") or []
+    terms = [terms] if isinstance(terms, str) else terms
+    text_candidates = await full_text_search(db, bid, terms, bounds)
+    plan = {
+        "character_ids": [str(value) for value in character_ids],
+        "event_types": req.get("event_types") or [],
+        "chapter_range": chapter_range,
+    }
+    results = candidate_merge_and_score(event_candidates, text_candidates, plan)
+    return {"book_id": str(bid), "candidate_count": len(results), "results": results}
 
 
 @router.post("/api/books/{book_id}/retrieval/gold-samples")

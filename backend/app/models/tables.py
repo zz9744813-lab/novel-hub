@@ -1,13 +1,12 @@
 """All ORM models for NovelForge - 40+ tables per v7.3 spec."""
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from sqlalchemy import (
     Integer, String, Text, Boolean, DateTime, Float, ForeignKey, Index, UniqueConstraint, func
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY, TSVECTOR
-from app.models.base import Base, utcnow, TimestampMixin, BookMixin, VersionMixin
-
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
+from app.models.base import Base, utcnow, TimestampMixin
 
 def gen_uuid():
     return uuid.uuid4()
@@ -284,6 +283,7 @@ class CharacterCard(Base, TimestampMixin):
     role: Mapped[str | None] = mapped_column(String(200), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     card_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    source_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
@@ -321,6 +321,7 @@ class WorldRule(Base, TimestampMixin):
     rule_key: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     rule_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    source_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
@@ -333,6 +334,7 @@ class PlotThread(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(50), default="open", nullable=False, index=True)
     planted_chapter: Mapped[int | None] = mapped_column(Integer, nullable=True)
     resolved_chapter: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
@@ -679,6 +681,7 @@ class LlmUsageEvent(Base, TimestampMixin):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
     book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    attempt_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     provider: Mapped[str] = mapped_column(String(200), nullable=False)
     model_name: Mapped[str] = mapped_column(String(200), nullable=False)
     prompt_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -796,6 +799,7 @@ class AgentContextPackage(Base):
     assembler_version: Mapped[str] = mapped_column(String(50), nullable=False)
     request_parameters: Mapped[dict] = mapped_column(JSONB, nullable=False)
     assembly_manifest: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    prompt_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
     l4_entity_refs: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
     l1_ledger_refs: Mapped[list] = mapped_column(ARRAY(UUID(as_uuid=True)), nullable=False, server_default="{}")
     l2_summary_refs: Mapped[list] = mapped_column(ARRAY(UUID(as_uuid=True)), nullable=False, server_default="{}")

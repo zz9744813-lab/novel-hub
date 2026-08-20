@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../api";
-import { Loader2, Globe, Play, CheckCircle, XCircle } from "lucide-react";
+import { Loader2, Globe, Play, CheckCircle, XCircle, AlertTriangle, BookOpen } from "lucide-react";
 import { SourceSelector } from "../../components/SourceSelector";
+import { Button } from "../../components/ui/Button";
 interface ResearchSource {
   name: string;
   base_url: string;
@@ -38,6 +39,33 @@ export function ResearchPage({ bookId }: { bookId?: string }) {
   const [newSourceUrl, setNewSourceUrl] = useState("");
   const [creatingTask, setCreatingTask] = useState<string | null>(null);
   const [pollingInterval, setPollingInterval] = useState<number | null>(null);
+  
+  // Form validation helpers
+  const validateForm = (): boolean => {
+    const errors: {source?: string; url?: string} = {};
+    
+    // Source validation
+    if (!newSourceName) {
+      errors.source = "请选择调研源";
+    } else if (!sources.some(s => s.name === newSourceName)) {
+      errors.source = "无效的调研源";
+    }
+    
+    // URL validation
+    if (!newSourceUrl.trim()) {
+      errors.url = "请输入目标 URL";
+    } else {
+      try {
+        new URL(newSourceUrl.trim());
+      } catch {
+        errors.url = "URL 格式不正确，请以 https:// 开头";
+      }
+    }
+    
+    setValidationErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+  const [validationErrors, setValidationErrors] = useState<{source?: string; url?: string}>({});
 
   const loadSources = useCallback(async () => {
     try {
@@ -80,22 +108,25 @@ export function ResearchPage({ bookId }: { bookId?: string }) {
   }, [loadSources, loadTasks]);
 
   const handleCreateTask = async () => {
-    if (!newSourceName || !newSourceUrl) return;
+    if (!validateForm()) return;
 
     setCreatingTask(newSourceName);
+    setError(null);
     
     try {
-      // TODO: Call /api/research/tasks POST endpoint
       const response = await fetch("/api/research/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           source_id: newSourceName,
-          target_url: newSourceUrl,
+          target_url: newSourceUrl.trim(),
         }),
       });
 
-      if (!response.ok) throw new Error("Failed to create task");
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || "创建任务失败");
+      }
 
       const task: ResearchTaskInfo = await response.json();
       setTasks((prev) => [task, ...prev]);
@@ -117,15 +148,27 @@ export function ResearchPage({ bookId }: { bookId?: string }) {
           }
         } catch (e) {
           clearInterval(interval);
+          setError(e instanceof Error ? e.message : "轮询错误");
         }
       }, 2000);
 
       setPollingInterval(interval);
 
-      // Reset form
+      // Reset form on success
       setNewSourceUrl("");
     } catch (e: any) {
-      setError(e?.message || String(e));
+      // Show structured error message
+      const errorMsg = e.message || String(e);
+      if (errorMsg.includes("not found")) {
+        setError("未找到指定的调研源配置");
+      } else if (errorMsg.includes("401") || errorMsg.includes("unauthorized")) {
+        setError("认证失败，请检查 Token");
+      } else if (errorMsg.includes("network") || errorMsg.includes("fetch")) {
+        setError("网络连接超时，请检查服务器是否运行");
+      } else {
+        setError(errorMsg);
+      }
+      console.error("Task creation error:", e);
     } finally {
       setCreatingTask(null);
     }

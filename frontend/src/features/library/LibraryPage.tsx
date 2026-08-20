@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../../api";
 import { BookCard } from "./BookCard";
 import { BookshelfBook, LIFECYCLE_LABEL } from "./library.types";
@@ -27,8 +26,6 @@ export function LibraryPage({
   const [deletingBook, setDeletingBook] = useState<BookshelfBook | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [selectedBook, setSelectedBook] = useState<BookshelfBook | null>(null);
-  const shelfRef = useRef<HTMLDivElement>(null);
-  const [shelfColumns, setShelfColumns] = useState(1);
 
   const load = async () => {
     setLoading(true);
@@ -92,25 +89,6 @@ export function LibraryPage({
   const totalWords = books.reduce((sum, book) => sum + (book.finalized_words || 0), 0);
   const activeCount = books.filter((book) => ["writing", "importing"].includes(book.lifecycle_status)).length;
   const riskCount = books.reduce((sum, book) => sum + (book.unresolved_risk_count || 0), 0);
-
-  useEffect(() => {
-    const node = shelfRef.current;
-    if (!node) return;
-    const updateColumns = () => {
-      const width = node.clientWidth;
-      setShelfColumns(Math.max(1, Math.min(filtered.length + 1, Math.floor((width + 48) / 180))));
-    };
-    updateColumns();
-    const observer = new ResizeObserver(updateColumns);
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [filtered.length]);
-
-  const shelfRows = useMemo(() => {
-    const rows: BookshelfBook[][] = [];
-    for (let i = 0; i < filtered.length; i += shelfColumns) rows.push(filtered.slice(i, i + shelfColumns));
-    return rows;
-  }, [filtered, shelfColumns]);
 
   return (
     <div className="library-page h-full overflow-auto">
@@ -204,58 +182,25 @@ export function LibraryPage({
         ) : filtered.length === 0 ? (
           <LibraryEmptyState onNew={onNewBook} />
         ) : (
-          <section className="library-room" aria-label="作品书架" ref={shelfRef}>
-            <div className="library-room-light" aria-hidden="true" />
+          <section className="library-room" aria-label="作品书架">
             <div className="library-shelf-stack">
-              {shelfRows.map((row, rowIndex) => (
-                <div className="library-shelf-level" key={`shelf-${rowIndex}`}>
-                  <div
-                    className="library-shelf-row"
-                    style={
-                      {
-                        gridTemplateColumns: `repeat(${Math.max(row.length, 1)}, minmax(0, 1fr))`,
-                      } as CSSProperties
-                    }
-                  >
-                    {row.map((book) => (
-                      <BookCard
-                        key={book.book_id}
-                        book={book}
-                        onOpen={onOpenBook}
-                        onDelete={setDeletingBook}
-                        isSelected={selectedBook?.book_id === book.book_id}
-                        onSelect={setSelectedBook}
-                      />
-                    ))}
-                  </div>
-                  <div className="library-shelf-board" aria-hidden="true">
-                    <span />
-                    <span />
-                  </div>
-                </div>
+              {filtered.map((book) => (
+                <BookCard
+                  key={book.book_id}
+                  book={book}
+                  onOpen={onOpenBook}
+                  onDelete={setDeletingBook}
+                  isSelected={selectedBook?.book_id === book.book_id}
+                  onSelect={setSelectedBook}
+                />
               ))}
-              <div className="library-shelf-level library-shelf-add-level">
-                <div
-                  className="library-shelf-row"
-                  style={
-                    {
-                      gridTemplateColumns: `repeat(${Math.max(1, Math.min(shelfColumns, 3))}, minmax(0, 1fr))`,
-                    } as CSSProperties
-                  }
-                >
-                  <button type="button" className="shelf-add-book" onClick={onNewBook}>
-                    <span>
-                      <Plus size={20} />
-                    </span>
-                    <strong>放入新作品</strong>
-                    <small>从企划或空白稿开始</small>
-                  </button>
-                </div>
-                <div className="library-shelf-board" aria-hidden="true">
-                  <span />
-                  <span />
-                </div>
-              </div>
+              <button type="button" className="shelf-add-book" onClick={onNewBook}>
+                <span>
+                  <Plus size={20} />
+                </span>
+                <strong>放入新作品</strong>
+                <small>从企划或空白稿开始</small>
+              </button>
             </div>
           </section>
         )}

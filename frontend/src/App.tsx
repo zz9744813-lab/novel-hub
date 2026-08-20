@@ -157,28 +157,28 @@ export default function App() {
   if (!authed) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-bg-canvas p-6">
-        <div className="panel-elevated rounded-lg p-8 w-full max-w-sm space-y-4">
+        <div className="panel-elevated rounded-card p-8 w-full max-w-sm space-y-4">
           <div>
-            <h1 className="text-sm text-text-primary" style={{ fontWeight: 510 }}>
+            <h1 className="text-h2 text-text-primary" style={{ fontWeight: 590 }}>
               NovelForge 登录
             </h1>
-            <p className="text-xs text-text-tertiary mt-1">
+            <p className="text-body text-text-tertiary mt-1">
               输入 ADMIN_API_TOKEN（仅保存在当前标签页 sessionStorage）
             </p>
           </div>
           <input
             type="password"
-            className="w-full rounded-md border border-border bg-bg-panel px-3 py-2 text-xs text-text-primary"
+            className="w-full rounded-control border border-border bg-bg-panel px-3 py-2 text-body text-text-primary"
             placeholder="Bearer Token"
             value={tokenInput}
             onChange={(e) => setTokenInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleLogin()}
           />
-          {authError && <p className="text-xs text-red-400">{authError}</p>}
+          {authError && <p className="text-caption text-red-400">{authError}</p>}
           <button
             onClick={handleLogin}
             disabled={authBusy}
-            className="btn-primary w-full px-4 py-2 text-xs rounded-md"
+            className="btn-primary w-full px-4 py-2 text-body rounded-control"
           >
             {authBusy ? "验证中…" : "进入书架"}
           </button>

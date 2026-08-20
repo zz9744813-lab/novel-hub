@@ -82,7 +82,6 @@ export function BookCard({
       className={clsx("shelf-book", isSelected && "is-selected")}
       style={cssVars}
     >
-      <div className="shelf-book-shadow" aria-hidden="true" />
       <button
         type="button"
         className="shelf-book-button"
@@ -90,13 +89,6 @@ export function BookCard({
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
       >
-        <span className="shelf-book-pages" aria-hidden="true">
-          <span className="shelf-book-page-lines" />
-        </span>
-        <span className="shelf-book-spine" aria-hidden="true">
-          <span className="shelf-book-spine-title">{book.title}</span>
-          <span className="shelf-book-spine-brand" aria-hidden="true" />
-        </span>
         <span className="shelf-book-cover">
           {showCoverImage && (
             <img
@@ -107,7 +99,6 @@ export function BookCard({
             />
           )}
           <span className="shelf-book-cover-shade" aria-hidden="true" />
-          <span className="shelf-book-cover-frame" aria-hidden="true" />
           <span className="shelf-book-cover-kicker">NOVELFORGE · {book.genre || "长篇小说"}</span>
           <span className="shelf-book-cover-title">{book.title}</span>
           {book.subtitle && <span className="shelf-book-cover-subtitle">{book.subtitle}</span>}

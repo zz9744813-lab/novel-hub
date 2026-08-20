@@ -169,11 +169,14 @@ export function Sidebar({
                   type="button"
                   onClick={() => setTab(t.id)}
                   className={clsx(
-                    "w-full flex items-center gap-2.5 px-3 py-[7px] rounded text-xs text-left transition-all duration-100",
-                    active ? "bg-brand-muted text-brand-accent" : "text-text-tertiary hover:bg-bg-hover"
+                    "w-full flex items-center gap-2 px-3 py-1.5 rounded text-left transition-colors duration-100",
+                    active
+                      ? "bg-bg-hover text-text-secondary"
+                      : "text-text-disabled hover:bg-bg-hover hover:text-text-tertiary"
                   )}
+                  style={{ fontSize: 11 }}
                 >
-                  <Icon size={13} />
+                  <Icon size={12} className={active ? "text-text-tertiary" : "text-text-disabled"} />
                   <span>{t.label}</span>
                 </button>
               );

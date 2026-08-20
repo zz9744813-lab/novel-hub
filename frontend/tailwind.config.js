@@ -46,6 +46,17 @@ export default {
       },
       fontSize: {
         "2xs": ["10px", { lineHeight: "14px" }],
+        // Design baseline scale (v8.1): caption -> h1
+        caption:  ["11px", { lineHeight: "16px" }],
+        body:     ["13px", { lineHeight: "19px" }],
+        emphasis: ["15px", { lineHeight: "22px" }],
+        h2:       ["20px", { lineHeight: "27px", fontWeight: "590" }],
+        h1:       ["28px", { lineHeight: "35px", fontWeight: "600" }],
+      },
+      borderRadius: {
+        // Design baseline radius (v8.1): control / card / pill
+        control: "8px",
+        card: "14px",
       },
       animation: {
         "fade-in":   "fadeIn 0.2s ease-out",

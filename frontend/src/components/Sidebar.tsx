@@ -1,5 +1,4 @@
 import {
-  BookOpen,
   GitGraph,
   FileText,
   Brain,
@@ -57,6 +56,16 @@ const diagTabs = [
   { id: "audit", label: "漂移审计", icon: AlertTriangle, desc: "DRIFT", needsBook: true },
 ];
 
+function BrandMark() {
+  return (
+    <span className="sidebar-brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 32 32" width="17" height="17" fill="none">
+        <path d="M8 22V10h4l6 8V10h3v12h-4l-6-8v8z" fill="currentColor" />
+      </svg>
+    </span>
+  );
+}
+
 export function Sidebar({
   tab,
   setTab,
@@ -86,40 +95,48 @@ export function Sidebar({
         onClick={() => !disabled && setTab(t.id)}
         title={disabled ? "请先选择一本小说" : undefined}
         className={clsx(
-          "group w-full flex items-center gap-2.5 px-3 py-2.5 rounded text-xs text-left transition-all duration-150 relative",
+          "sidebar-nav-item group w-full flex items-center gap-2.5 px-2.5 py-2 rounded-[9px] text-xs text-left transition-all duration-150 relative",
           active
-            ? "bg-brand-muted text-brand-accent"
+            ? "is-active"
             : disabled
             ? "text-text-disabled cursor-not-allowed"
             : "text-text-tertiary hover:bg-bg-hover hover:text-text-secondary"
         )}
       >
-        {active && <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-0.5 rounded-r-full bg-brand-accent" style={{ boxShadow: "0 0 8px rgba(139,142,255,0.5)" }} aria-hidden="true" />}
-        <Icon size={14} className={active ? "text-brand-accent" : disabled ? "text-text-disabled" : "text-text-disabled group-hover:text-text-tertiary"} />
+        {active && (
+          <span
+            className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-0.5 rounded-r-full bg-brand-accent"
+            style={{ boxShadow: "0 0 8px rgba(139,142,255,0.5)" }}
+            aria-hidden="true"
+          />
+        )}
+        <span className={clsx("sidebar-nav-icon", active && "is-active")}>
+          <Icon size={14} />
+        </span>
         <div className="flex-1 min-w-0">
           <div style={{ fontWeight: active ? 510 : 400 }}>{t.label}</div>
         </div>
-        <span className="text-2xs font-mono text-text-disabled">{t.desc}</span>
+        <span className="text-2xs font-mono text-text-disabled opacity-70 group-hover:opacity-100 transition-opacity">{t.desc}</span>
       </button>
     );
   };
 
   return (
-    <aside className="w-60 bg-bg-panel border-r border-border flex flex-col shrink-0">
-      <div className="h-11 flex items-center px-4 border-b border-border">
-        <BookOpen size={15} className="text-brand-accent" />
-        <span className="ml-2 text-xs text-text-primary tracking-wide" style={{ fontWeight: 510 }}>
+    <aside className="sidebar-shell w-60 bg-bg-panel border-r border-border flex flex-col shrink-0">
+      <div className="h-12 flex items-center gap-2.5 px-3.5 border-b border-border">
+        <BrandMark />
+        <span className="text-xs text-text-primary tracking-wide" style={{ fontWeight: 590 }}>
           NovelForge
         </span>
-        <span className="ml-auto text-2xs text-text-disabled font-mono">v8.0</span>
+        <span className="ml-auto text-2xs text-text-disabled font-mono px-1.5 py-0.5 rounded bg-bg-surface/70 border border-border-subtle">v8.0</span>
       </div>
 
       {selectedBookId && (
-        <div className="px-2 pt-2 pb-1 border-b border-border/60">
+        <div className="px-2 pt-2.5 pb-1.5 border-b border-border/60">
           <button
             type="button"
             onClick={() => onBackToBooks?.()}
-            className="w-full flex items-center gap-2 px-2.5 py-2 rounded-md text-xs text-left
+            className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-[9px] text-xs text-left
               bg-bg-surface border border-border hover:border-brand/40 hover:bg-brand-muted/40
               text-text-secondary hover:text-brand-accent transition-all"
           >
@@ -134,8 +151,8 @@ export function Sidebar({
         </div>
       )}
 
-      <nav className="flex-1 p-2 space-y-px overflow-auto">
-        <div className="px-3 py-1 text-2xs text-text-disabled">全局</div>
+      <nav className="flex-1 p-2 space-y-px overflow-auto sidebar-nav">
+        <div className="px-3 py-1 text-2xs text-text-disabled tracking-[0.08em]">全局</div>
         {globalTabs.map((t) =>
           renderBtn(
             t,
@@ -150,7 +167,7 @@ export function Sidebar({
 
         {inBook && (
           <>
-            <div className="mt-2 pt-2 border-t border-border/50 px-3 py-1 text-2xs text-text-disabled">
+            <div className="mt-3 pt-2.5 border-t border-border/50 px-3 py-1 text-2xs text-text-disabled tracking-[0.08em]">
               当前作品
             </div>
             {bookTabs.map((t) => renderBtn(t))}
@@ -159,7 +176,7 @@ export function Sidebar({
 
         {showDiag && (
           <div className="mt-2 pt-2 border-t border-border/50 space-y-px">
-            <div className="px-3 py-1 text-2xs text-text-disabled">工程诊断</div>
+            <div className="px-3 py-1 text-2xs text-text-disabled tracking-[0.08em]">工程诊断</div>
             {diagTabs.map((t) => {
               const Icon = t.icon;
               const active = tab === t.id;
@@ -169,7 +186,7 @@ export function Sidebar({
                   type="button"
                   onClick={() => setTab(t.id)}
                   className={clsx(
-                    "w-full flex items-center gap-2 px-3 py-1.5 rounded text-left transition-colors duration-100",
+                    "w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-left transition-colors duration-100",
                     active
                       ? "bg-bg-hover text-text-secondary"
                       : "text-text-disabled hover:bg-bg-hover hover:text-text-tertiary"
@@ -189,7 +206,7 @@ export function Sidebar({
         <button
           type="button"
           onClick={onNewBook}
-          className="btn-primary w-full flex items-center justify-center gap-1.5 py-2.5 text-xs rounded-lg"
+          className="btn-primary w-full flex items-center justify-center gap-1.5 py-2.5 text-xs rounded-[9px]"
           title="新建小说 (Ctrl/Cmd+N)"
         >
           <Plus size={14} />

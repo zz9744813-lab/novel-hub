@@ -33,11 +33,24 @@ export default {
           hover:   "#a0a3ff",
           muted:   "rgba(107,122,255,0.14)",
         },
+        // Ink accent — warm amber, echoes the novel-reader paper tone
+        ink: {
+          DEFAULT: "#d4a574",
+          soft:    "#e8c79a",
+          muted:   "rgba(212,165,116,0.14)",
+        },
         // Semantic — low saturation
         success: { DEFAULT: "#27a644", muted: "rgba(39,166,68,0.12)" },
         warning: { DEFAULT: "#d4a24e", muted: "rgba(212,162,78,0.12)" },
         danger:  { DEFAULT: "#e05555", muted: "rgba(224,85,85,0.12)" },
         info:    { DEFAULT: "#5ba8ef", muted: "rgba(91,168,239,0.12)" },
+      },
+      boxShadow: {
+        "glow":          "0 0 16px rgba(107,122,255,0.35)",
+        "glow-accent":   "0 0 10px rgba(139,142,255,0.55)",
+        "card":          "0 1px 2px rgba(0,0,0,0.25), 0 8px 24px rgba(0,0,0,0.25)",
+        "card-hover":    "0 2px 4px rgba(0,0,0,0.3), 0 16px 40px rgba(0,0,0,0.38)",
+        "modal":         "0 24px 80px rgba(0,0,0,0.55)",
       },
       fontFamily: {
         sans:  ["Inter", "system-ui", "-apple-system", "Noto Sans SC", "sans-serif"],

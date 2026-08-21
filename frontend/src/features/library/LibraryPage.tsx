@@ -3,7 +3,7 @@ import { api } from "../../api";
 import { BookCard } from "./BookCard";
 import { BookshelfBook, LIFECYCLE_LABEL } from "./library.types";
 import { LibraryEmptyState } from "./LibraryEmptyState";
-import { BookOpen, Filter, LayoutGrid, Loader2, Plus, Search, X, ArrowUpRight, BookText, FileText, ListChecks } from "lucide-react";
+import { BookOpen, Filter, LayoutGrid, Loader2, Plus, Search, X, ArrowUpRight, BookText, FileText, ListChecks, Library as LibraryIcon, Type, PenLine, AlertTriangle } from "lucide-react";
 import { FluidBackground } from "../../components/FluidBackground";
 
 function formatWords(value: number): string {
@@ -111,19 +111,27 @@ export function LibraryPage({
           </div>
           <div className="library-workspace-stats">
             <div className="ws-stat">
-              <span className="ws-stat-label">作品</span>
+              <span className="ws-stat-label">
+                <LibraryIcon size={12} /> 作品
+              </span>
               <strong className="ws-stat-value">{books.length}</strong>
             </div>
             <div className="ws-stat">
-              <span className="ws-stat-label">字数</span>
+              <span className="ws-stat-label">
+                <Type size={12} /> 累计字数
+              </span>
               <strong className="ws-stat-value">{formatWords(totalWords)}</strong>
             </div>
             <div className="ws-stat">
-              <span className="ws-stat-label">进行中</span>
+              <span className="ws-stat-label">
+                <PenLine size={12} /> 进行中
+              </span>
               <strong className="ws-stat-value">{activeCount}</strong>
             </div>
             <div className={`ws-stat${riskCount ? " has-risk" : ""}`}>
-              <span className="ws-stat-label">风险</span>
+              <span className="ws-stat-label">
+                <AlertTriangle size={12} /> 风险
+              </span>
               <strong className="ws-stat-value">{riskCount}</strong>
             </div>
           </div>

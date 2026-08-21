@@ -1,24 +1,85 @@
 const BASE = "";
 const TOKEN_KEY = "novelforge_admin_token";
+const DRAFT_KEY = "novelforge_admin_token_draft";
+const REMEMBER_KEY = "novelforge_admin_token_remember";
 
-export function getAdminToken(): string | null {
+// Optional build-time token: set VITE_ADMIN_TOKEN in frontend/.env to have the
+// login form pre-filled (and auto-submitted) on fresh browsers.
+const EMBEDDED_TOKEN = String(import.meta.env.VITE_ADMIN_TOKEN || "").trim();
+
+export function getEmbeddedToken(): string {
+  return EMBEDDED_TOKEN;
+}
+
+function readStore(key: string): string | null {
   try {
-    return sessionStorage.getItem(TOKEN_KEY);
+    return localStorage.getItem(key) ?? sessionStorage.getItem(key);
   } catch {
     return null;
   }
 }
 
-export function setAdminToken(token: string) {
-  sessionStorage.setItem(TOKEN_KEY, token);
-}
-
-export function clearAdminToken() {
+function writeStore(key: string, value: string, persistent: boolean) {
   try {
-    sessionStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(key);
+    localStorage.removeItem(key);
+    (persistent ? localStorage : sessionStorage).setItem(key, value);
   } catch {
     /* ignore */
   }
+}
+
+function removeStore(key: string) {
+  try {
+    localStorage.removeItem(key);
+    sessionStorage.removeItem(key);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function isRemembered(): boolean {
+  try {
+    return localStorage.getItem(REMEMBER_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+export function getAdminToken(): string | null {
+  return readStore(TOKEN_KEY);
+}
+
+export function setAdminToken(token: string, remember: boolean = isRemembered()) {
+  writeStore(TOKEN_KEY, token, remember);
+  writeStore(DRAFT_KEY, token, true);
+  try {
+    localStorage.setItem(REMEMBER_KEY, remember ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Last successfully used token (or the embedded one) — used to pre-fill the login input. */
+export function getTokenDraft(): string {
+  return readStore(DRAFT_KEY) || EMBEDDED_TOKEN || "";
+}
+
+export function clearAdminToken() {
+  removeStore(TOKEN_KEY);
+}
+
+// One-time migration: tokens from the old sessionStorage-only scheme are
+// promoted to localStorage so logins survive browser restarts.
+try {
+  const legacy = sessionStorage.getItem(TOKEN_KEY);
+  if (legacy && !localStorage.getItem(TOKEN_KEY)) {
+    localStorage.setItem(TOKEN_KEY, legacy);
+    if (!localStorage.getItem(DRAFT_KEY)) localStorage.setItem(DRAFT_KEY, legacy);
+    sessionStorage.removeItem(TOKEN_KEY);
+  }
+} catch {
+  /* ignore */
 }
 
 function authHeaders(extra?: HeadersInit): HeadersInit {
@@ -51,15 +112,24 @@ async function fetchJSON<T>(url: string, opts?: RequestInit): Promise<T> {
   return r.json();
 }
 
-export async function verifyAdminToken(token: string): Promise<boolean> {
+export type TokenVerifyResult = "ok" | "invalid" | "unreachable";
+
+/** Verify against the backend, distinguishing a wrong token from an unreachable service. */
+export async function verifyAdminTokenStatus(token: string): Promise<TokenVerifyResult> {
   try {
     const r = await fetch(BASE + "/api/books", {
       headers: { Authorization: "Bearer " + token },
     });
-    return r.ok;
+    if (r.ok) return "ok";
+    if (r.status === 401) return "invalid";
+    return "unreachable";
   } catch {
-    return false;
+    return "unreachable";
   }
+}
+
+export async function verifyAdminToken(token: string): Promise<boolean> {
+  return (await verifyAdminTokenStatus(token)) === "ok";
 }
 
 export async function fetchAuthenticatedAsset(url: string): Promise<string> {

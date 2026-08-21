@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../../api";
 import { Loader2, Globe, Play, CheckCircle, XCircle, AlertTriangle, BookOpen } from "lucide-react";
 import { SourceSelector } from "../../components/SourceSelector";
-import { Button } from "../../components/ui/Button";
 interface ResearchSource {
   name: string;
   base_url: string;

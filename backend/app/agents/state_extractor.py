@@ -1,4 +1,9 @@
-"""StateExtractorAgent - candidates only (AI__.md v3.0 §8.1 / B-06).
+"""StateExtractorAgent - candidates only (AI__.md v3.0 §8.1 / B-06 + v9 CCNE §29).
+
+v9: facts and attribution are separated.
+- reaction_evidence: observable reactions only (who did what, where).
+- attributions: constrained selection from provided Core/Belief/Goal IDs;
+  anything without support must be "unresolved" (never invented psychology).
 
 No writable Session. Does not write StoryEvent / L4 / L1.
 """
@@ -9,6 +14,7 @@ import logging
 import uuid
 
 from app.agents.caller import call_agent
+from app.contracts.narrative import ReactionAttribution, ReactionEvidence
 
 logger = logging.getLogger("novelforge.state_extractor")
 
@@ -22,9 +28,12 @@ async def extract_candidates(
     scenes: list[dict],
     outline_node,
     current_l4: dict,
-) -> tuple[bool, list[dict], list[str]]:
-    """LLM extract only. Returns (ok, events, errors).
+    scene_contracts: list[dict] | None = None,
+    core_anchors: list[dict] | None = None,
+) -> tuple[bool, list[dict], list[str], dict]:
+    """LLM extract only. Returns (ok, events, errors, extras).
 
+    extras: {"reaction_evidence": [...], "attributions": [...]} (v9).
     ok=False only on hard failures when content is substantial and outline
     expects state changes. Empty events with no expected changes is ok.
     """
@@ -55,13 +64,27 @@ async def extract_candidates(
             else []
         )
 
+    extras: dict = {"reaction_evidence": [], "attributions": []}
+
     # No entity cards and no expected changes → empty candidates (no LLM)
     if not current_l4 and not involved and not expected:
         logger.info(
             "StateExtractor skip LLM for chapter %s: no entities/L4/expected changes",
             chapter_no,
         )
-        return True, [], []
+        return True, [], [], extras
+
+    # v9: legal ID pools for constrained attribution
+    legal_anchor_ids = [
+        str(a.get("anchor_code") or a.get("id"))
+        for a in (core_anchors or [])
+        if isinstance(a, dict)
+    ]
+    legal_belief_keys: list[str] = []
+    for _cid, payload in (current_l4 or {}).items():
+        state = payload.get("state") if isinstance(payload, dict) else payload
+        if isinstance(state, dict) and isinstance(state.get("beliefs"), dict):
+            legal_belief_keys.extend(list(state["beliefs"].keys())[:12])
 
     user_content = json.dumps(
         {
@@ -83,11 +106,22 @@ async def extract_candidates(
             ],
             "current_l4": current_l4,
             "outline_node": outline_payload,
+            "scene_contracts": (scene_contracts or [])[:8],
+            "legal_attribution_ids": {
+                "core_anchor_ids": legal_anchor_ids[:40],
+                "belief_keys": legal_belief_keys[:60],
+            },
             "instruction": (
-                "Return ONLY JSON object: {\"events\":[],\"conflicts\":[]}. "
+                "Return ONLY JSON object: {\"events\":[],\"conflicts\":[],"
+                "\"reaction_evidence\":[],\"attributions\":[]}. "
                 "Each event: event_key, entity_type, entity_id, field, old_value, "
                 "new_value, certainty (must be explicit for commit), scene_no, "
                 "evidence_paragraph_key, evidence_hash, evidence. "
+                "reaction_evidence: {reaction_key, character_id, scene_no, "
+                "evidence_paragraph_key, reaction_summary, weight}. "
+                "attributions: {reaction_key, cause_event_keys, core_anchor_ids, "
+                "belief_keys, goal_keys, status, reason} — IDs may ONLY come from "
+                "legal_attribution_ids; unsupported must be status=\"unresolved\". "
                 "No prose outside JSON."
             ),
         },
@@ -105,8 +139,8 @@ async def extract_candidates(
         logger.error("StateExtractor call exception: %s", e)
         # Fail closed if outline expects changes or content is large
         if expected or (chapter_content and len(chapter_content) >= 800):
-            return False, [], [f"extractor_exception:{e}"]
-        return True, [], []
+            return False, [], [f"extractor_exception:{e}"], extras
+        return True, [], [], extras
 
     if not result:
         # B-07: no soft-pass into finalize when we expected extractable content
@@ -114,7 +148,7 @@ async def extract_candidates(
             logger.error("StateExtractor empty but expected_state_changes present: %s", meta)
             return False, [], [
                 str((meta or {}).get("block_reason") or (meta or {}).get("error") or "extraction empty")
-            ]
+            ], extras
         if chapter_content and len(chapter_content) >= 800 and (current_l4 or involved):
             # Allow empty candidates — finalize may still proceed without canon events
             logger.warning(
@@ -122,17 +156,42 @@ async def extract_candidates(
                 chapter_no,
                 meta,
             )
-            return True, [], []
+            return True, [], [], extras
         if not chapter_content or len(chapter_content) < 800:
             return False, [], [
                 str((meta or {}).get("block_reason") or (meta or {}).get("error") or "extraction failed")
-            ]
-        return True, [], []
+            ], extras
+        return True, [], [], extras
 
     events = result.get("events", []) if isinstance(result, dict) else []
     conflicts = result.get("conflicts", []) if isinstance(result, dict) else []
     if conflicts:
         logger.warning("StateExtractor found %s conflicts with L4", len(conflicts))
+
+    # v9: normalize reaction evidence + constrained attributions
+    reaction_evidence: list[dict] = []
+    for r in (result.get("reaction_evidence") or []) if isinstance(result, dict) else []:
+        try:
+            ev = ReactionEvidence.model_validate(r)
+            reaction_evidence.append(ev.model_dump(mode="json"))
+        except Exception:
+            continue
+    legal_anchor_set = set(legal_anchor_ids)
+    legal_belief_set = set(legal_belief_keys)
+    attributions: list[dict] = []
+    for a in (result.get("attributions") or []) if isinstance(result, dict) else []:
+        try:
+            at = ReactionAttribution.model_validate(a)
+        except Exception:
+            continue
+        # Constrained: drop any anchor/belief not in the legal pools
+        at.core_anchor_ids = [i for i in at.core_anchor_ids if i in legal_anchor_set]
+        at.belief_keys = [k for k in at.belief_keys if k in legal_belief_set]
+        if not at.has_any_support() and at.status == "supported":
+            at.status = "unresolved"
+            at.reason = at.reason or "自动降级：引用的 ID 不在合法池内"
+        attributions.append(at.model_dump(mode="json"))
+    extras = {"reaction_evidence": reaction_evidence, "attributions": attributions}
 
     # Normalize certainty: only explicit (or high) candidates kept for finalize
     normalized: list[dict] = []
@@ -153,9 +212,9 @@ async def extract_candidates(
 
     # Spec: expected_state_changes present but empty extract → cannot finalize
     if expected and not normalized:
-        return False, [], ["expected_state_changes_but_empty_extract"]
+        return False, [], ["expected_state_changes_but_empty_extract"], extras
 
-    return True, normalized, [str(c) for c in (conflicts or [])]
+    return True, normalized, [str(c) for c in (conflicts or [])], extras
 
 
 # Back-compat shim — DO NOT write canon. Returns candidates only shape.
@@ -171,7 +230,7 @@ async def extract_and_commit(
     source_run_id: uuid.UUID,
 ) -> tuple[bool, list[str]]:
     """Deprecated path: no longer commits. Use extract_candidates + finalizer."""
-    ok, events, errors = await extract_candidates(
+    ok, events, errors, _extras = await extract_candidates(
         book_id=book_id,
         chapter_id=chapter_id,
         chapter_no=chapter_no,

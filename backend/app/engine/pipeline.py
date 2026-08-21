@@ -27,6 +27,7 @@ from app.agents.review_agent import review_chapter
 from app.agents.patch_editor import generate_patch, apply_patches, PatchStaleError
 from app.agents.state_extractor import extract_candidates
 from app.agents.drift_audit import run_drift_audit
+from app.engine.causal_compile import compile_chapter_contracts, load_chapter_contracts
 from app.engine.memory_compiler import generate_l2
 from app.engine.outcomes import PipelineOutcome, PipelineResult
 from app.engine.step_runner import (
@@ -422,6 +423,47 @@ async def execute_pipeline(
         normalized.append(sc)
     scene_plan = {**scene_plan, "scenes": normalized}
 
+    # === Phase 5.5: v9 CCNE — compile scene contracts (no LLM) ===
+    involved_ids = list(outline_data.get("involved_character_ids") or [])
+    try:
+        from app.engine.causal_compile import load_states_and_anchors
+
+        _states_for_compile, _anchors_by_char = await load_states_and_anchors(
+            book_id, involved_ids, chapter_no
+        )
+        if l4_states:
+            for _cid, _st in l4_states.items():
+                _states_for_compile.setdefault(str(_cid), _st)
+        compile_result = await compile_chapter_contracts(
+            book_id=book_id,
+            chapter_id=chapter_id,
+            chapter_no=chapter_no,
+            scene_plan=scene_plan,
+            l4_states=_states_for_compile,
+            core_anchors_by_char=_anchors_by_char,
+            outline_expected_effects=outline_data.get("expected_state_changes") or [],
+            source_run_id=chapter_run_id,
+        )
+        scene_contracts = compile_result.get("contracts") or []
+        if compile_result.get("blockers"):
+            logger.warning(
+                "v9 contract blockers for chapter %s: %s",
+                chapter_no,
+                [b.get("code") for b in compile_result["blockers"]][:8],
+            )
+        logger.info(
+            "v9 compiled %s scene contracts for chapter %s (blockers=%s)",
+            len(scene_contracts), chapter_no, len(compile_result.get("blockers") or []),
+        )
+    except Exception as e:
+        # Degradation: drafting proceeds without contracts; gate stays lenient.
+        logger.warning("v9 contract compile failed for chapter %s: %s", chapter_no, e)
+        scene_contracts = []
+        _anchors_by_char = {}
+    contract_by_scene = {
+        int(c.get("scene_no") or 0): c for c in scene_contracts if isinstance(c, dict)
+    }
+
     # === Phase 6: DraftWriter (per scene, checkpointed) ===
     await _set_chapter_status(chapter_id, ChapterState.DRAFTING.value, "enter drafting", chapter_run_id)
 
@@ -433,7 +475,7 @@ async def execute_pipeline(
         target_wc = scene_def.get("target_word_count", 2000)
         step_key = f"draft_scene:{scene_no}"
 
-        async def _do_draft(_payload, _sd=scene_def, _twc=target_wc, _pt=previous_tail):
+        async def _do_draft(_payload, _sd=scene_def, _twc=target_wc, _pt=previous_tail, _sc=contract_by_scene.get(scene_no)):
             content, error = await write_scene(
                 book_id=book_id,
                 chapter_id=chapter_id,
@@ -441,6 +483,7 @@ async def execute_pipeline(
                 context_package=context_pkg,
                 previous_scene_tail=_pt,
                 target_word_count=_twc,
+                scene_contract=_sc,
             )
             if error and not error.startswith("PIPELINE_BLOCKED"):
                 logger.warning(f"Scene failed, retrying: {error}")
@@ -451,6 +494,7 @@ async def execute_pipeline(
                     context_package=context_pkg,
                     previous_scene_tail=_pt,
                     target_word_count=_twc,
+                    scene_contract=_sc,
                 )
             if error and error.startswith("PIPELINE_BLOCKED"):
                 raise PermanentStepError("draft_blocked", {"error": error})
@@ -623,6 +667,7 @@ async def execute_pipeline(
             chapter_content=chapter_content,
             outline_data=outline_data,
             outline_node_id=uuid.UUID(outline_data["id"]),
+            scene_contracts=scene_contracts,
         )
         return {"passed": bool(p), "issues": iss or []}
 
@@ -779,6 +824,7 @@ async def execute_pipeline(
                         chapter_content=_content,
                         outline_data=outline_data,
                         outline_node_id=uuid.UUID(outline_data["id"]),
+                        scene_contracts=scene_contracts,
                     )
                     return {"passed": bool(p), "issues": iss or []}
 
@@ -861,6 +907,13 @@ async def execute_pipeline(
             scenes=scene_contents,
             outline_data=outline_data,
             scene_plan=scene_plan if isinstance(scene_plan, dict) else {},
+            scene_contract=contract_by_scene.get(1),
+            pre_state=l4_states or {},
+            core_anchors=[
+                {"anchor_code": a.get("anchor_code"), "statement": a.get("statement")}
+                for anchors in (_anchors_by_char or {}).values()
+                for a in anchors
+            ] if _anchors_by_char else None,
         )
         return res.as_dict()
 
@@ -956,7 +1009,7 @@ async def execute_pipeline(
         })
 
     async def _do_extract(_payload):
-        ok, events, errors = await extract_candidates(
+        ok, events, errors, extras = await extract_candidates(
             book_id=book_id,
             chapter_id=chapter_id,
             chapter_no=chapter_no,
@@ -964,10 +1017,16 @@ async def execute_pipeline(
             scenes=scenes_with_paras,
             outline_node=outline_data,
             current_l4=current_l4,
+            scene_contracts=scene_contracts,
+            core_anchors=[
+                a
+                for anchors in (_anchors_by_char or {}).values()
+                for a in anchors
+            ] if _anchors_by_char else None,
         )
         if not ok:
             raise _Retry("state_extract_failed", {"errors": errors})
-        return {"events": events, "errors": errors}
+        return {"events": events, "errors": errors, "extras": extras}
 
     try:
         from app.engine.final_artifact import sha256_text as _sha
@@ -1042,6 +1101,7 @@ async def execute_pipeline(
         chapter_no=chapter_no,
         pipeline_version=PIPELINE_VERSION,
         worker_id=worker_id,
+        scene_contracts=scene_contracts,
     )
     if not snap.ok:
         logger.error(f"Final snapshot failed for chapter {chapter_no}: {snap.error}")

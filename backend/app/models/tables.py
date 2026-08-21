@@ -1097,3 +1097,64 @@ class PromptTestRun(Base, TimestampMixin):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="completed", nullable=False)
 
+
+# ---- v9.0 Cognitive-Causal Narrative Engine tables ----
+class CharacterCoreAnchor(Base, TimestampMixin):
+    """Long-term stable causal anchor of a character (not current emotion)."""
+    __tablename__ = "character_core_anchors"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=False, index=True)
+    character_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("character_cards.id"), nullable=False, index=True)
+    anchor_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    anchor_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    statement: Mapped[str] = mapped_column(Text, nullable=False)
+    priority: Mapped[float] = mapped_column(Float, default=0.5)
+    rigidity: Mapped[float] = mapped_column(Float, default=0.5)
+    source_kind: Mapped[str] = mapped_column(String(32), default="auto")
+    source_ref: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    is_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    __table_args__ = (
+        UniqueConstraint("character_id", "anchor_code"),
+        Index("idx_core_anchor_book_char", "book_id", "character_id"),
+    )
+
+
+class SceneReasoningContract(Base, TimestampMixin):
+    """Formal agreement between Planner and DraftWriter for one scene (v9 CCNE)."""
+    __tablename__ = "scene_reasoning_contracts"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=False, index=True)
+    chapter_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("chapters.id"), nullable=False, index=True)
+    scene_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    contract_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    contract_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="proposed", nullable=False)
+    validation_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False, server_default="{}")
+    __table_args__ = (
+        UniqueConstraint("chapter_id", "scene_no", "contract_hash"),
+        Index("idx_scene_contract_book_chapter", "book_id", "chapter_id"),
+    )
+
+
+class StoryEventEdge(Base, TimestampMixin):
+    """Directed causal edge between finalized StoryEvents (v9 CCNE causal graph)."""
+    __tablename__ = "story_event_edges"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=False, index=True)
+    chapter_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("chapters.id"), nullable=False, index=True)
+    source_event_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("story_events.id"), nullable=False, index=True)
+    target_event_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("story_events.id"), nullable=False, index=True)
+    relation_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    edge_mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    mechanism: Mapped[str | None] = mapped_column(Text, nullable=True)
+    strength: Mapped[float | None] = mapped_column(Float, nullable=True)
+    source_contract_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    source_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    evidence: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
+    __table_args__ = (
+        Index("idx_story_event_edges_source", "book_id", "source_event_id"),
+        Index("idx_story_event_edges_target", "book_id", "target_event_id"),
+    )
+

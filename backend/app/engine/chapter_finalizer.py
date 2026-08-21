@@ -31,6 +31,8 @@ from app.models import (
     MemoryL1ChapterLedger,
     MemoryL4StateSnapshot,
     ChapterRun,
+    SceneReasoningContract,
+    StoryEventEdge,
 )
 from app.models.tables import ChapterStateEvent, SceneSearchDocument
 from app.state_machine import ChapterState
@@ -107,6 +109,54 @@ def _validate_event_against_paragraphs(
     return "evidence_key_not_found"
 
 
+MAX_CAUSAL_EDGES_PER_CHAPTER = 200
+
+
+def _contract_event_key(chapter_no: int, scene_no: int, seq: int) -> str:
+    return f"P-{chapter_no:03d}-{scene_no:02d}-{seq:02d}"
+
+
+def _iter_contract_edges(contracts: list[dict]) -> list[dict]:
+    """Flatten contract causal edges into insertable edge dicts.
+
+    Position-based deterministic matching: contract event key
+    P-{ch}-{scene}-{seq} maps to the seq-th finalized StoryEvent of that scene.
+    """
+    edges: list[dict] = []
+    seen: set[tuple] = set()
+    for c in contracts or []:
+        if not isinstance(c, dict):
+            continue
+        scene_no = int(c.get("scene_no") or 0)
+        contract_hash = str(c.get("contract_hash") or "")
+        for e in c.get("causal_edges") or []:
+            if not isinstance(e, dict):
+                continue
+            frm = str(e.get("from") or e.get("from_key") or "")
+            to = str(e.get("to") or e.get("to_key") or "")
+            if not frm or not to or frm == to:
+                continue
+            rel = str(e.get("relation") or "CAUSES").upper()
+            mode = "hard" if str(e.get("mode") or "").lower() == "hard" else "soft"
+            key = (frm, to, rel)
+            if key in seen:
+                continue
+            seen.add(key)
+            edges.append(
+                {
+                    "from": frm,
+                    "to": to,
+                    "relation": rel,
+                    "mode": mode,
+                    "mechanism": (e.get("mechanism") or None),
+                    "strength": e.get("strength"),
+                    "contract_hash": contract_hash,
+                    "scene_no": scene_no,
+                }
+            )
+    return edges[:MAX_CAUSAL_EDGES_PER_CHAPTER]
+
+
 async def commit_final_chapter_snapshot(
     *,
     book_id: uuid.UUID,
@@ -124,9 +174,11 @@ async def commit_final_chapter_snapshot(
     chapter_no: int,
     pipeline_version: str = "pipeline-v2",
     worker_id: str | None = None,
+    scene_contracts: list[dict] | None = None,
 ) -> FinalSnapshotResult:
     """Atomic finalize + canon. Fail closed; no partial writes."""
     events = list(validated_events or [])
+    contracts = [c for c in (scene_contracts or []) if isinstance(c, dict)]
 
     # Build artifact
     if final_artifact is None:
@@ -439,6 +491,9 @@ async def commit_final_chapter_snapshot(
         merged: dict[uuid.UUID, dict] = {}
         entity_types: dict[uuid.UUID, str] = {}
         accepted_events: list[dict] = []
+        event_row_id = uuid.uuid4()
+        event_ids_by_scene: dict[int, list[uuid.UUID]] = {}
+        event_id_by_extracted_key: dict[str, uuid.UUID] = {}
 
         for evt in events:
             if not isinstance(evt, dict):
@@ -478,9 +533,10 @@ async def commit_final_chapter_snapshot(
             if entity_id and str(entity_id) not in [str(x) for x in subject_ids]:
                 subject_ids.append(str(entity_id))
 
+            event_row_id = uuid.uuid4()
             db.add(
                 StoryEvent(
-                    id=uuid.uuid4(),
+                    id=event_row_id,
                     book_id=book_id,
                     chapter_id=chapter_id,
                     scene_id=sid if isinstance(sid, uuid.UUID) else uuid.uuid4(),
@@ -501,6 +557,9 @@ async def commit_final_chapter_snapshot(
                     else None,
                 )
             )
+            event_ids_by_scene.setdefault(scene_no, []).append(event_row_id)
+            if evt.get("event_key"):
+                event_id_by_extracted_key[str(evt["event_key"])] = event_row_id
             accepted_events.append(evt)
 
             if not entity_id:
@@ -530,6 +589,76 @@ async def commit_final_chapter_snapshot(
                     source_run_id=source_run,
                 )
             )
+
+        # v9 CCNE: commit causal graph + finalize contracts in the same txn
+        contract_row_by_hash: dict[str, uuid.UUID] = {}
+        if contracts:
+            rows = (
+                await db.execute(
+                    select(SceneReasoningContract).where(
+                        SceneReasoningContract.chapter_id == chapter_id,
+                        SceneReasoningContract.status.in_(
+                            ["proposed", "validated", "realized"]
+                        ),
+                    )
+                )
+            ).scalars().all()
+            contract_row_by_hash = {r.contract_hash: r.id for r in rows}
+
+        contract_event_id_map: dict[str, uuid.UUID] = {}
+        for c in contracts:
+            c_scene = int(c.get("scene_no") or 0)
+            for seq in range(1, len(c.get("events") or []) + 1):
+                key = _contract_event_key(chapter_no, c_scene, seq)
+                ids = event_ids_by_scene.get(c_scene) or []
+                if seq <= len(ids):
+                    contract_event_id_map[key] = ids[seq - 1]
+        contract_event_id_map.update(event_id_by_extracted_key)
+
+        committed_edges = 0
+        if contracts:
+            for edge in _iter_contract_edges(contracts):
+                src = contract_event_id_map.get(edge["from"])
+                tgt = contract_event_id_map.get(edge["to"])
+                if not src or not tgt:
+                    continue
+                db.add(
+                    StoryEventEdge(
+                        id=uuid.uuid4(),
+                        book_id=book_id,
+                        chapter_id=chapter_id,
+                        source_event_id=src,
+                        target_event_id=tgt,
+                        relation_type=edge["relation"][:40],
+                        edge_mode=edge["mode"],
+                        mechanism=(edge.get("mechanism") or None),
+                        strength=(
+                            float(edge["strength"])
+                            if isinstance(edge.get("strength"), (int, float))
+                            else None
+                        ),
+                        source_contract_id=contract_row_by_hash.get(edge.get("contract_hash")),
+                        source_run_id=source_run,
+                        evidence={"from_key": edge["from"], "to_key": edge["to"]},
+                    )
+                )
+                committed_edges += 1
+
+            if contract_row_by_hash:
+                await db.execute(
+                    update(SceneReasoningContract)
+                    .where(
+                        SceneReasoningContract.chapter_id == chapter_id,
+                        SceneReasoningContract.id.in_(list(contract_row_by_hash.values())),
+                    )
+                    .values(status="finalized")
+                )
+            if committed_edges:
+                logger.info(
+                    "v9 causal graph: %s edges committed for chapter %s",
+                    committed_edges,
+                    chapter_no,
+                )
 
         db.add(
             MemoryL1ChapterLedger(

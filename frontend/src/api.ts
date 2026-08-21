@@ -355,6 +355,68 @@ export const api = {
   memory: {
     l4: (bookId: string) => fetchJSON<{ snapshots: L4Snapshot[] }>(`/api/books/${bookId}/memory/l4`),
   },
+  characters: {
+    list: (bookId: string) =>
+      fetchJSON<{ characters: CharacterSummary[] }>(`/api/books/${bookId}/characters`),
+  },
+  coreAnchors: {
+    list: (bookId: string, characterId: string) =>
+      fetchJSON<{ anchors: CoreAnchor[] }>(
+        `/api/books/${bookId}/characters/${characterId}/core-anchors`
+      ),
+    create: (
+      bookId: string,
+      characterId: string,
+      data: {
+        anchor_code: string;
+        anchor_type?: string;
+        statement: string;
+        priority?: number;
+        rigidity?: number;
+      }
+    ) =>
+      fetchJSON<{ anchor_id: string; anchor_code: string; status: string }>(
+        `/api/books/${bookId}/characters/${characterId}/core-anchors`,
+        { method: "POST", body: JSON.stringify(data) }
+      ),
+    update: (
+      anchorId: string,
+      data: Partial<{
+        statement: string;
+        anchor_type: string;
+        priority: number;
+        rigidity: number;
+        status: string;
+        is_locked: boolean;
+      }>
+    ) =>
+      fetchJSON<{ anchor_id: string; status: string }>(`/api/core-anchors/${anchorId}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }),
+    remove: (anchorId: string) =>
+      fetchJSON<{ anchor_id: string; status: string }>(`/api/core-anchors/${anchorId}`, {
+        method: "DELETE",
+      }),
+  },
+  sceneContracts: {
+    list: (chapterId: string) =>
+      fetchJSON<{ contracts: SceneContractItem[] }>(`/api/chapters/${chapterId}/scene-contracts`),
+    get: (contractId: string) =>
+      fetchJSON<SceneContractItem>(`/api/scene-contracts/${contractId}`),
+    simulate: (contractId: string) =>
+      fetchJSON<SceneSimulationResult>(`/api/scene-contracts/${contractId}/simulate`, {
+        method: "POST",
+      }),
+  },
+  causalGraph: {
+    get: (chapterId: string) => fetchJSON<CausalGraph>(`/api/chapters/${chapterId}/causal-graph`),
+    audit: (chapterId: string) =>
+      fetchJSON<{ chapter_id: string; chapter_no: number; report: CounterfactualReport }>(
+        `/api/chapters/${chapterId}/counterfactual-audit`,
+        { method: "POST" }
+      ),
+  },
   audits: {
     list: (bookId: string) => fetchJSON<any[]>(`/api/books/${bookId}/drift-audits`),
   },
@@ -536,6 +598,92 @@ export interface ChapterRunDetail extends ChapterRunSummary { book_id?: string; 
 export interface L4Snapshot {
   id: string; entity_type: string; entity_id: string;
   as_of_chapter: number; state: any; version: number; is_locked: boolean;
+}
+
+// ---- v9.0 CCNE types ----
+export interface CharacterSummary {
+  id: string;
+  name: string;
+  role: string | null;
+  description: string | null;
+  anchor_count: number;
+}
+
+export interface CoreAnchor {
+  id: string;
+  anchor_code: string;
+  anchor_type: string;
+  statement: string;
+  priority: number;
+  rigidity: number;
+  source_kind: string;
+  status: string;
+  is_locked: boolean;
+}
+
+export interface SceneContractItem {
+  id: string;
+  scene_no: number;
+  contract_hash: string;
+  status: string;
+  validation?: any;
+  summary?: {
+    dramatic_goal?: string | null;
+    pov_character_id?: string | null;
+    event_count?: number;
+    edge_count?: number;
+    belief_count?: number;
+    appraisal_count?: number;
+    hard_effect_count?: number;
+  };
+  contract?: any;
+}
+
+export interface SceneSimulationResult {
+  contract_id: string;
+  scene_no: number;
+  ok: boolean;
+  findings: Array<{ code: string; severity: string; message: string; [k: string]: any }>;
+  next_state: any;
+}
+
+export interface CausalGraphNode {
+  id: string;
+  scene_id: string;
+  event_type: string;
+  excerpt: string;
+  subjects: string[];
+}
+
+export interface CausalGraphLink {
+  source: string;
+  target: string;
+  relation: string;
+  mode: string;
+  mechanism?: string | null;
+}
+
+export interface CausalGraph {
+  chapter_id: string;
+  chapter_no: number;
+  nodes: CausalGraphNode[];
+  links: CausalGraphLink[];
+  stats: { event_count: number; edge_count: number; hard_edge_count: number };
+}
+
+export interface CounterfactualFinding {
+  removed_event_key: string;
+  checked_target_key: string;
+  support_after_removal: string;
+  classification: string;
+  remaining_support_keys: string[];
+  detail: string;
+}
+
+export interface CounterfactualReport {
+  ok: boolean;
+  audited_events: string[];
+  findings: CounterfactualFinding[];
 }
 
 export interface ModelBinding {

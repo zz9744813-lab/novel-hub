@@ -9,7 +9,9 @@ from pathlib import Path
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 import sys
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "workbench" / "collab"))
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 from app.models.research_source import (
     OutputFormat,
@@ -17,8 +19,12 @@ from app.models.research_source import (
     ResearchTask,
     ResearchSourceRule,
 )
-from workbench.collab.research_scraper import ResearchScraper
-from workbench.collab.research_exporter import ResearchExporter
+try:
+    from workbench.collab.research_scraper import ResearchScraper
+    from workbench.collab.research_exporter import ResearchExporter
+except ImportError:  # workbench/ not shipped in backend image (Docker context)
+    ResearchScraper = None
+    ResearchExporter = None
 
 router = APIRouter(prefix="/api/research", tags=["research"])
 
@@ -212,6 +218,9 @@ async def run_scraping_task(task: ResearchTask) -> None:
         if not source_config:
             raise ValueError(f"Unknown source: {task.source_id}")
         
+        if ResearchScraper is None:
+            raise RuntimeError("workbench research scraper unavailable in this deployment")
+
         scraper = ResearchScraper()
         
         # Update task to running

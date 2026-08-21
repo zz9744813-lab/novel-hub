@@ -20,6 +20,8 @@ from app.models.tables import (
     BookProfile, BookSource, ImportSession, ImportSessionEvent, ImportArtifact, ImportConflict,
     LocationCard, CharacterRelationship, OutlineVolume, WritingConstraint,
     PromptTemplateVersion, PromptTestRun,
+    # v9.0 cognitive-causal
+    CharacterCoreAnchor, SceneReasoningContract, StoryEventEdge,
 )
 
 __all__ = [
@@ -41,4 +43,5 @@ __all__ = [
     "BookProfile", "BookSource", "ImportSession", "ImportSessionEvent", "ImportArtifact", "ImportConflict",
     "LocationCard", "CharacterRelationship", "OutlineVolume", "WritingConstraint",
     "PromptTemplateVersion", "PromptTestRun",
+    "CharacterCoreAnchor", "SceneReasoningContract", "StoryEventEdge",
 ]

@@ -1,8 +1,13 @@
-"""ChapterPlannerAgent - expands outline node into beat sheet + scene plan.
-Per §7.2 Step 4 + §A.2 v7.3.
+"""ChapterPlannerAgent - expands outline node into beat sheet + richer scene proposal.
+
+Per §7.2 Step 4 + §A.2 v7.3; v9 CCNE §23:
+- Planner proposes a CANDIDATE causal path (provisional events, edges, belief
+  deltas, intentions), never authoritative facts.
+- Output is normalized through ChapterPlanProposal (tolerant) so downstream
+  scene_contract compilation receives structured fields instead of free dicts.
+- Deterministic fallback scene plan when LLM returns non-JSON / missing scenes.
 
 P0-03: short sessions — load DTOs, then call_agent without holding Session.
-Deterministic fallback scene plan when LLM returns non-JSON / missing scenes.
 """
 from __future__ import annotations
 
@@ -14,7 +19,9 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from app.database import async_session_factory
 from app.agents.caller import call_agent
+from app.contracts.narrative import ChapterPlanProposal, SceneProposal
 from app.models import (
+    CharacterCoreAnchor,
     OutlineNode,
     MemoryL2StageSummary,
     MemoryL3VolumeSummary,
@@ -23,6 +30,8 @@ from app.models import (
 )
 
 logger = logging.getLogger("novelforge.chapter_planner")
+
+MAX_CORE_ANCHORS_IN_PROMPT = 24
 
 
 @dataclass(frozen=True)
@@ -36,6 +45,7 @@ class ChapterPlanInput:
     l3_summary: dict
     voice_cards: list
     tone_anchor: dict
+    core_anchors: list = field(default_factory=list)
     retrieved_evidence: list = field(default_factory=list)
     target_word_count: int = 3000
 
@@ -111,6 +121,61 @@ def _coerce_plan(result, meta: dict | None = None) -> dict | None:
     return None
 
 
+def _normalize_plan(raw: dict) -> dict | None:
+    """Validate LLM plan through tolerant ChapterPlanProposal (v9 §23.1).
+
+    Returns a plain dict of the normalized proposal, or None when unusable.
+    """
+    if not isinstance(raw, dict):
+        return None
+    if not isinstance(raw.get("chapter_goal"), str) or not raw.get("chapter_goal").strip():
+        raw = {**raw, "chapter_goal": raw.get("chapter_goal") or "推进本章剧情"}
+    try:
+        proposal = ChapterPlanProposal.model_validate(raw)
+    except Exception as e:
+        logger.warning(f"ChapterPlanProposal validation failed: {e}")
+        return None
+    scenes = []
+    for i, s in enumerate(proposal.scenes, start=1):
+        if s.scene_no is None:
+            s.scene_no = i
+        if not (s.goal or s.dramatic_goal):
+            s.dramatic_goal = "推进场景目标"
+        scenes.append(s.model_dump(mode="json", by_alias=True, exclude_none=False))
+    scenes.sort(key=lambda x: x.get("scene_no") or 0)
+    for i, s in enumerate(scenes, start=1):
+        s["scene_no"] = i
+    out = proposal.model_dump(mode="json", by_alias=True)
+    out["scenes"] = scenes
+    return out
+
+
+async def load_core_anchors(book_id: uuid.UUID, character_ids: list[str] | None = None) -> list[dict]:
+    """Active Core Anchors for the book (optionally scoped to characters)."""
+    async with async_session_factory() as db:
+        q = select(CharacterCoreAnchor).where(
+            CharacterCoreAnchor.book_id == book_id,
+            CharacterCoreAnchor.status == "active",
+        )
+        rows = (await db.execute(q)).scalars().all()
+    anchors = [
+        {
+            "anchor_code": r.anchor_code,
+            "anchor_type": r.anchor_type,
+            "statement": r.statement,
+            "priority": r.priority,
+            "rigidity": r.rigidity,
+            "character_id": str(r.character_id),
+        }
+        for r in rows
+    ]
+    if character_ids:
+        wanted = {str(c) for c in character_ids}
+        anchors = [a for a in anchors if a["character_id"] in wanted]
+    anchors.sort(key=lambda a: -float(a.get("priority") or 0.5))
+    return anchors[:MAX_CORE_ANCHORS_IN_PROMPT]
+
+
 async def load_chapter_plan_input(
     book_id: uuid.UUID,
     chapter_id: uuid.UUID,
@@ -170,6 +235,28 @@ async def load_chapter_plan_input(
             else {}
         )
 
+        anchor_rows = (
+            await db.execute(
+                select(CharacterCoreAnchor).where(
+                    CharacterCoreAnchor.book_id == book_id,
+                    CharacterCoreAnchor.status == "active",
+                )
+            )
+        ).scalars().all()
+        core_anchors = [
+            {
+                "anchor_code": r.anchor_code,
+                "anchor_type": r.anchor_type,
+                "statement": r.statement,
+                "priority": r.priority,
+                "rigidity": r.rigidity,
+                "character_id": str(r.character_id),
+            }
+            for r in anchor_rows
+        ]
+        core_anchors.sort(key=lambda a: -float(a.get("priority") or 0.5))
+        core_anchors = core_anchors[:MAX_CORE_ANCHORS_IN_PROMPT]
+
         outline = {
             "chapter_no": outline_node.chapter_no,
             "title": outline_node.title,
@@ -191,18 +278,71 @@ async def load_chapter_plan_input(
         l3_summary=l3_summary.summary_json if l3_summary else {},
         voice_cards=voice_cards,
         tone_anchor=tone_dict,
+        core_anchors=core_anchors,
         retrieved_evidence=retrieved_evidence or [],
         target_word_count=target_word_count,
     )
+
+
+_PLANNER_SCHEMA_HINT = {
+    "chapter_goal": "string",
+    "scenes": [
+        {
+            "scene_no": 1,
+            "goal": "string (dramatic goal of this scene)",
+            "pov_character_id": "character uuid or null",
+            "location": "string or null",
+            "conflict": "string or null",
+            "emotion_change": "string or null (start -> end)",
+            "exit_state": "string: required state at scene end",
+            "target_word_count": 1200,
+            "must_include": ["required beat / info release"],
+            "must_not": ["forbidden outcome"],
+            "provisional_events": [
+                {
+                    "event_key": "P31",
+                    "actor_id": "character uuid",
+                    "action": "what happens (observable fact)",
+                    "is_public": False,
+                }
+            ],
+            "causal_edges": [
+                {"from": "P31", "to": "P32", "relation": "ENABLES", "mode": "hard"}
+            ],
+            "belief_deltas": [
+                {
+                    "character_id": "uuid",
+                    "belief_key": "snake_case_key",
+                    "before": 0.05,
+                    "after": 0.61,
+                    "source_event_keys": ["P32"],
+                }
+            ],
+            "intentions": [
+                {
+                    "character_id": "uuid",
+                    "action_intent": "what the character decides to do next",
+                    "support_anchor_ids": ["D01"],
+                    "support_belief_keys": ["b_may_betray"],
+                    "attribution_status": "supported or unresolved",
+                }
+            ],
+        }
+    ],
+    "required_beat_mapping": [{"beat": "...", "scene_no": 1}],
+}
 
 
 async def generate_chapter_plan(plan_input: ChapterPlanInput) -> dict | None:
     user_content = json.dumps(
         {
             "instruction": (
-                "Return ONLY JSON with key scenes: array of objects "
-                "{scene_no, goal, target_word_count}. No prose."
+                "Return ONLY JSON: {chapter_goal, scenes[], required_beat_mapping[]}. "
+                "Each scene SHOULD include provisional_events / causal_edges / "
+                "belief_deltas / intentions per the causal-path candidate schema. "
+                "event_key must be unique within the chapter. No prose."
             ),
+            "schema_hint": _PLANNER_SCHEMA_HINT,
             "chapter_outline_node": plan_input.outline,
             "forced_dependencies": plan_input.forced_dependencies,
             "l4_state": plan_input.l4_states,
@@ -211,6 +351,7 @@ async def generate_chapter_plan(plan_input: ChapterPlanInput) -> dict | None:
             "event_and_retrieved_evidence": plan_input.retrieved_evidence,
             "voice_cards": plan_input.voice_cards,
             "tone_anchor": plan_input.tone_anchor,
+            "core_anchors": plan_input.core_anchors,
             "target_word_count": plan_input.target_word_count,
         },
         ensure_ascii=False,
@@ -223,9 +364,18 @@ async def generate_chapter_plan(plan_input: ChapterPlanInput) -> dict | None:
         chapter_id=plan_input.chapter_id,
     )
 
-    plan = _coerce_plan(result, meta)
-    if plan and plan.get("scenes"):
-        return plan
+    raw_plan = _coerce_plan(result, meta)
+    if raw_plan:
+        normalized = _normalize_plan(raw_plan)
+        if normalized:
+            normalized.setdefault("source", "model")
+            return normalized
+        # Tolerate legacy minimal plans: keep scene basics, drop unusable extras.
+        legacy = _coerce_plan(result, meta)
+        if legacy and legacy.get("scenes"):
+            logger.warning("ChapterPlanner plan failed v9 normalization; using basic scenes.")
+            return legacy
+        return _deterministic_plan(plan_input.outline, plan_input.target_word_count)
 
     logger.warning(
         f"ChapterPlanner LLM plan unusable, using deterministic fallback. meta={meta}"
@@ -258,3 +408,13 @@ async def plan_chapter(
         target_word_count=target_word_count,
     )
     return await generate_chapter_plan(plan_input)
+
+
+__all__ = [
+    "ChapterPlanInput",
+    "load_chapter_plan_input",
+    "load_core_anchors",
+    "generate_chapter_plan",
+    "plan_chapter",
+    "SceneProposal",
+]

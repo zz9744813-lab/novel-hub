@@ -23,7 +23,7 @@ PROMPTS = {
         "output_schema": {"type": "object", "properties": {"outline_version": {"type": "integer"}, "nodes": {"type": "array"}, "unresolved_dependencies": {"type": "array"}, "validation_errors": {"type": "array"}}},
     },
     "chapter_planner": {
-        "version": "v1",
+        "version": "v2",
         "system_prompt": """你是"章节规划 Agent"。你只规划当前章节，不写完整正文。
 
 权威优先级：
@@ -37,23 +37,39 @@ PROMPTS = {
 5. 确保 depends_on 的 required_state 已满足并在对应场景中被正确使用。
 6. 规划局部可生成的场景，避免单场景承担过多任务。
 
+候选因果路径（v9）：
+你提出的是候选因果路径，不是权威事实。
+每个场景中的每个重要行动必须在 provisional_events + causal_edges + belief_deltas + intentions 中体现：
+- 角色当前相信什么（belief_deltas：belief_key、before/after、source_event_keys）
+- 想达到什么（intentions：action_intent、support_goal_keys）
+- 哪个事件触发（causal_edges：from/to/relation/mode）
+- 哪个 Core/Goal/Belief 提供支持（intentions：support_anchor_ids/support_belief_keys）
+无法找到支持时在 intention 中输出 attribution_status="unresolved"，不得现场编造人格解释。
+event_key 用短字符串（如 P31），actor_id/character_id 必须来自输入中存在的角色。
+
 禁止：
 - 新增未授权的大纲依赖；修改 L4 状态；让已死亡角色无解释出现；为追求戏剧性突破世界规则；输出正文段落；输出思考过程或元评论。
 
 成人或暴力内容：系统不设置强度上限。
 
 输出只能是 JSON。""",
-        "input_variables": ["chapter_outline_node", "forced_dependencies", "l4_state", "l2_summary", "l3_summary", "event_and_retrieved_evidence", "voice_cards", "tone_anchor", "target_word_count"],
-        "output_schema": {"type": "object", "properties": {"chapter_goal": {"type": "string"}, "scenes": {"type": "array"}, "required_beat_mapping": {"type": "array"}}},
+        "input_variables": ["chapter_outline_node", "forced_dependencies", "l4_state", "l2_summary", "l3_summary", "event_and_retrieved_evidence", "voice_cards", "tone_anchor", "core_anchors", "target_word_count"],
+        "output_schema": {"type": "object", "properties": {"chapter_goal": {"type": "string"}, "scenes": {"type": "array", "items": {"type": "object", "properties": {"scene_no": {"type": "integer"}, "goal": {"type": "string"}, "pov_character_id": {"type": "string"}, "location": {"type": "string"}, "conflict": {"type": "string"}, "emotion_change": {"type": "string"}, "exit_state": {"type": "string"}, "target_word_count": {"type": "integer"}, "must_include": {"type": "array"}, "must_not": {"type": "array"}, "provisional_events": {"type": "array"}, "causal_edges": {"type": "array"}, "belief_deltas": {"type": "array"}, "intentions": {"type": "array"}}}}, "required_beat_mapping": {"type": "array"}}},
     },
     "draft_writer": {
-        "version": "v1",
+        "version": "v2",
         "system_prompt": """你是"正文写作 Agent"。你每次只写一个场景，并严格执行当前 Scene Plan。
 
 你收到的 Context Package 中：
 - L4、人工锁定事实和 required dependencies 是不可违背的权威约束；
 - Voice Card 决定角色说话方式；Tone Anchor 决定叙述调性；
 - 事件账本和检索证据只提供历史依据，不允许复制场景原句；技巧卡只能作为抽象写法参考。
+
+Scene Contract（v9）：
+Scene Contract 是行为和状态边界，不是必须逐条写进正文的说明书。
+你可以自由选择动作、对白、细节和意象，但不得改变 hard causal effect、knowledge boundary、belief delta 和关键 exit_state。
+每个角色的知识边界（perceptions）不可越界：未感知对应事件的角色不得表现出知情。
+expression_constraints 描述情绪表达倾向，具体身体表现由你结合角色习惯与场景物体自由实现。
 
 写作要求：
 1. 完成 Scene Plan 中所有 beats。2. 保持上一场景结尾的动作、位置、情绪和时间连续。
@@ -67,17 +83,25 @@ PROMPTS = {
 
 失败条件：无法满足 required dependency；Context Package 内存在权威冲突；Scene Plan 与 L4 明显矛盾。
 遇到失败条件时不要写正文，输出单行：PIPELINE_BLOCKED: <原因>。""",
-        "input_variables": ["scene_plan", "context_package", "previous_scene_tail", "target_word_count"],
+        "input_variables": ["scene_plan", "scene_contract", "context_package", "previous_scene_tail", "target_word_count"],
         "output_schema": None,
     },
     "review_agent": {
-        "version": "v1",
+        "version": "v2",
         "system_prompt": """你是"连续性裁判 Agent"。你只负责判定和定位问题，不负责改写正文。
 
 检查范围：L4 角色状态、世界规则、时间线、plot_thread 生命周期、outline required_beats/forbidden_outcomes/depends_on、场景连续、角色口吻、叙述调性、AI 元评论泄漏、重复段落。
 
+认知-因果检查（v9）：
+判断"角色反应是否正常"时不得只凭语气或常识。
+必须检查 event → perception/belief → appraisal → motive → action 是否存在支持链：
+- 角色是否实际感知到触发事件（知识边界）；
+- 反应是否有 belief/goal/core anchor 支持；
+- 无支持链的反应标注 category="causal_break"，severity 至少 major；
+- 违反 scene_contract 中 hard effect / belief delta / exit_state 的问题标注 category="contract_violation"。
+
 重要：成人或暴力表达的强度不是质量问题。每个问题必须定位到 scene_id 和 paragraph_id，并提供证据及 repair_instruction。不得直接返回重写后的正文。输出只能是 JSON。""",
-        "input_variables": ["chapter_content", "l4_state", "voice_cards", "tone_anchor", "outline_node", "depends_on"],
+        "input_variables": ["chapter_content", "l4_state", "voice_cards", "tone_anchor", "outline_node", "depends_on", "scene_contracts", "core_anchors"],
         "output_schema": {"type": "object", "properties": {"passed": {"type": "boolean"}, "issues": {"type": "array"}}},
     },
     "local_rewrite_editor": {
@@ -89,12 +113,20 @@ PROMPTS = {
         "output_schema": {"type": "object", "properties": {"replacement_text": {"type": "string"}, "resolved_issue_ids": {"type": "array"}}},
     },
     "state_extractor": {
-        "version": "v1",
+        "version": "v2",
         "system_prompt": """你是"状态事件抽取 Agent"。只从已通过 ContinuityJudge 的候选定稿正文提取事实事件，不做推断，不修改正文。
 
-规则：只记录正文明确发生或明确确认的事实。推测、谎言、角色主观看法必须标记 certainty，不得直接作为权威状态。每个状态变化必须提供 scene_id、paragraph_id 和 evidence。与现有 L4 冲突时不得覆盖，写入 conflicts。不得把成人或暴力内容本身标记为异常。输出只能是 JSON。""",
-        "input_variables": ["chapter_content", "scenes", "paragraphs", "current_l4", "outline_node"],
-        "output_schema": {"type": "object", "properties": {"events": {"type": "array"}, "conflicts": {"type": "array"}, "l1_chapter_ledger": {"type": "object"}}},
+规则：只记录正文明确发生或明确确认的事实。推测、谎言、角色主观看法必须标记 certainty，不得直接作为权威状态。每个状态变化必须提供 scene_id、paragraph_id 和 evidence。与现有 L4 冲突时不得覆盖，写入 conflicts。不得把成人或暴力内容本身标记为异常。
+
+事实与归因分离（v9）：
+reaction_evidence 只记录可观察反应（谁、做了什么、正文位置），不带解释。
+attributions 只能从输入提供的 core_anchor_ids / belief_keys / goal_keys / cause_event_keys 中选择。
+选不出任何支持时 status="unresolved"，不得编造人格解释。
+支持不足却写成正史因果，比 unresolved 更严重。
+
+输出只能是 JSON。""",
+        "input_variables": ["chapter_content", "scenes", "paragraphs", "current_l4", "outline_node", "scene_contracts", "core_anchors"],
+        "output_schema": {"type": "object", "properties": {"events": {"type": "array"}, "conflicts": {"type": "array"}, "reaction_evidence": {"type": "array"}, "attributions": {"type": "array"}, "l1_chapter_ledger": {"type": "object"}}},
     },
     "drift_audit": {
         "version": "v1",

@@ -2483,3 +2483,413 @@ async def export_book(book_id: str, db: AsyncSession = Depends(get_db)):
         "Content-Disposition": f"attachment; filename=\"{safe_name}.txt\"; filename*=UTF-8''{encoded}",
     }
     return PlainTextResponse(content=body, media_type="text/plain; charset=utf-8", headers=headers)
+
+
+# ---- v9.0 Cognitive-Causal Narrative Engine (CCNE, spec §43) ----
+
+class CoreAnchorCreate(BaseModel):
+    anchor_code: str
+    anchor_type: str = "value"
+    statement: str
+    priority: float = 0.5
+    rigidity: float = 0.5
+    source_kind: str = "manual"
+
+
+class CoreAnchorUpdate(BaseModel):
+    statement: str | None = None
+    anchor_type: str | None = None
+    priority: float | None = None
+    rigidity: float | None = None
+    status: str | None = None
+    is_locked: bool | None = None
+
+
+@router.get("/api/books/{book_id}/characters")
+async def list_characters(book_id: str, db: AsyncSession = Depends(get_db)):
+    from app.models import CharacterCard, CharacterCoreAnchor
+
+    book = (
+        await db.execute(select(Book).where(Book.id == uuid.UUID(book_id)))
+    ).scalar_one_or_none()
+    if not book:
+        raise HTTPException(404, "Book not found")
+
+    cards = (
+        await db.execute(
+            select(CharacterCard)
+            .where(CharacterCard.book_id == uuid.UUID(book_id))
+            .order_by(CharacterCard.created_at)
+        )
+    ).scalars().all()
+    anchor_counts: dict[uuid.UUID, int] = {}
+    if cards:
+        rows = (
+            await db.execute(
+                select(
+                    CharacterCoreAnchor.character_id,
+                    func.count(CharacterCoreAnchor.id),
+                )
+                .where(
+                    CharacterCoreAnchor.character_id.in_([c.id for c in cards]),
+                    CharacterCoreAnchor.status == "active",
+                )
+                .group_by(CharacterCoreAnchor.character_id)
+            )
+        ).all()
+        anchor_counts = {cid: n for cid, n in rows}
+    return {
+        "characters": [
+            {
+                "id": str(c.id),
+                "name": c.name,
+                "role": c.role,
+                "description": (c.description or "")[:280],
+                "anchor_count": anchor_counts.get(c.id, 0),
+            }
+            for c in cards
+        ]
+    }
+
+
+@router.get("/api/books/{book_id}/characters/{character_id}/core-anchors")
+async def list_core_anchors(book_id: str, character_id: str, db: AsyncSession = Depends(get_db)):
+    from app.models import CharacterCoreAnchor
+    rows = (
+        await db.execute(
+            select(CharacterCoreAnchor)
+            .where(
+                CharacterCoreAnchor.book_id == uuid.UUID(book_id),
+                CharacterCoreAnchor.character_id == uuid.UUID(character_id),
+            )
+            .order_by(CharacterCoreAnchor.priority.desc())
+        )
+    ).scalars().all()
+    return {
+        "anchors": [
+            {
+                "id": str(a.id),
+                "anchor_code": a.anchor_code,
+                "anchor_type": a.anchor_type,
+                "statement": a.statement,
+                "priority": a.priority,
+                "rigidity": a.rigidity,
+                "source_kind": a.source_kind,
+                "status": a.status,
+                "is_locked": a.is_locked,
+            }
+            for a in rows
+        ]
+    }
+
+
+@router.post("/api/books/{book_id}/characters/{character_id}/core-anchors")
+async def create_core_anchor(
+    book_id: str, character_id: str, req: CoreAnchorCreate, db: AsyncSession = Depends(get_db)
+):
+    from app.models import CharacterCard, CharacterCoreAnchor
+
+    cid = _parse_uuid(character_id, field="character_id")
+    card = (
+        await db.execute(select(CharacterCard).where(CharacterCard.id == cid))
+    ).scalar_one_or_none()
+    if not card:
+        raise HTTPException(404, "Character not found")
+
+    code = (req.anchor_code or "").strip()[:32] or f"A{uuid.uuid4().hex[:8]}"
+    dup = (
+        await db.execute(
+            select(CharacterCoreAnchor).where(
+                CharacterCoreAnchor.character_id == cid,
+                CharacterCoreAnchor.anchor_code == code,
+            )
+        )
+    ).scalar_one_or_none()
+    if dup:
+        raise HTTPException(409, f"anchor_code {code} already exists")
+
+    anchor = CharacterCoreAnchor(
+        id=gen_uuid(),
+        book_id=uuid.UUID(book_id),
+        character_id=cid,
+        anchor_code=code,
+        anchor_type=(req.anchor_type or "value")[:32],
+        statement=req.statement,
+        priority=max(0.0, min(1.0, float(req.priority))),
+        rigidity=max(0.0, min(1.0, float(req.rigidity))),
+        source_kind=(req.source_kind or "manual")[:32],
+        source_ref={"created_via": "api"},
+    )
+    db.add(anchor)
+    await db.flush()
+    return {"anchor_id": str(anchor.id), "anchor_code": anchor.anchor_code, "status": "created"}
+
+
+@router.patch("/api/core-anchors/{anchor_id}")
+async def update_core_anchor(anchor_id: str, req: CoreAnchorUpdate, db: AsyncSession = Depends(get_db)):
+    from app.models import CharacterCoreAnchor
+
+    anchor = (
+        await db.execute(
+            select(CharacterCoreAnchor).where(CharacterCoreAnchor.id == uuid.UUID(anchor_id))
+        )
+    ).scalar_one_or_none()
+    if not anchor:
+        raise HTTPException(404, "Core anchor not found")
+    if anchor.is_locked and req.statement is not None:
+        raise HTTPException(409, "Anchor is locked; unlock before editing")
+
+    if req.statement is not None:
+        anchor.statement = req.statement
+    if req.anchor_type is not None:
+        anchor.anchor_type = req.anchor_type[:32]
+    if req.priority is not None:
+        anchor.priority = max(0.0, min(1.0, float(req.priority)))
+    if req.rigidity is not None:
+        anchor.rigidity = max(0.0, min(1.0, float(req.rigidity)))
+    if req.status is not None:
+        anchor.status = req.status[:32]
+    if req.is_locked is not None:
+        anchor.is_locked = bool(req.is_locked)
+    await db.flush()
+    return {"anchor_id": str(anchor.id), "status": "updated"}
+
+
+@router.delete("/api/core-anchors/{anchor_id}")
+async def delete_core_anchor(anchor_id: str, db: AsyncSession = Depends(get_db)):
+    from app.models import CharacterCoreAnchor
+
+    anchor = (
+        await db.execute(
+            select(CharacterCoreAnchor).where(CharacterCoreAnchor.id == uuid.UUID(anchor_id))
+        )
+    ).scalar_one_or_none()
+    if not anchor:
+        raise HTTPException(404, "Core anchor not found")
+    if anchor.is_locked:
+        raise HTTPException(409, "Anchor is locked; unlock before deleting")
+    anchor.status = "retired"
+    await db.flush()
+    return {"anchor_id": str(anchor.id), "status": "retired"}
+
+
+@router.get("/api/chapters/{chapter_id}/scene-contracts")
+async def list_scene_contracts(chapter_id: str, db: AsyncSession = Depends(get_db)):
+    from app.models import SceneReasoningContract
+
+    rows = (
+        await db.execute(
+            select(SceneReasoningContract)
+            .where(SceneReasoningContract.chapter_id == uuid.UUID(chapter_id))
+            .order_by(SceneReasoningContract.scene_no)
+        )
+    ).scalars().all()
+    return {
+        "contracts": [
+            {
+                "id": str(r.id),
+                "scene_no": r.scene_no,
+                "contract_hash": r.contract_hash,
+                "status": r.status,
+                "validation": r.validation_json,
+                "summary": _contract_summary(r.contract_json),
+                "contract": r.contract_json,
+            }
+            for r in rows
+        ]
+    }
+
+
+def _contract_summary(contract: dict | None) -> dict:
+    """Simple view per spec §42.2 (events → understanding → affect → motive → action → consequence)."""
+    if not isinstance(contract, dict):
+        return {}
+    return {
+        "dramatic_goal": contract.get("dramatic_goal"),
+        "pov_character_id": contract.get("pov_character_id"),
+        "event_count": len(contract.get("provisional_events") or []),
+        "edge_count": len(contract.get("causal_edges") or []),
+        "belief_count": len(contract.get("belief_deltas") or []),
+        "appraisal_count": len(contract.get("appraisals") or []),
+        "hard_effect_count": sum(
+            1
+            for e in (contract.get("expected_effects") or [])
+            if isinstance(e, dict) and e.get("mode") == "hard"
+        ),
+    }
+
+
+@router.get("/api/scene-contracts/{contract_id}")
+async def get_scene_contract(contract_id: str, db: AsyncSession = Depends(get_db)):
+    from app.models import SceneReasoningContract
+
+    r = (
+        await db.execute(
+            select(SceneReasoningContract).where(SceneReasoningContract.id == uuid.UUID(contract_id))
+        )
+    ).scalar_one_or_none()
+    if not r:
+        raise HTTPException(404, "Scene contract not found")
+    return {
+        "id": str(r.id),
+        "book_id": str(r.book_id),
+        "chapter_id": str(r.chapter_id),
+        "scene_no": r.scene_no,
+        "contract_hash": r.contract_hash,
+        "status": r.status,
+        "validation": r.validation_json,
+        "summary": _contract_summary(r.contract_json),
+        "contract": r.contract_json,
+    }
+
+
+@router.post("/api/scene-contracts/{contract_id}/simulate")
+async def simulate_scene_contract(contract_id: str, db: AsyncSession = Depends(get_db)):
+    from app.models import MemoryL4StateSnapshot, SceneReasoningContract
+    from app.contracts.narrative import SceneContract as SceneContractModel
+    from app.engine.causal_engine import CausalEngine
+    from app.engine.cognitive_config import DEFAULT_CAUSAL_CONFIG
+
+    row = (
+        await db.execute(
+            select(SceneReasoningContract).where(SceneReasoningContract.id == uuid.UUID(contract_id))
+        )
+    ).scalar_one_or_none()
+    if not row:
+        raise HTTPException(404, "Scene contract not found")
+
+    try:
+        contract = SceneContractModel.model_validate(row.contract_json or {})
+    except Exception as e:
+        raise HTTPException(422, f"Contract JSON invalid: {e}")
+
+    pov = contract.pov_character_id
+    state: dict = {}
+    if pov:
+        snaps = (
+            await db.execute(
+                select(MemoryL4StateSnapshot)
+                .where(
+                    MemoryL4StateSnapshot.book_id == row.book_id,
+                    MemoryL4StateSnapshot.entity_id == uuid.UUID(pov),
+                )
+                .order_by(MemoryL4StateSnapshot.as_of_chapter.desc())
+                .limit(1)
+            )
+        ).scalars().all()
+        if snaps:
+            state = snaps[0].state or {}
+
+    engine = CausalEngine(DEFAULT_CAUSAL_CONFIG)
+    next_state, report = engine.simulate_scene(contract, state)
+    return {
+        "contract_id": str(row.id),
+        "scene_no": row.scene_no,
+        "ok": report.ok,
+        "findings": [f.model_dump(mode="json") for f in report.findings],
+        "next_state": next_state,
+    }
+
+
+@router.get("/api/chapters/{chapter_id}/causal-graph")
+async def get_causal_graph(chapter_id: str, db: AsyncSession = Depends(get_db)):
+    from app.models import Chapter, StoryEvent, StoryEventEdge
+
+    ch = (
+        await db.execute(select(Chapter).where(Chapter.id == uuid.UUID(chapter_id)))
+    ).scalar_one_or_none()
+    if not ch:
+        raise HTTPException(404, "Chapter not found")
+
+    events = (
+        await db.execute(
+            select(StoryEvent).where(StoryEvent.chapter_id == ch.id)
+        )
+    ).scalars().all()
+    edges = (
+        await db.execute(
+            select(StoryEventEdge).where(StoryEventEdge.chapter_id == ch.id)
+        )
+    ).scalars().all()
+
+    ev_by_id = {e.id: e for e in events}
+    nodes = [
+        {
+            "id": str(e.id),
+            "scene_id": str(e.scene_id),
+            "event_type": e.event_type,
+            "excerpt": (e.evidence_excerpt or "")[:160],
+            "subjects": e.subject_entity_ids or [],
+        }
+        for e in events
+    ]
+    links = [
+        {
+            "source": str(x.source_event_id),
+            "target": str(x.target_event_id),
+            "relation": x.relation_type,
+            "mode": x.edge_mode,
+            "mechanism": x.mechanism,
+        }
+        for x in edges
+        if x.source_event_id in ev_by_id and x.target_event_id in ev_by_id
+    ]
+    return {
+        "chapter_id": str(ch.id),
+        "chapter_no": ch.chapter_no,
+        "nodes": nodes,
+        "links": links,
+        "stats": {
+            "event_count": len(nodes),
+            "edge_count": len(links),
+            "hard_edge_count": sum(1 for l in links if l["mode"] == "hard"),
+        },
+    }
+
+
+@router.get("/api/chapters/{chapter_id}/causal-findings")
+async def get_causal_findings(chapter_id: str, db: AsyncSession = Depends(get_db)):
+    from app.models import SceneReasoningContract
+
+    rows = (
+        await db.execute(
+            select(SceneReasoningContract)
+            .where(SceneReasoningContract.chapter_id == uuid.UUID(chapter_id))
+            .order_by(SceneReasoningContract.scene_no)
+        )
+    ).scalars().all()
+    findings: list[dict] = []
+    for r in rows:
+        v = r.validation_json or {}
+        for f in (v.get("findings") or [])[:MAX_FINDINGS_RETURNED]:
+            if isinstance(f, dict):
+                f = {**f, "scene_no": r.scene_no, "contract_id": str(r.id)}
+                findings.append(f)
+    by_severity: dict[str, int] = {}
+    for f in findings:
+        sev = str(f.get("severity") or "major")
+        by_severity[sev] = by_severity.get(sev, 0) + 1
+    return {
+        "chapter_id": chapter_id,
+        "findings": findings[:200],
+        "by_severity": by_severity,
+        "contract_count": len(rows),
+    }
+
+
+MAX_FINDINGS_RETURNED = 50
+
+
+@router.post("/api/chapters/{chapter_id}/counterfactual-audit")
+async def run_counterfactual_audit(chapter_id: str, db: AsyncSession = Depends(get_db)):
+    from app.engine.counterfactual_audit import audit_chapter_counterfactual
+    from app.models import Chapter
+
+    ch = (
+        await db.execute(select(Chapter).where(Chapter.id == uuid.UUID(chapter_id)))
+    ).scalar_one_or_none()
+    if not ch:
+        raise HTTPException(404, "Chapter not found")
+
+    report = await audit_chapter_counterfactual(db, ch.book_id, ch.id)
+    return {"chapter_id": str(ch.id), "chapter_no": ch.chapter_no, "report": report}

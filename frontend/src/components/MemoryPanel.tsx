@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, L4Snapshot } from "../api";
-import { Brain, Loader2, Lock, ChevronDown, ChevronRight } from "lucide-react";
+import { CoreAnchorsEditor } from "./CoreAnchorsEditor";
+import { Brain, Loader2, Lock, ChevronDown, ChevronRight, Anchor } from "lucide-react";
 import clsx from "clsx";
 
 export function MemoryPanel({ bookId }: { bookId: string }) {
@@ -35,6 +36,21 @@ export function MemoryPanel({ bookId }: { bookId: string }) {
         <Brain size={14} className="text-text-disabled" />
         <h2 className="text-xs text-text-primary uppercase tracking-wider" style={{ fontWeight: 510 }}>记忆银行</h2>
         <span className="text-2xs text-text-disabled">L0-L4 权威状态库 · 定稿后自动生成持久化快照</span>
+      </div>
+
+      {/* v9 Core Anchors */}
+      <div className="mb-5">
+        <div className="flex items-center gap-2 mb-3">
+          <Anchor size={14} className="text-ink" />
+          <h3 className="text-xs text-text-primary uppercase tracking-wider" style={{ fontWeight: 510 }}>角色核心锚点</h3>
+          <span className="text-2xs text-text-disabled">三层角色模型的稳定内核 · 约束动机归因（§7）</span>
+        </div>
+        <CoreAnchorsEditor bookId={bookId} />
+      </div>
+
+      <div className="flex items-center gap-2 mb-3">
+        <Brain size={14} className="text-text-disabled" />
+        <h3 className="text-xs text-text-secondary uppercase tracking-wider" style={{ fontWeight: 510 }}>L4 认知状态快照</h3>
       </div>
 
       {loading ? (

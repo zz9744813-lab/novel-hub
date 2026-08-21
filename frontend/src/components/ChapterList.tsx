@@ -1,5 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, OutlineNode, Chapter, ChapterListItem } from "../api";
+import { CausalGraphView } from "./CausalGraphView";
+import { SceneContractInspector } from "./SceneContractInspector";
 import {
   Play,
   FileText,
@@ -12,6 +14,8 @@ import {
   Pause,
   RotateCcw,
   Download,
+  GitBranch,
+  ScrollText,
 } from "lucide-react";
 import clsx from "clsx";
 
@@ -90,6 +94,15 @@ export function ChapterList({ bookId }: { bookId: string }) {
   const [humanDetail, setHumanDetail] = useState<any | null>(null);
   const [runDetail, setRunDetail] = useState<any | null>(null);
   const [writingNext, setWritingNext] = useState(false);
+  const [readerTab, setReaderTab] = useState<"text" | "graph" | "contracts">("text");
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const [glider, setGlider] = useState({ left: 0, width: 0 });
+
+  useEffect(() => {
+    const idx = readerTab === "text" ? 0 : readerTab === "graph" ? 1 : 2;
+    const el = tabRefs.current[idx];
+    if (el) setGlider({ left: el.offsetLeft, width: el.offsetWidth });
+  }, [readerTab, content]);
 
   const load = async () => {
     if (!bookId) return;
@@ -177,6 +190,7 @@ export function ChapterList({ bookId }: { bookId: string }) {
   };
 
   const openContent = async (ch: Chapter) => {
+    setReaderTab("text");
     try {
       if (!ch.content && ch.chapter_id) {
         const full = await api.chapters.get(ch.chapter_id);
@@ -524,10 +538,13 @@ export function ChapterList({ bookId }: { bookId: string }) {
           onClick={() => setContent(null)}
         >
           <div
-            className="novel-reader panel-elevated w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col animate-slide-up"
+            className={clsx(
+              "novel-reader panel-elevated w-full max-h-[90vh] overflow-hidden flex flex-col animate-slide-up",
+              readerTab === "text" ? "max-w-3xl" : "max-w-5xl"
+            )}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between px-6 py-3.5 border-b border-border shrink-0">
+            <div className="flex items-center justify-between px-6 py-3.5 border-b border-border shrink-0 gap-3">
               <div className="min-w-0">
                 <div className="text-sm text-text-primary truncate" style={{ fontWeight: 510 }}>
                   第 {content.chapter_no} 章
@@ -537,32 +554,69 @@ export function ChapterList({ bookId }: { bookId: string }) {
                   {content.word_count || 0} 字 · v{content.finalized_version ?? "?"}
                 </div>
               </div>
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => downloadChapter(content)}
-                  className="btn-ghost p-1.5 rounded"
-                  title="下载本章"
-                >
-                  <Download size={14} />
-                </button>
+              <div className="flex items-center gap-2">
+                <div className="reader-tabs hidden sm:inline-flex">
+                  <span
+                    className="reader-tab-glider"
+                    style={{ left: glider.left, width: glider.width, opacity: glider.width ? 1 : 0 }}
+                  />
+                  {(
+                    [
+                      { key: "text", label: "正文", icon: FileText },
+                      { key: "graph", label: "因果图谱", icon: GitBranch },
+                      { key: "contracts", label: "场景契约", icon: ScrollText },
+                    ] as const
+                  ).map((t, i) => (
+                    <button
+                      key={t.key}
+                      ref={(el) => {
+                        tabRefs.current[i] = el;
+                      }}
+                      onClick={() => setReaderTab(t.key)}
+                      className={clsx("reader-tab", readerTab === t.key && "is-active")}
+                    >
+                      <t.icon size={10} />
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+                {content.chapter_id && (
+                  <button
+                    onClick={() => downloadChapter(content)}
+                    className="btn-ghost p-1.5 rounded"
+                    title="下载本章"
+                  >
+                    <Download size={14} />
+                  </button>
+                )}
                 <button onClick={() => setContent(null)} className="btn-ghost p-1.5 rounded">
                   <XCircle size={14} />
                 </button>
               </div>
             </div>
-            <div className="overflow-auto flex-1 novel-reader-body">
-              <article className="novel-prose">
-                {formatNovelText(content.content || "(暂无内容)")
-                  .split("\n")
-                  .map((line, i) =>
-                    line === "" ? (
-                      <div key={i} className="h-4" />
-                    ) : (
-                      <p key={i}>{line}</p>
-                    )
-                  )}
-              </article>
-            </div>
+            {readerTab === "graph" && content.chapter_id ? (
+              <div className="overflow-auto flex-1 p-5 sm:p-6">
+                <CausalGraphView chapterId={content.chapter_id} />
+              </div>
+            ) : readerTab === "contracts" && content.chapter_id ? (
+              <div className="overflow-auto flex-1 p-5 sm:p-6">
+                <SceneContractInspector chapterId={content.chapter_id} />
+              </div>
+            ) : (
+              <div className="overflow-auto flex-1 novel-reader-body">
+                <article className="novel-prose">
+                  {formatNovelText(content.content || "(暂无内容)")
+                    .split("\n")
+                    .map((line, i) =>
+                      line === "" ? (
+                        <div key={i} className="h-4" />
+                      ) : (
+                        <p key={i}>{line}</p>
+                      )
+                    )}
+                </article>
+              </div>
+            )}
           </div>
         </div>
       )}

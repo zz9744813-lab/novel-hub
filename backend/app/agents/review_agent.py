@@ -12,7 +12,13 @@ import logging
 from sqlalchemy import select
 from app.database import async_session_factory
 from app.agents.caller import call_agent
-from app.models import OutlineNode, MemoryL4StateSnapshot, StyleVoiceCard, StyleToneAnchor
+from app.models import (
+    CharacterCoreAnchor,
+    OutlineNode,
+    MemoryL4StateSnapshot,
+    StyleVoiceCard,
+    StyleToneAnchor,
+)
 
 logger = logging.getLogger("novelforge.review")
 
@@ -23,6 +29,7 @@ async def review_chapter(
     chapter_content: str,
     outline_node_id: uuid.UUID | None = None,
     outline_data: dict | None = None,
+    scene_contracts: list[dict] | None = None,
     **_deprecated,
 ) -> tuple[bool, list[dict]]:
     """Review chapter for issues. Returns (passed, issues)."""
@@ -82,6 +89,31 @@ async def review_chapter(
         tone = ta.scalar_one_or_none()
         tone_dict = {"narrative_pov": tone.narrative_pov} if tone else {}
 
+        # v9: Core Anchors for cognitive-causal review (spec §28)
+        try:
+            anchor_rows = (
+                await db.execute(
+                    select(CharacterCoreAnchor).where(
+                        CharacterCoreAnchor.book_id == book_id,
+                        CharacterCoreAnchor.status == "active",
+                    )
+                )
+            ).scalars().all()
+            anchor_rows.sort(key=lambda r: (not r.is_locked, -(r.priority or 0.5)))
+            core_anchors = [
+                {
+                    "character_id": str(r.character_id),
+                    "anchor_code": r.anchor_code,
+                    "anchor_type": r.anchor_type,
+                    "statement": r.statement,
+                    "is_locked": r.is_locked,
+                }
+                for r in anchor_rows[:40]
+            ]
+        except Exception as e:
+            logger.debug("core anchors skip in review: %s", e)
+            core_anchors = []
+
     user_content = json.dumps(
         {
             "chapter_content": chapter_content,
@@ -96,6 +128,8 @@ async def review_chapter(
                 "depends_on": outline_data.get("depends_on"),
             },
             "depends_on": outline_data.get("depends_on"),
+            "scene_contracts": scene_contracts or [],
+            "core_anchors": core_anchors,
         },
         ensure_ascii=False,
     )

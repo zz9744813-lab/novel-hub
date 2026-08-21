@@ -343,7 +343,7 @@ export default function App() {
       );
     }
     if (tab === "research") {
-      return <ResearchPage bookId={selectedBookId} />;
+      return <ResearchPage bookId={selectedBookId ?? undefined} />;
     }
     if (tab === "settings") {
       return <SystemSettingsPage initialTab="models" />;
@@ -354,7 +354,15 @@ export default function App() {
     if (tab === "context") return <SystemSettingsPage initialTab="context" />;
     if (tab === "genre") return <SystemSettingsPage initialTab="genre" />;
     // Research page handled above (no book gate)
-    
+
+    if (!selectedBookId) {
+      return (
+        <LibraryPage
+          onOpenBook={handleOpenBook}
+          onNewBook={() => setShowCreate(true)}
+        />
+      );
+    }
     switch (tab) {
       case "home":
         return (

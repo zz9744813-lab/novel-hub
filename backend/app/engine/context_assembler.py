@@ -29,17 +29,32 @@ from app.models import (
     BookProfile,
     WritingConstraint,
     CharacterCard,
+    CharacterCoreAnchor,
     CharacterRelationship,
     LocationCard,
     OutlineVolume,
     GenreProfile,
     ExternalResearchEvidence,
+    StoryEvent,
 )
 from app.token_estimate import safe_token_estimate
+from app.contracts.narrative import SceneContract
 
 logger = logging.getLogger("novelforge.context")
 
-ASSEMBLER_VERSION = "3.0-v8-bookhome"
+ASSEMBLER_VERSION = "4.0-v9-ccne"
+
+# v9 CCNE item kinds (spec §22)
+CCNE_ITEM_KINDS = (
+    "scene_reasoning_contract",
+    "hard_causal_constraints",
+    "character_core_anchor",
+    "relevant_l4_cognitive_state",
+    "active_goal_state",
+    "active_affect_state",
+    "causal_frontier",
+    "knowledge_boundary",
+)
 
 
 def _sha(obj: Any) -> str:
@@ -146,12 +161,22 @@ async def assemble_context(
     previous_scene_tail: str = "",
     current_chapter: int = 1,
     *,
+    scene_contract: dict | SceneContract | None = None,
     agent_role: str = "draft_writer",
     context_window: int = 128000,
     max_output_tokens: int = 8192,
 ) -> dict:
     """Build Context Package + itemized Manifest. No hard trim / no block."""
     items: list[dict] = []
+
+    contract: SceneContract | None = None
+    if isinstance(scene_contract, SceneContract):
+        contract = scene_contract
+    elif isinstance(scene_contract, dict):
+        try:
+            contract = SceneContract.model_validate(scene_contract)
+        except Exception:
+            contract = None
 
     outline_payload = {
         "chapter_no": outline_node.chapter_no,
@@ -178,12 +203,55 @@ async def assemble_context(
         _item(
             kind="forced_dependencies",
             content=forced_dependencies or [],
-            priority=990,
+            priority=995,
             required=True,
             reason="required_dependencies",
             agent_role=agent_role,
         )
     )
+
+    # ── v9 CCNE items (spec §22): never auto-dropped on overflow ────
+    core_anchor_payload: list[dict] = []
+    if contract is not None:
+        items.append(
+            _item(
+                kind="scene_reasoning_contract",
+                content=contract.model_dump(mode="json", by_alias=True, exclude={"contract_hash"}),
+                priority=990,
+                required=True,
+                reason="v9_scene_contract",
+                canon_level="canon",
+                agent_role=agent_role,
+            )
+        )
+
+        hard_edges = [
+            {
+                "from": e.from_key,
+                "to": e.to_key,
+                "relation": e.relation,
+                "mechanism": e.mechanism,
+            }
+            for e in contract.causal_edges
+            if e.mode == "hard"
+        ]
+        hard_effects = [
+            {"path": d.path, "value": d.value, "source_event_key": d.source_event_key}
+            for d in contract.expected_effects
+            if d.mode == "hard"
+        ]
+        if hard_edges or hard_effects:
+            items.append(
+                _item(
+                    kind="hard_causal_constraints",
+                    content={"hard_edges": hard_edges, "hard_effects": hard_effects},
+                    priority=985,
+                    required=True,
+                    reason="v9_hard_causal",
+                    canon_level="canon",
+                    agent_role=agent_role,
+                )
+            )
 
     if scene_plan:
         items.append(
@@ -231,6 +299,153 @@ async def assemble_context(
                     agent_role=agent_role,
                 )
             )
+
+    # ── v9: Core Anchors (spec §5) — locked first, then priority ────
+    try:
+        anchor_rows = (
+            await db.execute(
+                select(CharacterCoreAnchor).where(
+                    CharacterCoreAnchor.book_id == book_id,
+                    CharacterCoreAnchor.status == "active",
+                )
+            )
+        ).scalars().all()
+        anchor_rows.sort(key=lambda r: (not r.is_locked, -(r.priority or 0.5)))
+        core_anchor_payload = [
+            {
+                "character_id": str(r.character_id),
+                "anchor_code": r.anchor_code,
+                "anchor_type": r.anchor_type,
+                "statement": r.statement,
+                "priority": r.priority,
+                "rigidity": r.rigidity,
+                "is_locked": r.is_locked,
+            }
+            for r in anchor_rows[:40]
+        ]
+        if core_anchor_payload:
+            items.append(
+                _item(
+                    kind="character_core_anchor",
+                    content=core_anchor_payload,
+                    priority=975,
+                    required=True,
+                    reason="v9_core_anchors",
+                    canon_level="locked" if any(a["is_locked"] for a in core_anchor_payload) else "canon",
+                    agent_role=agent_role,
+                )
+            )
+    except Exception as e:
+        logger.debug("core anchors skip: %s", e)
+
+    # ── v9: cognitive slices from L4 (beliefs / goals / affect) ─────
+    if l4_states:
+        belief_slice: dict[str, Any] = {}
+        goal_slice: dict[str, Any] = {}
+        affect_slice: dict[str, Any] = {}
+        for char_id, payload in l4_states.items():
+            state = payload.get("state") or {}
+            beliefs = state.get("beliefs")
+            if isinstance(beliefs, dict) and beliefs:
+                belief_slice[char_id] = dict(list(beliefs.items())[:12])
+            goals = state.get("goals") or state.get("active_goals")
+            if isinstance(goals, dict) and goals:
+                goal_slice[char_id] = dict(list(goals.items())[:8])
+            elif isinstance(goals, list) and goals:
+                goal_slice[char_id] = goals[:8]
+            affect = state.get("affect") or state.get("emotion")
+            if isinstance(affect, dict) and affect:
+                affect_slice[char_id] = affect
+        if belief_slice:
+            items.append(
+                _item(
+                    kind="relevant_belief_state",
+                    content=belief_slice,
+                    priority=965,
+                    required=False,
+                    reason="v9_relevant_beliefs",
+                    canon_level="canon",
+                    agent_role=agent_role,
+                )
+            )
+        if goal_slice:
+            items.append(
+                _item(
+                    kind="active_goal_state",
+                    content=goal_slice,
+                    priority=963,
+                    required=False,
+                    reason="v9_active_goals",
+                    canon_level="canon",
+                    agent_role=agent_role,
+                )
+            )
+        if affect_slice:
+            items.append(
+                _item(
+                    kind="active_affect_state",
+                    content=affect_slice,
+                    priority=961,
+                    required=False,
+                    reason="v9_active_affect",
+                    canon_level="canon",
+                    agent_role=agent_role,
+                )
+            )
+
+    # ── v9: knowledge boundary from contract perceptions ────────────
+    if contract is not None and contract.perceptions:
+        kb: dict[str, list[str]] = {}
+        for p in contract.perceptions:
+            kb.setdefault(p.character_id, []).append(
+                f"{p.event_key}:{p.channel}"
+            )
+        items.append(
+            _item(
+                kind="knowledge_boundary",
+                content={"who_knows_what": kb},
+                priority=950,
+                required=True,
+                reason="v9_knowledge_boundary",
+                canon_level="canon",
+                agent_role=agent_role,
+            )
+        )
+
+    # ── v9: causal frontier — most recent finalized events ──────────
+    try:
+        frontier_rows = (
+            await db.execute(
+                select(StoryEvent)
+                .where(StoryEvent.book_id == book_id, StoryEvent.canon_status == "canon")
+                .order_by(StoryEvent.created_at.desc())
+                .limit(12)
+            )
+        ).scalars().all()
+        if frontier_rows:
+            frontier = [
+                {
+                    "id": str(r.id),
+                    "event_type": r.event_type,
+                    "subjects": r.subject_entity_ids,
+                    "cause": (r.cause_text or "")[:200],
+                    "after_state": r.after_state,
+                }
+                for r in reversed(frontier_rows)
+            ]
+            items.append(
+                _item(
+                    kind="causal_frontier",
+                    content=frontier,
+                    priority=690,
+                    required=False,
+                    reason="v9_causal_frontier",
+                    canon_level="canon",
+                    agent_role=agent_role,
+                )
+            )
+    except Exception as e:
+        logger.debug("causal frontier skip: %s", e)
 
     rules = await db.execute(select(WorldRule).where(WorldRule.book_id == book_id))
     world_rules = [
@@ -678,6 +893,13 @@ async def assemble_context(
         "l1_recent_ledgers": l1_ledgers,
         "l2_stage_summary": l2_json,
         "l3_volume_summary": l3_json,
+        # v9 CCNE
+        "scene_contract": (
+            contract.model_dump(mode="json", by_alias=True, exclude={"contract_hash"})
+            if contract is not None
+            else None
+        ),
+        "core_anchors": core_anchor_payload,
         "voice_cards": [
             {
                 "character_id": v["character_id"],

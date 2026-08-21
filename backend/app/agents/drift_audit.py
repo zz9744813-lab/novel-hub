@@ -15,6 +15,71 @@ from app.models import (
 logger = logging.getLogger("novelforge.drift_audit")
 
 
+async def _causal_metrics(
+    db,
+    book_id: uuid.UUID,
+    chapter_start: int,
+    chapter_end: int,
+) -> dict:
+    """Deterministic v9 causal metrics over the chapter range (spec §34)."""
+    from app.models import Chapter, SceneReasoningContract, StoryEventEdge
+    from sqlalchemy import func
+
+    try:
+        chapter_ids = (
+            await db.execute(
+                select(Chapter.id).where(
+                    Chapter.book_id == book_id,
+                    Chapter.chapter_no >= chapter_start,
+                    Chapter.chapter_no <= chapter_end,
+                )
+            )
+        ).scalars().all()
+        if not chapter_ids:
+            return {}
+
+        contracts = (
+            await db.execute(
+                select(SceneReasoningContract).where(
+                    SceneReasoningContract.chapter_id.in_(list(chapter_ids))
+                )
+            )
+        ).scalars().all()
+        edge_count = (
+            await db.execute(
+                select(func.count()).select_from(StoryEventEdge).where(
+                    StoryEventEdge.chapter_id.in_(list(chapter_ids))
+                )
+            )
+        ).scalar() or 0
+
+        total = len(contracts)
+        finalized = sum(1 for c in contracts if c.status == "finalized")
+
+        from app.engine.counterfactual_audit import audit_counterfactual
+
+        contract_dicts = [c.contract_json for c in contracts if isinstance(c.contract_json, dict)]
+        cf = audit_counterfactual(contract_dicts, {})
+        necessary = sum(
+            1 for f in cf.findings if f.classification == "necessary_support"
+        )
+        redundancy = sum(
+            1 for f in cf.findings if f.classification in ("motivation_redundancy", "false_causal_emphasis")
+        )
+
+        return {
+            "causal_contract_total": total,
+            "causal_contract_finalized": finalized,
+            "causal_contract_realization_rate": (finalized / total) if total else None,
+            "causal_edge_count": int(edge_count),
+            "necessary_support_count": necessary,
+            "motivation_redundancy_count": redundancy,
+        }
+    except Exception as e:
+        logger.warning("causal metrics computation failed: %s", e)
+        return {}
+
+
 # Thresholds per §9.3
 THRESHOLDS = {
     "state_card_accuracy": {"green": 0.985, "yellow": 0.970, "red": 0.970},
@@ -81,6 +146,9 @@ async def run_drift_audit(
     ta = await db.execute(select(StyleToneAnchor).where(StyleToneAnchor.book_id == book_id))
     tone_anchors = [{"pov": t.narrative_pov} for t in ta.scalars().all()]
 
+    # v9 deterministic causal metrics (no LLM — authoritative, spec §34)
+    causal_metrics = await _causal_metrics(db, book_id, chapter_range_start, chapter_range_end)
+
     user_content = json.dumps({
         "chapter_range": [chapter_range_start, chapter_range_end],
         "audit_samples": [],  # TODO: generate proper audit samples
@@ -122,6 +190,23 @@ async def run_drift_audit(
         report.affected_entities = result.get("affected_entities", [])
         report.affected_future_nodes = result.get("affected_future_nodes", [])
         report.recommended_actions = result.get("recommended_actions", [])
+
+    # Deterministic causal metrics override LLM-fuzzy values
+    if causal_metrics:
+        metrics = dict(report.metrics or {})
+        metrics.update(causal_metrics)
+        report.metrics = metrics
+        necessary = int(causal_metrics.get("necessary_support_count") or 0)
+        redundancy = int(causal_metrics.get("motivation_redundancy_count") or 0)
+        if redundancy > 0 and report.status == "green":
+            report.status = "yellow"
+        if necessary > 0:
+            report.yellow_findings = list(report.yellow_findings or []) + [
+                {
+                    "type": "causal_necessary_support",
+                    "detail": f"{necessary} 个关键事件为唯一支持路径，脆弱度高",
+                }
+            ]
 
     db.add(report)
     await db.flush()

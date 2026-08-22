@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useStore } from "./store";
 import { Sidebar } from "./components/Sidebar";
-import { OutlineGraph } from "./components/OutlineGraph";
+import { OutlinePage } from "./components/OutlinePage";
 import { ChapterList } from "./components/ChapterList";
 import { MemoryPanel } from "./components/MemoryPanel";
 import { DriftAuditPanel } from "./components/DriftAuditPanel";
@@ -379,12 +379,7 @@ export default function App() {
           />
         );
       case "outline":
-        return (
-          <OutlineGraph
-            bookId={selectedBookId}
-            nodes={[]} // TODO: Fetch outline nodes from API (placeholder)
-          />
-        );
+        return <OutlinePage bookId={selectedBookId} onNavigate={handleTabChange} />;
       case "chapters":
       case "writing":
         return <ChapterList bookId={selectedBookId} />;

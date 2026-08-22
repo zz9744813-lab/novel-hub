@@ -7,6 +7,8 @@ Pure deterministic tests — no DB, no LLM. Covers:
 - scene_contract: compile, renumber, hash stability, validation
 - counterfactual_audit: key node detection + classification
 """
+import uuid
+
 import pytest
 
 from app.contracts.narrative import (
@@ -34,6 +36,7 @@ from app.engine.causal_engine import CausalEngine
 from app.engine.appraisal_engine import AppraisalEngine
 from app.engine.scene_contract import SceneContractCompiler
 from app.engine.counterfactual_audit import audit_counterfactual, is_key_node_event
+from app.engine.causal_errors import CausalHardBlockError, CausalRuntimeError
 
 
 # ── fixtures ──────────────────────────────────────────────────────────
@@ -468,7 +471,7 @@ class TestCounterfactualAudit:
             {
                 "scene_no": 1,
                 "contract_hash": "h1",
-                "events": events,
+                "provisional_events": events,
                 "causal_edges": edges,
             }
         ]
@@ -504,7 +507,7 @@ class TestCounterfactualAudit:
             {
                 "scene_no": 1,
                 "contract_hash": "h1",
-                "events": [
+                "provisional_events": [
                     {
                         "event_key": "P-001-01-01",
                         "actor_id": CHAR_A,
@@ -522,3 +525,291 @@ class TestCounterfactualAudit:
         # key node with no hard effect and no edges: removal changes nothing,
         # but no motive/hard edge either -> no redundancy finding
         assert report.audited_events == ["P-001-01-01"]
+
+
+# ── v9.1 PR-01: compile fail-closed + hard effect flow ────────────────
+
+import asyncio
+
+from app.engine.causal_compile import compile_chapter_contracts
+
+
+def _scene1_proposal() -> dict:
+    """Scene 1: A learns of betrayal — hard effect drops belief confidence."""
+    return {
+        "scene_no": 1,
+        "dramatic_goal": "A 发现 B 的背叛",
+        "pov_character_id": CHAR_A,
+        "characters": [CHAR_A, CHAR_B],
+        "provisional_events": [
+            {
+                "event_key": "E1",
+                "actor_id": CHAR_B,
+                "action": "秘密传递情报给敌对势力",
+                "involves": [CHAR_A],
+                "hard_effects": [
+                    {
+                        "path": f"{CHAR_A}.beliefs.ally_trustworthy.confidence",
+                        "value": -0.4,
+                        "mode": "hard",
+                    }
+                ],
+            }
+        ],
+        "belief_deltas": [
+            {
+                "character_id": CHAR_A,
+                "belief_key": "ally_trustworthy",
+                "after": -0.4,
+                "source_event_keys": ["E1"],
+            }
+        ],
+    }
+
+
+def _scene2_proposal(belief_before: float | None) -> dict:
+    """Scene 2: A confronts B — belief delta with explicit before value."""
+    d = {
+        "scene_no": 2,
+        "dramatic_goal": "A 当面对峙 B",
+        "pov_character_id": CHAR_A,
+        "characters": [CHAR_A, CHAR_B],
+        "provisional_events": [
+            {
+                "event_key": "E2",
+                "actor_id": CHAR_A,
+                "action": "质问盟友并摊牌",
+                "involves": [CHAR_B],
+            }
+        ],
+        "belief_deltas": [
+            {
+                "character_id": CHAR_A,
+                "belief_key": "ally_trustworthy",
+                "after": -0.6,
+                "source_event_keys": ["E2"],
+            }
+        ],
+    }
+    if belief_before is not None:
+        d["belief_deltas"][0]["before"] = belief_before
+    return d
+
+
+class TestCompileFailClosed:
+    def test_hard_effect_flows_from_scene_1_to_scene_2(self):
+        """Spec §3.1: Scene 1 hard effect must enter Scene 2 working state."""
+        result = asyncio.run(
+            compile_chapter_contracts(
+                book_id=uuid.uuid4(),
+                chapter_id=uuid.uuid4(),
+                chapter_no=1,
+                scene_plan={"scenes": [_scene1_proposal(), _scene2_proposal(None)]},
+                l4_states={CHAR_A: _state_a()},
+                persist=False,
+            )
+        )
+        contracts = result["contracts"]
+        assert len(contracts) == 2
+        # scene 2's belief "before" is auto-completed from the working state,
+        # which scene 1's hard effect already advanced to -0.4
+        s2_beliefs = contracts[1]["belief_deltas"]
+        assert s2_beliefs[0]["before"] == -0.4
+
+    def test_precondition_violation_hard_blocks(self):
+        """Scene 2 asserts before=0.8 but scene 1 dropped it to -0.4 → blocker."""
+        with pytest.raises(CausalHardBlockError) as exc_info:
+            asyncio.run(
+                compile_chapter_contracts(
+                    book_id=uuid.uuid4(),
+                    chapter_id=uuid.uuid4(),
+                    chapter_no=1,
+                    scene_plan={
+                        "scenes": [
+                            _scene1_proposal(),
+                            _scene2_proposal(belief_before=0.8),
+                        ]
+                    },
+                    l4_states={CHAR_A: _state_a()},
+                    persist=False,
+                )
+            )
+        assert exc_info.value.code == "CAUSAL_PRECONDITION_FAILED"
+
+    def test_causal_schema_error_fail_closed(self):
+        """A proposal WITH causal fields but broken schema must not degrade."""
+        broken = _scene1_proposal()
+        broken["provisional_events"] = [{"event_key": "E1", "actor_id": 12345, "action": "x"}]
+        with pytest.raises(CausalRuntimeError):
+            asyncio.run(
+                compile_chapter_contracts(
+                    book_id=uuid.uuid4(),
+                    chapter_id=uuid.uuid4(),
+                    chapter_no=1,
+                    scene_plan={"scenes": [broken]},
+                    l4_states={CHAR_A: _state_a()},
+                    persist=False,
+                )
+            )
+
+    def test_minimal_contract_still_allowed_without_causal_fields(self):
+        """Scenes with no causal structure degrade to a minimal contract."""
+        result = asyncio.run(
+            compile_chapter_contracts(
+                book_id=uuid.uuid4(),
+                chapter_id=uuid.uuid4(),
+                chapter_no=1,
+                scene_plan={"scenes": [{"scene_no": 1, "goal": "过场"}]},
+                l4_states={},
+                persist=False,
+            )
+        )
+        assert len(result["contracts"]) == 1
+
+
+class TestPreconditionPathScoping:
+    def test_char_headed_predicate_evaluated(self):
+        engine = CausalEngine()
+        pred = StatePredicate(
+            path=f"{CHAR_A}.beliefs.ally_trustworthy.confidence", op=">=", value=0.5
+        )
+        report = engine.validate_preconditions(
+            _state_a(), [pred], char_id=CHAR_A
+        )
+        assert report.ok
+
+    def test_char_headed_predicate_failure(self):
+        engine = CausalEngine()
+        pred = StatePredicate(
+            path=f"{CHAR_A}.beliefs.ally_trustworthy.confidence", op=">=", value=0.95
+        )
+        report = engine.validate_preconditions(
+            _state_a(), [pred], char_id=CHAR_A
+        )
+        assert not report.ok
+        assert any(f.code == "CAUSAL_PRECONDITION_FAILED" for f in report.findings)
+
+    def test_other_characters_predicate_skipped(self):
+        """B's predicate must not false-fail against A's state slice."""
+        engine = CausalEngine()
+        pred = StatePredicate(
+            path=f"{CHAR_B}.beliefs.anything.confidence", op=">=", value=0.9
+        )
+        report = engine.validate_preconditions(
+            _state_a(), [pred], char_id=CHAR_A
+        )
+        assert report.ok  # skipped, not failed
+
+    def test_bare_path_predicate_evaluated(self):
+        engine = CausalEngine()
+        pred = StatePredicate(path="beliefs.city_is_safe.confidence", op=">=", value=0.5)
+        report = engine.validate_preconditions(_state_a(), [pred], char_id=CHAR_A)
+        assert report.ok
+
+
+# ── v9.1 PR-02: per-scene context (spec §5/§6) ───────────────────────
+
+from app.engine.relevant_state import select_relevant_scene_state
+
+
+class TestWorkingStatesByScene:
+    def test_snapshots_capture_pre_scene_state(self):
+        """Scene 1 sees the initial belief; scene 2 sees scene 1's hard effect."""
+        result = asyncio.run(
+            compile_chapter_contracts(
+                book_id=uuid.uuid4(),
+                chapter_id=uuid.uuid4(),
+                chapter_no=1,
+                scene_plan={"scenes": [_scene1_proposal(), _scene2_proposal(None)]},
+                l4_states={CHAR_A: _state_a()},
+                persist=False,
+            )
+        )
+        snaps = result["working_states_by_scene"]
+        assert set(snaps.keys()) == {1, 2}
+        s1_conf = snaps[1][CHAR_A]["beliefs"]["ally_trustworthy"]["confidence"]
+        s2_conf = snaps[2][CHAR_A]["beliefs"]["ally_trustworthy"]["confidence"]
+        assert s1_conf == 0.8
+        assert s2_conf == -0.4
+
+    def test_snapshots_are_isolated_copies(self):
+        """Mutating one scene's snapshot must not leak into another's."""
+        result = asyncio.run(
+            compile_chapter_contracts(
+                book_id=uuid.uuid4(),
+                chapter_id=uuid.uuid4(),
+                chapter_no=1,
+                scene_plan={"scenes": [_scene1_proposal(), _scene2_proposal(None)]},
+                l4_states={CHAR_A: _state_a()},
+                persist=False,
+            )
+        )
+        snaps = result["working_states_by_scene"]
+        snaps[1][CHAR_A]["beliefs"]["ally_trustworthy"]["confidence"] = 0.0
+        assert (
+            snaps[2][CHAR_A]["beliefs"]["ally_trustworthy"]["confidence"] == -0.4
+        )
+
+
+class TestSelectRelevantSceneState:
+    def _compiled_scene1_contract(self) -> dict:
+        result = asyncio.run(
+            compile_chapter_contracts(
+                book_id=uuid.uuid4(),
+                chapter_id=uuid.uuid4(),
+                chapter_no=1,
+                scene_plan={"scenes": [_scene1_proposal()]},
+                l4_states={CHAR_A: _state_a()},
+                persist=False,
+            )
+        )
+        return result["contracts"][0]
+
+    def test_scopes_to_scene_characters_only(self):
+        contract = self._compiled_scene1_contract()
+        state_b = _state_a()
+        state_c = _state_a()
+        relevant = select_relevant_scene_state(
+            scene_contract=contract,
+            l4_states={CHAR_A: _state_a(), CHAR_B: state_b, "char-c": state_c},
+            core_anchors_by_char={
+                CHAR_A: [{"anchor_code": "A1", "statement": "复仇执念"}],
+            },
+        )
+        assert CHAR_A in relevant["characters"]
+        assert CHAR_B in relevant["characters"]
+        assert "char-c" not in relevant["characters"]  # not touched by scene 1
+        assert set(relevant["character_ids"]) <= {CHAR_A, CHAR_B}
+        # beliefs: scene touches ally_trustworthy → selected
+        assert "ally_trustworthy" in relevant["characters"][CHAR_A]["beliefs"]
+        # goals: only active ones survive
+        assert "revenge" in relevant["characters"][CHAR_A]["goals"]
+        assert "retire" not in relevant["characters"][CHAR_A]["goals"]
+        # anchors attached for present character
+        assert relevant["characters"][CHAR_A]["core_anchors"][0]["anchor_code"] == "A1"
+
+    def test_none_contract_returns_empty(self):
+        relevant = select_relevant_scene_state(
+            scene_contract=None,
+            l4_states={CHAR_A: _state_a()},
+        )
+        assert relevant["characters"] == {}
+        assert relevant["character_ids"] == []
+
+    def test_wanted_belief_prioritized(self):
+        """Belief keys referenced by the scene's deltas are preferred."""
+        contract = self._compiled_scene1_contract()
+        fat_state = _state_a()
+        for i in range(20):
+            fat_state["beliefs"][f"filler_{i}"] = {
+                "polarity": 1,
+                "confidence": 0.99,
+                "source_event_ids": [],
+            }
+        relevant = select_relevant_scene_state(
+            scene_contract=contract,
+            l4_states={CHAR_A: fat_state},
+        )
+        picked = relevant["characters"][CHAR_A]["beliefs"]
+        assert "ally_trustworthy" in picked  # wanted despite lower confidence
+        assert len(picked) <= 8

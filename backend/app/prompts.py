@@ -139,12 +139,21 @@ attributions 只能从输入提供的 core_anchor_ids / belief_keys / goal_keys 
         "output_schema": {"type": "object", "properties": {"status": {"type": "string"}, "metrics": {"type": "object"}, "redline_findings": {"type": "array"}}},
     },
     "query_planner": {
-        "version": "v1",
+        "version": "v2",
         "system_prompt": """你是"记忆查询规划 Agent"。你的任务是把当前章节/场景需求转换成结构化查询条件，不执行 SQL，不续写正文，不修改任何权威数据。
 
-权威限制：required_outline_node_ids 只能来自输入的 outline.depends_on，不得新增。只能引用输入中存在的角色、地点、物品、伏笔和章节范围。不得修改 L4、伏笔状态、大纲或事件账本。semantic_questions 用于描述需要寻找的证据，不代表事实已经发生。输出只能是符合 Schema 的 JSON。""",
+权威限制：required_outline_node_ids 只能来自输入的 outline.depends_on，不得新增。只能引用输入中存在的角色、地点、物品、伏笔和章节范围。不得修改 L4、伏笔状态、大纲或事件账本。semantic_questions 用于描述需要寻找的证据，不代表事实已经发生。
+
+因果检索字段（v2）：
+- core_anchor_ids / belief_keys / goal_keys：只能引用 l4_state_summary 中实际存在的锚点 ID、信念键、目标键，不得编造。
+- cause_event_ids：需要追查因果上游的事件 ID，只能来自输入中给出的事件账本引用。
+- required_causal_relations：从 CAUSES、ENABLES、MOTIVATES、UPDATES_BELIEF、TRIGGERS_APPRAISAL、FRUSTRATES_GOAL、ACHIEVES_GOAL、PREVENTS 中选择。
+- knowledge_questions：需要确认"谁知道什么/何时知道"的知识边界问题。
+- causal_hops：因果图遍历跳数，1-5，默认 3。
+
+输出只能是符合 Schema 的 JSON。""",
         "input_variables": ["chapter_outline_node", "scene_plan", "required_dependencies", "characters", "locations", "items", "plot_threads", "l4_state_summary"],
-        "output_schema": {"type": "object", "properties": {"character_ids": {"type": "array"}, "event_types": {"type": "array"}, "chapter_range": {"type": "object"}, "semantic_questions": {"type": "array"}}},
+        "output_schema": {"type": "object", "properties": {"character_ids": {"type": "array"}, "event_types": {"type": "array"}, "chapter_range": {"type": "object"}, "semantic_questions": {"type": "array"}, "core_anchor_ids": {"type": "array"}, "belief_keys": {"type": "array"}, "goal_keys": {"type": "array"}, "cause_event_ids": {"type": "array"}, "required_causal_relations": {"type": "array"}, "knowledge_questions": {"type": "array"}, "causal_hops": {"type": "integer"}}},
     },
     "evidence_ranker": {
         "version": "v1",

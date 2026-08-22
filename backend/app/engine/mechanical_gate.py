@@ -6,6 +6,11 @@ v9: accepts structured causal inputs (scene_contract / pre_state /
 post_state_candidates / core_anchors) and surfaces CCNE error codes
 (CAUSAL_PRECONDITION_FAILED, HARD_EFFECT_MISSING, ILLEGAL_KNOWLEDGE, ...).
 The gate never guesses prose semantics — structured data in, findings out.
+
+v9.1 (spec §8): the causal block runs PER SCENE — every scene is checked
+against its own contract and its own pre-scene working state; findings are
+aggregated across the whole chapter. The chapter-level checks (length,
+meta leak, beats, forbidden outcomes) still run once.
 """
 from __future__ import annotations
 
@@ -16,7 +21,7 @@ from typing import Any
 from app.contracts.narrative import SceneContract, StateDelta
 from app.engine.causal_engine import CausalEngine
 
-GATE_VERSION = "v9"
+GATE_VERSION = "v9.1"
 
 # Red-line codes (spec §28.2): can never be offset by a passing total.
 RED_LINE_CODES = {
@@ -77,7 +82,8 @@ def run_mechanical_consistency(
     scenes: list[dict] | None = None,
     outline_data: dict | None = None,
     scene_plan: dict | None = None,
-    scene_contract: Any = None,
+    scene_contracts: dict[int, Any] | None = None,
+    pre_states_by_scene: dict[int, dict] | None = None,
     pre_state: dict[str, Any] | None = None,
     post_state_candidates: list[Any] | None = None,
     core_anchors: list[dict] | None = None,
@@ -87,6 +93,8 @@ def run_mechanical_consistency(
     content = chapter_content or ""
     outline_data = outline_data or {}
     scenes = scenes or []
+    scene_contracts = scene_contracts or {}
+    pre_states_by_scene = pre_states_by_scene or {}
 
     if len(content.strip()) < min_chars:
         findings.append(
@@ -170,19 +178,46 @@ def run_mechanical_consistency(
                 }
             )
 
-    # ── v9 CCNE: structured causal validation (spec §27) ────────────
-    contract = _coerce_contract(scene_contract)
-    if contract is not None:
-        engine = CausalEngine()
-        anchor_ids: set[str] = set()
-        for a in core_anchors or []:
-            if isinstance(a, dict):
-                code = a.get("anchor_code") or a.get("id")
-                if code:
-                    anchor_ids.add(str(code))
+    # ── v9.1 CCNE: per-scene structured causal validation (spec §8/§27) ──
+    # Every scene is checked against ITS OWN contract and pre-scene state.
+    anchor_ids: set[str] = set()
+    for a in core_anchors or []:
+        if isinstance(a, dict):
+            code = a.get("anchor_code") or a.get("id")
+            if code:
+                anchor_ids.add(str(code))
 
-        next_state, report = engine.simulate_scene(
-            contract, pre_state or {}, anchor_ids or None
+    scene_rows: list[tuple[int, str, dict]] = [
+        (int(sc.get("scene_no") or 0), sc.get("content") or "", sc)
+        for sc in scenes
+        if isinstance(sc, dict)
+    ]
+    if not scene_rows and scene_contracts:
+        # no scene rows available (single-scene callers) — use chapter content
+        scene_rows = [
+            (sn, content, {"scene_no": sn}) for sn in sorted(scene_contracts)
+        ]
+
+    for scene_no, scene_content, _sc in scene_rows:
+        contract = _coerce_contract(scene_contracts.get(scene_no))
+        if contract is None:
+            continue
+
+        scene_state = pre_states_by_scene.get(scene_no) or pre_state
+        if not isinstance(scene_state, dict):
+            scene_state = {}
+
+        # simulate_scene expects one character's state slice; slice to POV
+        sim_state: dict = scene_state
+        pov = contract.pov_character_id or (
+            contract.relevant_entity_ids[0] if contract.relevant_entity_ids else None
+        )
+        if pov and isinstance(sim_state.get(pov), dict):
+            sim_state = sim_state[pov]
+
+        engine = CausalEngine()
+        _next_state, report = engine.simulate_scene(
+            contract, sim_state or {}, anchor_ids or None
         )
 
         for f in report.findings:
@@ -221,7 +256,7 @@ def run_mechanical_consistency(
 
         # must_realize: contract's hard requirements need explicit realization
         for req in contract.must_realize or []:
-            if isinstance(req, str) and len(req) >= 4 and req not in content:
+            if isinstance(req, str) and len(req) >= 4 and req not in scene_content:
                 findings.append(
                     {
                         "code": "contract_must_realize_missing",
@@ -236,7 +271,7 @@ def run_mechanical_consistency(
             if (
                 isinstance(forbidden_assert, str)
                 and len(forbidden_assert) >= 4
-                and forbidden_assert in content
+                and forbidden_assert in scene_content
             ):
                 findings.append(
                     {

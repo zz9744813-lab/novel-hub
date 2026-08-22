@@ -14,8 +14,12 @@ from app.models import (
     RetrievalCandidate, Chapter,
 )
 from app.agents.caller import call_agent
+from app.engine.causal_retrieval import causal_frontier_score, get_causal_frontier
 from app.engine.chinese_tokenizer import tokenize_for_search
 import json
+import logging
+
+logger = logging.getLogger("novelforge.retrieval")
 
 
 # Rule scores per §6.6
@@ -174,6 +178,7 @@ def candidate_merge_and_score(event_candidates: list, ft_candidates: list,
     Applies SCORE_WEIGHTS:
     - character_overlap: +180 per overlapping character
     - event_type_match: +120
+    - causal_frontier: +800 with hop decay (v9.1 §15)
     - full_text_rank: 0-100 (scaled from ts_rank)
     - same_outline_arc: +40
     - recency: 0-20 tiebreaker
@@ -194,6 +199,13 @@ def candidate_merge_and_score(event_candidates: list, ft_candidates: list,
 
         score = 0
         reasons = []
+
+        # v9.1 §15: causal-frontier candidates outrank keyword matches
+        if c.get("causal"):
+            score += causal_frontier_score(c)
+            reasons.append(
+                f"causal_frontier:{c.get('via_relation') or 'seed'}:hop{c.get('hop', 1)}"
+            )
 
         # Character overlap scoring
         subj = [str(s) for s in c.get("subject_entity_ids", [])]
@@ -397,6 +409,25 @@ def deterministic_query_template(outline_node: dict, scene_plan: dict,
                                   required_deps: list, l4_st: dict,
                                   current_chapter: int) -> dict:
     """§6.4: Fallback when QueryPlanner API fails."""
+    # v9.1 §14: derive causal seeds from L4 state structure — keys that
+    # actually exist, never invented ones.
+    belief_keys: list[str] = []
+    goal_keys: list[str] = []
+    core_anchor_ids: list[str] = []
+    for payload in (l4_st or {}).values():
+        state = payload.get("state") if isinstance(payload, dict) else payload
+        if not isinstance(state, dict):
+            continue
+        beliefs = state.get("beliefs")
+        if isinstance(beliefs, dict):
+            belief_keys.extend(list(beliefs.keys())[:6])
+        goals = state.get("goals")
+        if isinstance(goals, dict):
+            goal_keys.extend(list(goals.keys())[:4])
+        anchors = state.get("core_anchor_ids")
+        if isinstance(anchors, list):
+            core_anchor_ids.extend(str(a) for a in anchors[:4])
+
     return {
         "required_outline_node_ids": [d.get("target_node_id") for d in required_deps if d.get("required")],
         "character_ids": outline_node.get("involved_character_ids", []),
@@ -408,5 +439,56 @@ def deterministic_query_template(outline_node: dict, scene_plan: dict,
         "exact_terms": [],
         "aliases_to_expand": [],
         "semantic_questions": [],
+        "core_anchor_ids": core_anchor_ids,
+        "belief_keys": belief_keys,
+        "goal_keys": goal_keys,
+        "cause_event_ids": [],
+        "required_causal_relations": [],
+        "knowledge_questions": [],
+        "causal_hops": 3,
         "max_candidates": 24,
     }
+
+
+async def causal_frontier_step(
+    db: AsyncSession,
+    book_id: uuid.UUID,
+    query_plan: dict,
+    character_ids: list,
+) -> list[dict]:
+    """v9.1 §15: expand the true causal frontier and return frontier nodes
+    as retrieval candidates. Returns [] when the plan carries no causal seeds.
+    """
+    seed_event_ids = list(query_plan.get("cause_event_ids") or [])
+    belief_keys = list(query_plan.get("belief_keys") or [])
+    goal_keys = list(query_plan.get("goal_keys") or [])
+    if not seed_event_ids and not belief_keys and not goal_keys:
+        return []
+    relations = query_plan.get("required_causal_relations") or None
+    try:
+        hops = int(query_plan.get("causal_hops") or 3)
+    except (TypeError, ValueError):
+        hops = 3
+    try:
+        frontier = await get_causal_frontier(
+            db,
+            book_id=book_id,
+            seed_event_ids=seed_event_ids,
+            seed_belief_keys=belief_keys,
+            seed_goal_keys=goal_keys,
+            seed_character_ids=character_ids,
+            max_hops=hops,
+            max_nodes=24,
+            required_causal_relations=relations,
+        )
+    except Exception:
+        logger.exception("causal frontier expansion failed, continuing without it")
+        return []
+    nodes = frontier.get("nodes") or []
+    if nodes:
+        logger.info(
+            "causal frontier: %s node(s), %s edge(s), seeds=%s truncated=%s",
+            len(nodes), len(frontier.get("edges") or []),
+            frontier.get("seed_count"), frontier.get("truncated"),
+        )
+    return nodes

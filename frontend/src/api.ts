@@ -352,6 +352,67 @@ export const api = {
     approve: (sessionId: string) =>
       fetchJSON<{ session_id: string; status: string }>(`/api/research-sessions/${sessionId}/approve`, { method: "POST" }),
   },
+  researchScrape: {
+    sources: () => fetchJSON<ResearchScrapeSource[]>("/api/research/sources"),
+    createTask: (data: { source_id: string; target_url: string; book_id?: string }) =>
+      fetchJSON<ResearchScrapeTask>("/api/research/tasks", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    tasks: (params?: { book_id?: string; status?: string; limit?: number }) => {
+      const q = new URLSearchParams();
+      if (params?.book_id) q.set("book_id", params.book_id);
+      if (params?.status) q.set("status", params.status);
+      if (params?.limit) q.set("limit", String(params.limit));
+      const qs = q.toString();
+      return fetchJSON<{ tasks: ResearchScrapeTask[]; total: number }>(
+        `/api/research/tasks${qs ? `?${qs}` : ""}`
+      );
+    },
+    task: (id: string) => fetchJSON<ResearchScrapeTask>(`/api/research/tasks/${id}`),
+    cancelTask: (id: string) =>
+      fetchJSON<ResearchScrapeTask>(`/api/research/tasks/${id}/cancel`, { method: "POST" }),
+    documents: (taskId: string, limit = 200) =>
+      fetchJSON<{ documents: ResearchScrapeDocument[]; total: number }>(
+        `/api/research/tasks/${taskId}/documents?limit=${limit}`
+      ),
+    exportTask: (taskId: string) =>
+      fetchJSON<ResearchScrapeExport>(`/api/research/tasks/${taskId}/exports`, {
+        method: "POST",
+        body: JSON.stringify({ format: "txt" }),
+      }),
+    exportDownload: async (exportId: string, filenameHint?: string) => {
+      const r = await fetch(BASE + `/api/research/exports/${exportId}/download`, {
+        headers: authHeaders(),
+      });
+      if (r.status === 401) {
+        clearAdminToken();
+        window.dispatchEvent(new CustomEvent("novelforge:unauthorized"));
+        throw new Error("401: unauthorized");
+      }
+      if (!r.ok) throw new Error(`${r.status}: ${await r.text()}`);
+      const blob = await r.blob();
+      const cd = r.headers.get("Content-Disposition") || "";
+      const m = cd.match(/filename="?([^";]+)"?/);
+      const name = m?.[1] || `${filenameHint || "research-export"}.txt`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    },
+    importReference: (
+      taskId: string,
+      data: { book_id: string; mode: "all" | "selected"; document_ids?: string[] }
+    ) =>
+      fetchJSON<{ sample_ids: string[]; created: number; deduped: number }>(
+        `/api/research/tasks/${taskId}/import-reference`,
+        { method: "POST", body: JSON.stringify(data) }
+      ),
+  },
   memory: {
     l4: (bookId: string) => fetchJSON<{ snapshots: L4Snapshot[] }>(`/api/books/${bookId}/memory/l4`),
   },
@@ -791,4 +852,63 @@ export interface ResearchSessionDetail {
     confidence: number;
     trust_tier: string;
   }>;
+}
+
+export interface ResearchScrapeSource {
+  id: string;
+  code: string;
+  name: string;
+  base_url: string;
+  chapter_list_selector: string | null;
+  title_selector: string | null;
+  content_selector: string;
+  pagination_selector: string | null;
+  encoding: string;
+  rate_limit: number;
+  enabled: boolean;
+  verification_status: string;
+  last_verified_at: string | null;
+  config: Record<string, unknown>;
+}
+
+export interface ResearchScrapeTask {
+  id: string;
+  book_id: string | null;
+  source_id: string;
+  source_code: string | null;
+  source_name: string | null;
+  target_url: string;
+  status: string;
+  progress: number;
+  discovered_count: number;
+  completed_count: number;
+  current_url: string | null;
+  error_code: string | null;
+  error_detail: Record<string, unknown> | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ResearchScrapeDocument {
+  id: string;
+  task_id: string;
+  ordinal: number;
+  title: string;
+  source_url: string;
+  char_count: number;
+  content_hash: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface ResearchScrapeExport {
+  id: string;
+  task_id: string;
+  format: string;
+  file_path: string;
+  content_hash: string;
+  byte_size: number;
+  document_count: number;
+  download_url: string;
 }

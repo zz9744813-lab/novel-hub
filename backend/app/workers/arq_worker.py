@@ -569,11 +569,18 @@ async def run_import_pipeline_job(ctx, session_id: str):
         raise
 
 
+async def run_research_task_job(ctx, task_id: str):
+    """v9.1 research scraping task (spec §20). Shares max_jobs=1."""
+    from app.workers.research_jobs import run_research_task
+
+    return await run_research_task(ctx, task_id)
+
+
 class WorkerSettings:
     # arq cron: minute-level outbox drain (B-11)
     cron_jobs = [cron(outbox_tick, second={0, 30})]
 
-    functions = [run_chapter_pipeline, outbox_tick, run_import_pipeline_job]
+    functions = [run_chapter_pipeline, outbox_tick, run_import_pipeline_job, run_research_task_job]
     on_startup = on_startup
     on_shutdown = on_shutdown
     redis_settings = RedisSettings(

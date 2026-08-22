@@ -47,6 +47,7 @@ from app.engine.final_artifact import (
     SCENE_JOIN,
 )
 from app.engine.memory import _latest_l4_state, compute_source_hash
+from app.engine.narrative_state import normalize_state, set_path
 
 logger = logging.getLogger("novelforge.finalizer")
 
@@ -112,15 +113,11 @@ def _validate_event_against_paragraphs(
 MAX_CAUSAL_EDGES_PER_CHAPTER = 200
 
 
-def _contract_event_key(chapter_no: int, scene_no: int, seq: int) -> str:
-    return f"P-{chapter_no:03d}-{scene_no:02d}-{seq:02d}"
-
-
 def _iter_contract_edges(contracts: list[dict]) -> list[dict]:
     """Flatten contract causal edges into insertable edge dicts.
 
-    Position-based deterministic matching: contract event key
-    P-{ch}-{scene}-{seq} maps to the seq-th finalized StoryEvent of that scene.
+    Endpoint resolution happens EXACTLY via realized_provisional_event_key
+    (spec §9.2) — never by array position.
     """
     edges: list[dict] = []
     seen: set[tuple] = set()
@@ -491,8 +488,8 @@ async def commit_final_chapter_snapshot(
         merged: dict[uuid.UUID, dict] = {}
         entity_types: dict[uuid.UUID, str] = {}
         accepted_events: list[dict] = []
+        accepted_event_row_ids: list[uuid.UUID] = []
         event_row_id = uuid.uuid4()
-        event_ids_by_scene: dict[int, list[uuid.UUID]] = {}
         event_id_by_extracted_key: dict[str, uuid.UUID] = {}
 
         for evt in events:
@@ -557,10 +554,10 @@ async def commit_final_chapter_snapshot(
                     else None,
                 )
             )
-            event_ids_by_scene.setdefault(scene_no, []).append(event_row_id)
             if evt.get("event_key"):
                 event_id_by_extracted_key[str(evt["event_key"])] = event_row_id
             accepted_events.append(evt)
+            accepted_event_row_ids.append(event_row_id)
 
             if not entity_id:
                 continue
@@ -572,7 +569,8 @@ async def commit_final_chapter_snapshot(
             field = evt.get("field")
             new_value = evt.get("new_value")
             if field is not None:
-                merged[entity_id][field] = new_value
+                # v9.1 §10: dotted field paths nest — never flat keys
+                set_path(merged[entity_id], str(field), new_value)
             elif isinstance(new_value, dict):
                 merged[entity_id].update(new_value)
 
@@ -584,7 +582,7 @@ async def commit_final_chapter_snapshot(
                     entity_type=entity_types.get(entity_id, "character"),
                     entity_id=entity_id,
                     as_of_chapter=chapter_no,
-                    state=copy.deepcopy(state),
+                    state=normalize_state(copy.deepcopy(state)),
                     version=new_version,
                     source_run_id=source_run,
                 )
@@ -605,22 +603,35 @@ async def commit_final_chapter_snapshot(
             ).scalars().all()
             contract_row_by_hash = {r.contract_hash: r.id for r in rows}
 
-        contract_event_id_map: dict[str, uuid.UUID] = {}
-        for c in contracts:
-            c_scene = int(c.get("scene_no") or 0)
-            for seq in range(1, len(c.get("events") or []) + 1):
-                key = _contract_event_key(chapter_no, c_scene, seq)
-                ids = event_ids_by_scene.get(c_scene) or []
-                if seq <= len(ids):
-                    contract_event_id_map[key] = ids[seq - 1]
-        contract_event_id_map.update(event_id_by_extracted_key)
+        # v9.1 §9.2: EXACT mapping via realized_provisional_event_key —
+        # position-based guessing is forbidden. Hard edge without a mapped
+        # endpoint blocks finalize; soft edge is advisory only.
+        contract_event_id_map: dict[str, uuid.UUID] = dict(event_id_by_extracted_key)
+        for evt, row_id in zip(accepted_events, accepted_event_row_ids):
+            pkey = evt.get("realized_provisional_event_key")
+            if pkey:
+                contract_event_id_map[str(pkey)] = row_id
 
         committed_edges = 0
+        soft_edge_advisories: list[str] = []
         if contracts:
             for edge in _iter_contract_edges(contracts):
                 src = contract_event_id_map.get(edge["from"])
                 tgt = contract_event_id_map.get(edge["to"])
                 if not src or not tgt:
+                    if edge["mode"] == "hard":
+                        logger.error(
+                            "hard edge endpoint unmapped, finalize blocked: %s -> %s",
+                            edge["from"], edge["to"],
+                        )
+                        return FinalSnapshotResult(
+                            ok=False,
+                            error=(
+                                "hard_edge_endpoint_unmapped:"
+                                f"{edge['from']}->{edge['to']}"
+                            ),
+                        )
+                    soft_edge_advisories.append(f"{edge['from']}->{edge['to']}")
                     continue
                 db.add(
                     StoryEventEdge(
@@ -652,6 +663,11 @@ async def commit_final_chapter_snapshot(
                         SceneReasoningContract.id.in_(list(contract_row_by_hash.values())),
                     )
                     .values(status="finalized")
+                )
+            if soft_edge_advisories:
+                logger.info(
+                    "v9.1 soft edges skipped (endpoint not realized): %s",
+                    soft_edge_advisories[:10],
                 )
             if committed_edges:
                 logger.info(

@@ -74,17 +74,33 @@ async def extract_candidates(
         )
         return True, [], [], extras
 
-    # v9: legal ID pools for constrained attribution
+    # v9: legal ID pools for constrained attribution (spec §12)
     legal_anchor_ids = [
         str(a.get("anchor_code") or a.get("id"))
         for a in (core_anchors or [])
         if isinstance(a, dict)
     ]
     legal_belief_keys: list[str] = []
+    legal_goal_keys: list[str] = []
+    legal_relationship_refs: list[str] = []
     for _cid, payload in (current_l4 or {}).items():
         state = payload.get("state") if isinstance(payload, dict) else payload
-        if isinstance(state, dict) and isinstance(state.get("beliefs"), dict):
-            legal_belief_keys.extend(list(state["beliefs"].keys())[:12])
+        if isinstance(state, dict):
+            if isinstance(state.get("beliefs"), dict):
+                legal_belief_keys.extend(list(state["beliefs"].keys())[:12])
+            if isinstance(state.get("goals"), dict):
+                legal_goal_keys.extend(list(state["goals"].keys())[:8])
+            if isinstance(state.get("relationships"), dict):
+                legal_relationship_refs.extend(list(state["relationships"].keys())[:8])
+
+    # v9.1 §9.1: provisional event keys are legal attribution causes AND the
+    # only legal values for realized_provisional_event_key
+    provisional_event_keys: list[str] = []
+    for c in (scene_contracts or [])[:8]:
+        if isinstance(c, dict):
+            for ev in c.get("provisional_events") or []:
+                if isinstance(ev, dict) and ev.get("event_key"):
+                    provisional_event_keys.append(str(ev["event_key"]))
 
     user_content = json.dumps(
         {
@@ -110,19 +126,25 @@ async def extract_candidates(
             "legal_attribution_ids": {
                 "core_anchor_ids": legal_anchor_ids[:40],
                 "belief_keys": legal_belief_keys[:60],
+                "goal_keys": legal_goal_keys[:40],
+                "cause_event_keys": provisional_event_keys[:80],
+                "relationship_refs": legal_relationship_refs[:40],
             },
             "instruction": (
                 "Return ONLY JSON object: {\"events\":[],\"conflicts\":[],"
                 "\"reaction_evidence\":[],\"attributions\":[]}. "
                 "Each event: event_key, entity_type, entity_id, field, old_value, "
                 "new_value, certainty (must be explicit for commit), scene_no, "
-                "evidence_paragraph_key, evidence_hash, evidence. "
+                "evidence_paragraph_key, evidence_hash, evidence, "
+                "realized_provisional_event_key — when the event realizes one of "
+                "the provisional_events in scene_contracts, set it to that event's "
+                "event_key (e.g. P-001-02-03); otherwise null. "
                 "reaction_evidence: {reaction_key, character_id, scene_no, "
                 "evidence_paragraph_key, reaction_summary, weight}. "
                 "attributions: {reaction_key, cause_event_keys, core_anchor_ids, "
-                "belief_keys, goal_keys, status, reason} — IDs may ONLY come from "
-                "legal_attribution_ids; unsupported must be status=\"unresolved\". "
-                "No prose outside JSON."
+                "belief_keys, goal_keys, relationship_refs, status, reason} — IDs "
+                "may ONLY come from legal_attribution_ids; unsupported must be "
+                "status=\"unresolved\". No prose outside JSON."
             ),
         },
         ensure_ascii=False,
@@ -168,7 +190,43 @@ async def extract_candidates(
     if conflicts:
         logger.warning("StateExtractor found %s conflicts with L4", len(conflicts))
 
-    # v9: normalize reaction evidence + constrained attributions
+    # v9.1 §13 certainty fail-closed: only "explicit" enters hard canon.
+    # missing certainty becomes "unknown"; subjective/inferred/unknown are
+    # observable but never auto-upgraded to explicit.
+    from app.contracts.narrative import ExtractedStoryEvent
+
+    legal_prov_keys = set(provisional_event_keys)
+    normalized: list[dict] = []
+    for i, e in enumerate(events or []):
+        if not isinstance(e, dict):
+            continue
+        if not e.get("event_key"):
+            e = {**e, "event_key": f"evt-{i+1:02d}"}
+        try:
+            evt_model = ExtractedStoryEvent.model_validate(e)
+        except Exception:
+            logger.warning("drop malformed extracted event: %s", str(e)[:120])
+            continue
+        evt = evt_model.model_dump(mode="json")
+        if evt.get("certainty") is None:
+            evt["certainty"] = "unknown"
+        if evt["certainty"] != "explicit":
+            continue
+        # v9.1 §9.1: invalid provisional key references are stripped, not trusted
+        rpk = evt.get("realized_provisional_event_key")
+        if rpk is not None and str(rpk) not in legal_prov_keys:
+            logger.warning(
+                "strip unknown realized_provisional_event_key %r from %s",
+                rpk, evt.get("event_key"),
+            )
+            evt["realized_provisional_event_key"] = None
+        normalized.append(evt)
+
+    # Spec: expected_state_changes present but empty extract → cannot finalize
+    if expected and not normalized:
+        return False, [], ["expected_state_changes_but_empty_extract"], extras
+
+    # v9: normalize reaction evidence + constrained attributions (spec §12)
     reaction_evidence: list[dict] = []
     for r in (result.get("reaction_evidence") or []) if isinstance(result, dict) else []:
         try:
@@ -176,43 +234,34 @@ async def extract_candidates(
             reaction_evidence.append(ev.model_dump(mode="json"))
         except Exception:
             continue
+
     legal_anchor_set = set(legal_anchor_ids)
     legal_belief_set = set(legal_belief_keys)
+    legal_goal_set = set(legal_goal_keys)
+    legal_rel_set = set(legal_relationship_refs)
+    # attribution causes may cite this chapter's provisional events OR the
+    # actual event keys produced by this very extraction
+    legal_cause_set = legal_prov_keys | {
+        str(e.get("event_key")) for e in normalized if e.get("event_key")
+    }
+
     attributions: list[dict] = []
     for a in (result.get("attributions") or []) if isinstance(result, dict) else []:
         try:
             at = ReactionAttribution.model_validate(a)
         except Exception:
             continue
-        # Constrained: drop any anchor/belief not in the legal pools
+        # Constrained: drop any ID not in its legal pool (all five lists)
         at.core_anchor_ids = [i for i in at.core_anchor_ids if i in legal_anchor_set]
         at.belief_keys = [k for k in at.belief_keys if k in legal_belief_set]
+        at.goal_keys = [k for k in at.goal_keys if k in legal_goal_set]
+        at.relationship_refs = [r for r in at.relationship_refs if r in legal_rel_set]
+        at.cause_event_keys = [k for k in at.cause_event_keys if k in legal_cause_set]
         if not at.has_any_support() and at.status == "supported":
             at.status = "unresolved"
             at.reason = at.reason or "自动降级：引用的 ID 不在合法池内"
         attributions.append(at.model_dump(mode="json"))
     extras = {"reaction_evidence": reaction_evidence, "attributions": attributions}
-
-    # Normalize certainty: only explicit (or high) candidates kept for finalize
-    normalized: list[dict] = []
-    for i, e in enumerate(events or []):
-        if not isinstance(e, dict):
-            continue
-        cert = e.get("certainty")
-        if cert is None:
-            e = {**e, "certainty": "explicit"}
-            cert = "explicit"
-        if cert not in ("explicit", "high"):
-            continue
-        if cert == "high":
-            e = {**e, "certainty": "explicit"}
-        if not e.get("event_key"):
-            e = {**e, "event_key": f"evt-{i+1:02d}"}
-        normalized.append(e)
-
-    # Spec: expected_state_changes present but empty extract → cannot finalize
-    if expected and not normalized:
-        return False, [], ["expected_state_changes_but_empty_extract"], extras
 
     return True, normalized, [str(c) for c in (conflicts or [])], extras
 

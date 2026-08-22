@@ -386,10 +386,35 @@ class ReactionAttribution(ProposalModel):
         )
 
 
+class ExtractedStoryEvent(ProposalModel):
+    """One extracted canon-event candidate (spec §9.1).
+
+    ``realized_provisional_event_key`` explicitly maps this actual event to
+    the provisional contract event it realizes — position-based guessing is
+    forbidden.
+    """
+
+    event_key: str = Field(min_length=1)
+    realized_provisional_event_key: str | None = None
+    entity_type: str | None = None
+    entity_id: str | None = None
+    field: str | None = None
+    old_value: Any = None
+    new_value: Any = None
+    certainty: Literal["explicit", "subjective", "inferred", "unknown"] | None = None
+    scene_no: int | None = None
+    evidence_paragraph_key: str | None = None
+    evidence_paragraph_keys: list[str] = Field(default_factory=list)
+    evidence_hash: str | None = None
+    evidence: str | None = None
+    subject_entity_ids: list[str] = Field(default_factory=list)
+    object_entity_ids: list[str] = Field(default_factory=list)
+
+
 class StateExtractV9Contract(ProposalModel):
     """StateExtractor v9: facts / reaction evidence / attributions split."""
 
-    events: list[Any] = Field(default_factory=list)
+    events: list[ExtractedStoryEvent] = Field(default_factory=list)
     conflicts: list[Any] = Field(default_factory=list)
     reaction_evidence: list[ReactionEvidence] = Field(default_factory=list)
     attributions: list[ReactionAttribution] = Field(default_factory=list)

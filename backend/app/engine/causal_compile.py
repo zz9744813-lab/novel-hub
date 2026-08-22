@@ -13,6 +13,7 @@ Flow per chapter:
 """
 from __future__ import annotations
 
+import copy
 import logging
 import uuid
 from typing import Any
@@ -23,8 +24,10 @@ from app.contracts.narrative import (
     ContractValidationReport,
     SceneContract,
     SceneProposal,
+    StateDelta,
 )
 from app.database import async_session_factory
+from app.engine.causal_errors import CausalHardBlockError, CausalRuntimeError
 from app.engine.cognitive_config import DEFAULT_CAUSAL_CONFIG
 from app.engine.narrative_state import apply_state_deltas, normalize_state
 from app.engine.scene_contract import SceneContractCompiler
@@ -33,6 +36,23 @@ from app.models import CharacterCoreAnchor, MemoryL4StateSnapshot, SceneReasonin
 logger = logging.getLogger("novelforge.causal_compile")
 
 MAX_VALIDATION_FINDINGS_KEPT = 40
+
+# Proposal keys carrying causal structure; a scene with none of these may
+# degrade to a minimal contract, anything else is a schema failure (spec §3.3).
+_CAUSAL_PROPOSAL_KEYS = (
+    "provisional_events",
+    "causal_edges",
+    "belief_deltas",
+    "intentions",
+    "perceptions",
+    "appraisals",
+    "affect_transitions",
+    "expected_effects",
+)
+
+
+def _proposal_has_causal_fields(raw: dict) -> bool:
+    return any(raw.get(k) for k in _CAUSAL_PROPOSAL_KEYS)
 
 
 async def load_states_and_anchors(
@@ -110,6 +130,7 @@ async def compile_chapter_contracts(
           "reports":  [validation dict, ...]
           "blockers": [finding dict, ...]     # empty when all scenes are valid
           "compiled_count": int,
+          "working_states_by_scene": {scene_no: {char_id: state}}  # v9.1
         }
     """
     cfg = {**DEFAULT_CAUSAL_CONFIG, **(config or {})}
@@ -125,13 +146,20 @@ async def compile_chapter_contracts(
 
     # Mutable working state: hard effects of scene N feed scene N+1
     working: dict[str, dict[str, Any]] = {k: normalize_state(v) for k, v in states.items()}
+    # v9.1: per-scene working-state snapshot (state BEFORE that scene runs)
+    working_states_by_scene: dict[int, dict[str, dict[str, Any]]] = {}
 
     for idx, raw in enumerate(scenes_raw, start=1):
         if not isinstance(raw, dict):
-            continue
+            raise CausalRuntimeError(f"scene {idx} proposal is not a dict")
         try:
             proposal = SceneProposal.model_validate(raw)
         except Exception as e:
+            if _proposal_has_causal_fields(raw):
+                # contract schema violations are fail-closed (spec §3.3)
+                raise CausalRuntimeError(
+                    f"scene {idx} causal proposal schema invalid: {e}"
+                ) from e
             logger.warning("scene %s proposal invalid (%s); compiling minimal contract", idx, e)
             proposal = SceneProposal(scene_no=idx, goal=raw.get("goal") or "推进场景目标")
 
@@ -143,6 +171,11 @@ async def compile_chapter_contracts(
             core_anchors_by_char=anchors,
             outline_expected_effects=outline_expected_effects,
         )
+
+        # v9.1: snapshot the working state this scene starts from, BEFORE its
+        # hard effects are applied (spec §5) — the pipeline scopes each scene's
+        # context package to this snapshot via select_relevant_scene_state.
+        working_states_by_scene[int(contract.scene_no)] = copy.deepcopy(working)
 
         anchor_ids_by_char = {
             cid: {a["anchor_code"] for a in lst if a.get("anchor_code")}
@@ -158,9 +191,19 @@ async def compile_chapter_contracts(
                 ],
             }
         )
-        blockers.extend(
-            f.model_dump(mode="json") for f in report.findings if f.severity == "blocker"
-        )
+        scene_blockers = [f for f in report.findings if f.severity == "blocker"]
+        blockers.extend(f.model_dump(mode="json") for f in scene_blockers)
+        if scene_blockers:
+            # hard precondition / hard effect / knowledge boundary / pivotal
+            # intention / state path violations must not silently degrade
+            first = scene_blockers[0]
+            raise CausalHardBlockError(
+                str(first.code),
+                detail=(
+                    f"chapter {chapter_no} scene {contract.scene_no}: "
+                    f"{first.detail or first.code}"
+                ),
+            )
 
         contracts.append(contract.model_dump(mode="json", by_alias=True))
 
@@ -196,6 +239,7 @@ async def compile_chapter_contracts(
         "reports": reports,
         "blockers": blockers,
         "compiled_count": len(contracts),
+        "working_states_by_scene": working_states_by_scene,
     }
 
 

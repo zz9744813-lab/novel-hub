@@ -22,6 +22,7 @@ from app.contracts.narrative import (
 )
 from app.engine.cognitive_config import DEFAULT_CAUSAL_CONFIG
 from app.engine.narrative_state import (
+    COGNITIVE_SECTIONS,
     affect_profile,
     affect_vad,
     active_beliefs,
@@ -32,6 +33,10 @@ from app.engine.narrative_state import (
 )
 
 HARD_EDGE_RELATIONS = {"CAUSES", "PREVENTS"}
+
+# Path heads that address the state directly (not a character-scoped prefix).
+# Legacy "characters.{cid}.…" prefixed predicates are skipped (head unknown).
+_BARE_PATH_HEADS = frozenset(COGNITIVE_SECTIONS) | {"flat", "world"}
 
 
 class CausalEngine:
@@ -48,11 +53,29 @@ class CausalEngine:
         preconditions: list[StatePredicate],
         *,
         scene_no: int | None = None,
+        char_id: str | None = None,
     ) -> ContractValidationReport:
+        """Validate preconditions against a state (optionally one character's slice).
+
+        Path conventions when char_id is given:
+        - ``{char_id}.x.y``  → head stripped, evaluated against the slice
+        - bare ``x.y``       → evaluated as-is (global/relative path)
+        - other headed paths → another character's predicate: not evaluable
+          against this slice, skipped rather than false-failed
+        """
         report = ContractValidationReport()
         normalized = normalize_state(state)
         for pred in preconditions:
-            if not evaluate_predicate(normalized, pred):
+            check = pred
+            if char_id:
+                head = pred.path.split(".")[0]
+                if head == char_id and "." in pred.path:
+                    payload = pred.model_dump()
+                    payload["path"] = pred.path.split(".", 1)[1]
+                    check = StatePredicate.model_validate(payload)
+                elif head != char_id and head not in _BARE_PATH_HEADS:
+                    continue
+            if not evaluate_predicate(normalized, check):
                 report.add(
                     "CAUSAL_PRECONDITION_FAILED",
                     "blocker",
@@ -345,7 +368,14 @@ class CausalEngine:
             or (contract.relevant_entity_ids[0] if contract.relevant_entity_ids else None)
         )
         report = ContractValidationReport()
-        report.merge(self.validate_preconditions(state, contract.preconditions, scene_no=contract.scene_no))
+        report.merge(
+            self.validate_preconditions(
+                state,
+                contract.preconditions,
+                scene_no=contract.scene_no,
+                char_id=pov_or_first,
+            )
+        )
         report.merge(
             self.validate_knowledge_path(
                 state,

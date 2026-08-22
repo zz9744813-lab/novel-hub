@@ -1,175 +1,194 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api";
-import { Loader2, Globe, Play, CheckCircle, XCircle, AlertTriangle, BookOpen } from "lucide-react";
+import type { ResearchScrapeSource, ResearchScrapeTask } from "../../api";
+import {
+  Loader2,
+  Globe,
+  Play,
+  CheckCircle,
+  XCircle,
+  AlertTriangle,
+  Ban,
+  RefreshCw,
+  Download,
+  BookPlus,
+} from "lucide-react";
 import { SourceSelector } from "../../components/SourceSelector";
-interface ResearchSource {
-  name: string;
-  base_url: string;
-  chapter_list_selector: string;
-  title_selector: string;
-  content_selector: string;
-  pagination_selector?: string;
-  output_format: "epub" | "pdf" | "txt";
-  encoding: string;
-  rate_limit: number;
-  description?: string;
+
+const ACTIVE_STATUSES = ["queued", "running", "cancel_requested"];
+const POLL_INTERVAL_MS = 2000;
+
+function statusLabel(status: string): string {
+  switch (status) {
+    case "queued":
+      return "排队中";
+    case "running":
+      return "抓取中";
+    case "cancel_requested":
+      return "取消中";
+    case "completed":
+      return "已完成";
+    case "failed":
+      return "失败";
+    case "cancelled":
+      return "已取消";
+    default:
+      return status;
+  }
 }
 
-interface ResearchTaskInfo {
-  id: string;
-  source_id: string;
-  target_url: string;
-  status: "pending" | "running" | "completed" | "failed";
-  progress: number;
-  chapters_scraped: number;
-  error_message?: string;
-  created_at: string;
-  updated_at: string;
+function errorMessage(task: ResearchScrapeTask): string | null {
+  if (task.status !== "failed") return null;
+  const detail =
+    task.error_detail?.detail != null ? String(task.error_detail.detail) : null;
+  if (task.error_code && detail) return `${task.error_code}: ${detail}`;
+  if (task.error_code) return task.error_code;
+  return detail || "任务失败";
 }
 
 export function ResearchPage({ bookId }: { bookId?: string }) {
-  const [sources, setSources] = useState<ResearchSource[]>([]);
-  const [tasks, setTasks] = useState<ResearchTaskInfo[]>([]);
+  const [sources, setSources] = useState<ResearchScrapeSource[]>([]);
+  const [tasks, setTasks] = useState<ResearchScrapeTask[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  
+
   // Form state
-  const [newSourceName, setNewSourceName] = useState("");
-  const [newSourceUrl, setNewSourceUrl] = useState("");
-  const [creatingTask, setCreatingTask] = useState<string | null>(null);
-  const [pollingInterval, setPollingInterval] = useState<number | null>(null);
-  
-  // Form validation helpers
-  const validateForm = (): boolean => {
-    const errors: {source?: string; url?: string} = {};
-    
-    // Source validation
-    if (!newSourceName) {
-      errors.source = "请选择调研源";
-    } else if (!sources.some(s => s.name === newSourceName)) {
-      errors.source = "无效的调研源";
-    }
-    
-    // URL validation
-    if (!newSourceUrl.trim()) {
-      errors.url = "请输入目标 URL";
-    } else {
-      try {
-        new URL(newSourceUrl.trim());
-      } catch {
-        errors.url = "URL 格式不正确，请以 https:// 开头";
-      }
-    }
-    
-    setValidationErrors(errors);
-    return Object.keys(errors).length === 0;
-  };
-  const [validationErrors, setValidationErrors] = useState<{source?: string; url?: string}>({});
+  const [selectedSourceId, setSelectedSourceId] = useState("");
+  const [targetUrl, setTargetUrl] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [exportingId, setExportingId] = useState<string | null>(null);
+  const [importingId, setImportingId] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadSources = useCallback(async () => {
     try {
-      // TODO: Call actual /api/research/sources endpoint
-      // For now, use mock data
-      const mockSources: ResearchSource[] = [
-        {
-          name: "起点中文网",
-          base_url: "https://www.qidian.com",
-          chapter_list_selector: "ul.send-list li a",
-          title_selector: "h1.title",
-          content_selector: "div.chapter-content",
-          pagination_selector: "a.next-page",
-          output_format: "txt",
-          encoding: "utf-8",
-          rate_limit: 1.0,
-          description: "Mainstream Chinese web novel platform",
-        },
-      ];
-      setSources(mockSources);
-    } catch (e: any) {
-      setError(e?.message || String(e));
-    } finally {
-      setLoading(false);
+      const data = await api.researchScrape.sources();
+      setSources(data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     }
   }, []);
 
-  const loadTasks = useCallback(async () => {
-    try {
-      // TODO: Call /api/research/tasks endpoint
-      setTasks([]); // Mock empty initially
-    } catch (e: any) {
-      console.error("Failed to load tasks:", e);
-    }
-  }, []);
+  const loadTasks = useCallback(
+    async (silent = false) => {
+      if (!silent) setRefreshing(true);
+      try {
+        const data = await api.researchScrape.tasks({
+          book_id: bookId,
+          limit: 50,
+        });
+        setTasks(data.tasks);
+      } catch (e) {
+        if (!silent) setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (!silent) setRefreshing(false);
+      }
+    },
+    [bookId]
+  );
 
   useEffect(() => {
-    loadSources();
+    let cancelled = false;
+    (async () => {
+      await loadSources();
+      if (!cancelled) setLoading(false);
+    })();
     loadTasks();
+    return () => {
+      cancelled = true;
+    };
   }, [loadSources, loadTasks]);
 
+  const hasActive = tasks.some((t) => ACTIVE_STATUSES.includes(t.status));
+
+  useEffect(() => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+    if (!hasActive) return;
+    pollingRef.current = setInterval(() => {
+      loadTasks(true);
+    }, POLL_INTERVAL_MS);
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+    };
+  }, [hasActive, loadTasks]);
+
+  const selectedSource = sources.find((s) => s.id === selectedSourceId);
+
   const handleCreateTask = async () => {
-    if (!validateForm()) return;
-
-    setCreatingTask(newSourceName);
+    if (!selectedSourceId || !targetUrl.trim()) return;
+    setCreating(true);
     setError(null);
-    
     try {
-      const response = await fetch("/api/research/tasks", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          source_id: newSourceName,
-          target_url: newSourceUrl.trim(),
-        }),
+      const task = await api.researchScrape.createTask({
+        source_id: selectedSourceId,
+        target_url: targetUrl.trim(),
+        book_id: bookId,
       });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || "创建任务失败");
-      }
-
-      const task: ResearchTaskInfo = await response.json();
       setTasks((prev) => [task, ...prev]);
-
-      // Start polling for updates
-      const interval = setInterval(async () => {
-        try {
-          const taskResp = await fetch(`/api/research/tasks/${task.id}`);
-          if (taskResp.ok) {
-            const updatedTask: ResearchTaskInfo = await taskResp.json();
-            setTasks((prev) =>
-              prev.map((t) => (t.id === task.id ? updatedTask : t))
-            );
-
-            // Stop polling when done
-            if (["completed", "failed"].includes(updatedTask.status)) {
-              clearInterval(interval);
-            }
-          }
-        } catch (e) {
-          clearInterval(interval);
-          setError(e instanceof Error ? e.message : "轮询错误");
-        }
-      }, 2000);
-
-      setPollingInterval(interval);
-
-      // Reset form on success
-      setNewSourceUrl("");
-    } catch (e: any) {
-      // Show structured error message
-      const errorMsg = e.message || String(e);
-      if (errorMsg.includes("not found")) {
-        setError("未找到指定的调研源配置");
-      } else if (errorMsg.includes("401") || errorMsg.includes("unauthorized")) {
-        setError("认证失败，请检查 Token");
-      } else if (errorMsg.includes("network") || errorMsg.includes("fetch")) {
-        setError("网络连接超时，请检查服务器是否运行");
-      } else {
-        setError(errorMsg);
-      }
-      console.error("Task creation error:", e);
+      setTargetUrl("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setCreatingTask(null);
+      setCreating(false);
+    }
+  };
+
+  const handleCancel = async (taskId: string) => {
+    setCancellingId(taskId);
+    setError(null);
+    try {
+      const updated = await api.researchScrape.cancelTask(taskId);
+      setTasks((prev) => prev.map((t) => (t.id === taskId ? updated : t)));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCancellingId(null);
+    }
+  };
+
+  const handleExport = async (taskId: string) => {
+    setExportingId(taskId);
+    setError(null);
+    setNotice(null);
+    try {
+      const exp = await api.researchScrape.exportTask(taskId);
+      await api.researchScrape.exportDownload(exp.id, `research-${taskId.slice(0, 8)}`);
+      setNotice(`已导出 ${exp.document_count} 章为 TXT（${exp.byte_size} 字节）`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setExportingId(null);
+    }
+  };
+
+  const handleImportReference = async (taskId: string) => {
+    if (!bookId) return;
+    setImportingId(taskId);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await api.researchScrape.importReference(taskId, {
+        book_id: bookId,
+        mode: "all",
+      });
+      setNotice(
+        `已导入参考资料：新建 ${result.created} 个样本` +
+          (result.deduped > 0 ? `，去重 ${result.deduped} 个` : "")
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setImportingId(null);
     }
   };
 
@@ -179,39 +198,76 @@ export function ResearchPage({ bookId }: { bookId?: string }) {
         return <CheckCircle size={14} className="text-success" />;
       case "failed":
         return <XCircle size={14} className="text-danger" />;
+      case "cancelled":
+        return <Ban size={14} className="text-text-disabled" />;
       case "running":
+      case "cancel_requested":
         return <Loader2 size={14} className="animate-spin text-brand-accent" />;
       default:
         return <Globe size={14} className="text-text-disabled" />;
     }
   };
 
+  const urlInvalid =
+    targetUrl.trim().length > 0 && !/^https?:\/\/\S+\.\S+/.test(targetUrl.trim());
+
   return (
     <div className="h-full overflow-auto p-4 md:p-6 space-y-5">
-      <div>
-        <h1 className="text-base text-text-primary" style={{ fontWeight: 510 }}>
-          外部调研
-        </h1>
-        <p className="text-xs text-text-tertiary mt-0.5">
-          从外部网站爬取结构化内容，导入参考资料库
-        </p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-base text-text-primary" style={{ fontWeight: 510 }}>
+            外部调研
+          </h1>
+          <p className="text-xs text-text-tertiary mt-0.5">
+            从外部网站爬取结构化内容，导入参考资料库
+          </p>
+        </div>
+        <button
+          onClick={() => loadTasks()}
+          disabled={refreshing}
+          className="btn-ghost px-2.5 py-1.5 flex items-center gap-1.5 text-xs disabled:opacity-50"
+          title="刷新任务列表"
+        >
+          <RefreshCw size={12} className={refreshing ? "animate-spin" : ""} />
+          刷新
+        </button>
       </div>
 
       {/* Create new task form */}
-      <div className="panel-elevated rounded-card p-5 space-y-4 animate-fade-in" style={{ animationDuration: "200ms" }}>
+      <div
+        className="panel-elevated rounded-card p-5 space-y-4 animate-fade-in"
+        style={{ animationDuration: "200ms" }}
+      >
         <h3 className="text-sm text-text-primary font-medium flex items-center gap-2">
           <Play size={16} className="text-brand-accent" />
           新建调研任务
         </h3>
-        
+
         <div className="space-y-4">
-          <SourceSelector
-            value={newSourceName}
-            onChange={setNewSourceName}
-            disabled={!!creatingTask}
-            sources={sources}
-          />
-          
+          {loading ? (
+            <div className="flex items-center justify-center py-6 text-text-tertiary text-xs gap-2">
+              <Loader2 size={16} className="animate-spin" /> 加载调研源…
+            </div>
+          ) : sources.length === 0 ? (
+            <div className="px-4 py-6 text-center text-xs text-text-tertiary">
+              暂无可用调研源，请检查后端书源配置
+            </div>
+          ) : (
+            <SourceSelector
+              value={selectedSourceId}
+              onChange={setSelectedSourceId}
+              disabled={!!creating}
+              sources={sources}
+            />
+          )}
+
+          {selectedSource?.verification_status === "experimental" && (
+            <p className="text-2xs text-warning flex items-center gap-1">
+              <AlertTriangle size={10} />
+              该书源选择器处于实验状态，抓取可能失败
+            </p>
+          )}
+
           <div>
             <label className="block text-xs font-medium text-text-secondary mb-1.5">
               目标 URL
@@ -219,23 +275,28 @@ export function ResearchPage({ bookId }: { bookId?: string }) {
             <input
               type="url"
               placeholder="https://example.com/novel/chapters"
-              value={newSourceUrl}
-              onChange={(e) => setNewSourceUrl(e.target.value)}
-              disabled={!!creatingTask}
+              value={targetUrl}
+              onChange={(e) => setTargetUrl(e.target.value)}
+              disabled={!!creating}
               className="w-full input text-xs py-2.5 px-3 focus:ring-2 focus:ring-brand-muted focus:border-brand-accent transition-all duration-150"
             />
+            {urlInvalid && (
+              <p className="text-2xs text-danger mt-1.5">
+                URL 格式不正确，请以 http(s):// 开头
+              </p>
+            )}
             <p className="text-2xs text-text-disabled mt-1.5 flex items-center gap-1">
               <Globe size={10} />
               支持小说章节列表页或单章详情页
             </p>
           </div>
-          
+
           <button
             onClick={handleCreateTask}
-            disabled={!newSourceName || !newSourceUrl || !!creatingTask}
+            disabled={!selectedSourceId || !targetUrl.trim() || urlInvalid || !!creating}
             className="btn-primary w-full py-2.5 px-3 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl transition-all duration-200 transform hover:-translate-y-0.5"
           >
-            {creatingTask ? (
+            {creating ? (
               <>
                 <Loader2 size={14} className="animate-spin" />
                 创建中...
@@ -252,16 +313,39 @@ export function ResearchPage({ bookId }: { bookId?: string }) {
 
       {/* Task list header */}
       <h2 className="text-sm text-text-secondary font-medium mb-3 flex items-center gap-2">
-        <Loader2 size={14} className="animate-spin" style={{ animationDuration: "3s" }} />
-        正在进行的任务
+        {hasActive ? (
+          <Loader2 size={14} className="animate-spin" style={{ animationDuration: "3s" }} />
+        ) : (
+          <CheckCircle size={14} className="text-text-disabled" />
+        )}
+        调研任务
+        <span className="text-2xs text-text-disabled font-normal">
+          （{tasks.length}）
+        </span>
       </h2>
-      
+
+      {/* Notice notification */}
+      {notice && (
+        <div className="flex items-start gap-2 px-4 py-3 bg-emerald-400/10 border border-emerald-400/20 rounded-md animate-fade-in">
+          <CheckCircle size={16} className="text-success shrink-0 mt-0.5" />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs text-success font-medium break-all">{notice}</p>
+            <button
+              onClick={() => setNotice(null)}
+              className="mt-1 text-xs text-text-secondary underline hover:text-text-primary"
+            >
+              关闭提示
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Error notification */}
       {error && (
         <div className="flex items-start gap-2 px-4 py-3 bg-red-400/10 border border-red-400/20 rounded-md animate-fade-in">
           <AlertTriangle size={16} className="text-danger shrink-0 mt-0.5" />
           <div className="min-w-0 flex-1">
-            <p className="text-xs text-danger font-medium">{error}</p>
+            <p className="text-xs text-danger font-medium break-all">{error}</p>
             <button
               onClick={() => setError(null)}
               className="mt-1 text-xs text-text-secondary underline hover:text-text-primary"
@@ -271,7 +355,7 @@ export function ResearchPage({ bookId }: { bookId?: string }) {
           </div>
         </div>
       )}
-      
+
       {/* Task list section */}
       <div className="space-y-3">
         {loading ? (
@@ -284,53 +368,128 @@ export function ResearchPage({ bookId }: { bookId?: string }) {
           </div>
         ) : (
           <div className="space-y-2">
-            {tasks.map((task, index) => (
-              <div
-                key={task.id}
-                className="panel-elevated rounded-card p-4 transition-all duration-200 hover:shadow-lg animate-modal-in"
-                style={{ animationDelay: `${index * 50}ms` }}
-              >
-                <div className="flex items-start gap-3">
-                  <div className="mt-0.5">{getStatusIcon(task.status)}</div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-xs text-text-primary font-medium truncate">
-                        {task.source_id}
-                      </span>
-                      <span className="text-2xs text-text-disabled font-mono">{task.id}</span>
-                    </div>
-                    
-                    <div className="text-xs text-text-tertiary truncate mb-2">
-                      {task.target_url}
-                    </div>
-                    
-                    {/* Progress bar */}
-                    <div className="flex items-center gap-3 mb-2">
-                      <div className="flex-1 h-2 bg-bg-surface rounded-full overflow-hidden">
-                        <div
-                          className={`h-full ${
-                            task.status === "completed"
-                              ? "bg-success"
-                              : task.status === "failed"
-                              ? "bg-danger"
-                              : "bg-brand-accent animate-pulse"
-                          }`}
-                          style={{ width: `${task.progress}%` }}
-                        />
+            {tasks.map((task, index) => {
+              const active = ACTIVE_STATUSES.includes(task.status);
+              return (
+                <div
+                  key={task.id}
+                  className="panel-elevated rounded-card p-4 transition-all duration-200 hover:shadow-lg animate-modal-in"
+                  style={{ animationDelay: `${index * 50}ms` }}
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5">{getStatusIcon(task.status)}</div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <span className="text-xs text-text-primary font-medium truncate">
+                          {task.source_name || task.source_code || task.source_id.slice(0, 8)}
+                        </span>
+                        <span className="text-2xs px-1.5 py-0.5 rounded bg-bg-surface text-text-secondary border border-border">
+                          {statusLabel(task.status)}
+                        </span>
+                        <span className="text-2xs text-text-disabled font-mono">
+                          {task.id.slice(0, 8)}
+                        </span>
                       </div>
-                      <span className="text-2xs text-text-disabled whitespace-nowrap">
-                        {task.chapters_scraped}章 · {task.progress}%
-                      </span>
-                    </div>
 
-                    {/* Error message */}
-                    {task.status === "failed" && task.error_message && (
-                      <p className="text-xs text-danger mt-2">{task.error_message}</p>
-                    )}
+                      <div className="text-xs text-text-tertiary truncate mb-2">
+                        {task.target_url}
+                      </div>
+
+                      {/* Progress bar */}
+                      <div className="flex items-center gap-3 mb-2">
+                        <div className="flex-1 h-2 bg-bg-surface rounded-full overflow-hidden">
+                          <div
+                            className={
+                              task.status === "completed"
+                                ? "h-full bg-success"
+                                : task.status === "failed"
+                                  ? "h-full bg-danger"
+                                  : task.status === "cancelled"
+                                    ? "h-full bg-text-disabled"
+                                    : "h-full bg-brand-accent animate-pulse"
+                            }
+                            style={{ width: `${Math.min(100, Math.max(0, task.progress))}%` }}
+                          />
+                        </div>
+                        <span className="text-2xs text-text-disabled whitespace-nowrap">
+                          {task.completed_count}章 · {task.progress}%
+                        </span>
+                      </div>
+
+                      {/* Current url while running */}
+                      {task.status === "running" && task.current_url && (
+                        <p className="text-2xs text-text-disabled truncate mb-1 flex items-center gap-1">
+                          <Globe size={10} />
+                          {task.current_url}
+                        </p>
+                      )}
+
+                      {/* Error message */}
+                      {errorMessage(task) && (
+                        <p className="text-xs text-danger mt-2 break-all">
+                          {errorMessage(task)}
+                        </p>
+                      )}
+
+                      {/* Actions */}
+                      {active ? (
+                        <button
+                          onClick={() => handleCancel(task.id)}
+                          disabled={cancellingId === task.id || task.status === "cancel_requested"}
+                          className="mt-2 text-2xs text-text-secondary underline hover:text-danger disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                        >
+                          {cancellingId === task.id ? (
+                            <>
+                              <Loader2 size={10} className="animate-spin" /> 处理中…
+                            </>
+                          ) : task.status === "cancel_requested" ? (
+                            <>取消中…</>
+                          ) : (
+                            <>
+                              <Ban size={10} /> 取消任务
+                            </>
+                          )}
+                        </button>
+                      ) : task.status === "completed" ? (
+                        <div className="mt-2 flex items-center gap-3">
+                          <button
+                            onClick={() => handleExport(task.id)}
+                            disabled={exportingId === task.id}
+                            className="text-2xs text-text-secondary underline hover:text-brand-accent disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                          >
+                            {exportingId === task.id ? (
+                              <>
+                                <Loader2 size={10} className="animate-spin" /> 导出中…
+                              </>
+                            ) : (
+                              <>
+                                <Download size={10} /> 导出 TXT
+                              </>
+                            )}
+                          </button>
+                          <button
+                            onClick={() => handleImportReference(task.id)}
+                            disabled={importingId === task.id || !bookId}
+                            title={bookId ? "导入当前作品的参考资料库" : "请先在上方选择作品"}
+                            className="text-2xs text-text-secondary underline hover:text-brand-accent disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                          >
+                            {importingId === task.id ? (
+                              <>
+                                <Loader2 size={10} className="animate-spin" /> 导入中…
+                              </>
+                            ) : (
+                              <>
+                                <BookPlus size={10} /> 导入参考资料
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

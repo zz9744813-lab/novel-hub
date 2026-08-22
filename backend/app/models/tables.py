@@ -2,7 +2,8 @@
 import uuid
 from datetime import datetime
 from sqlalchemy import (
-    Integer, String, Text, Boolean, DateTime, Float, ForeignKey, Index, UniqueConstraint, func
+    Integer, String, Text, Boolean, DateTime, Float, ForeignKey, Index,
+    UniqueConstraint, BigInteger, func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
@@ -1157,4 +1158,71 @@ class StoryEventEdge(Base, TimestampMixin):
         Index("idx_story_event_edges_source", "book_id", "source_event_id"),
         Index("idx_story_event_edges_target", "book_id", "target_event_id"),
     )
+
+
+# ---- v9.1 Research production tables (spec §17) ----
+class ResearchSource(Base, TimestampMixin):
+    """Registered scraping source with selector rules (spec §17.1)."""
+    __tablename__ = "research_sources"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    code: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    base_url: Mapped[str] = mapped_column(Text, nullable=False)
+    chapter_list_selector: Mapped[str | None] = mapped_column(Text, nullable=True)
+    title_selector: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_selector: Mapped[str] = mapped_column(Text, nullable=False)
+    pagination_selector: Mapped[str | None] = mapped_column(Text, nullable=True)
+    encoding: Mapped[str] = mapped_column(String(32), nullable=False, default="utf-8", server_default="utf-8")
+    rate_limit: Mapped[float] = mapped_column(Float, nullable=False, default=0.5, server_default="0.5")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    verification_status: Mapped[str] = mapped_column(String(32), nullable=False, default="experimental", server_default="experimental")
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    config_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+
+
+class ResearchTask(Base, TimestampMixin):
+    """One scraping task executed by the ARQ worker (spec §17.2)."""
+    __tablename__ = "research_tasks"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=True, index=True)
+    source_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("research_sources.id"), nullable=False, index=True)
+    target_url: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
+    progress: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    discovered_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    completed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    current_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_detail: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ResearchDocument(Base, TimestampMixin):
+    """Full-text scraped document — content is ALWAYS persisted (spec §17.3, §23)."""
+    __tablename__ = "research_documents"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("research_tasks.id"), nullable=False, index=True)
+    book_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=True, index=True)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    source_url: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    char_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    __table_args__ = (
+        UniqueConstraint("task_id", "source_url", name="uq_research_documents_task_url"),
+    )
+
+
+class ResearchExport(Base, TimestampMixin):
+    """Materialized export artifact (real files, spec §17.4)."""
+    __tablename__ = "research_exports"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("research_tasks.id"), nullable=False, index=True)
+    format: Mapped[str] = mapped_column(String(16), nullable=False)
+    file_path: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    byte_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
 

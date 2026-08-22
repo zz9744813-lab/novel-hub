@@ -25,9 +25,14 @@ COGNITIVE_SECTIONS = (
     "relationships",
     "affect",
     "commitments",
+    "inventory",
+    "abilities",
     "misunderstandings",
     "open_questions",
 )
+
+# Legacy synonyms unified into `affect` (spec §11)
+_AFFECT_ALIASES = ("emotion", "emotion_state", "mood")
 
 _KNOWLEDGE_SOURCES = (
     "saw",
@@ -47,15 +52,28 @@ def is_cognitive_state(state: dict[str, Any] | None) -> bool:
 
 
 def normalize_state(state: dict[str, Any] | None) -> dict[str, Any]:
-    """Return a v9-shaped state, wrapping legacy flat dicts under `flat`."""
+    """Return a v9-shaped state, wrapping legacy flat dicts under `flat`.
+
+    Affect synonyms (emotion / emotion_state / mood) are unified into
+    `affect` (spec §11).
+    """
     if not isinstance(state, dict):
         return {}
     if is_cognitive_state(state):
-        return copy.deepcopy(state)
-    # Legacy single-slot or flat field dict — preserve under `flat`
-    if "field" in state and "value" in state and len(state) <= 3:
+        out = copy.deepcopy(state)
+    elif "field" in state and "value" in state and len(state) <= 3:
+        # Legacy single-slot dict — preserve under `flat`
         return {"flat": {state["field"]: state["value"]}}
-    return {"flat": copy.deepcopy(state)}
+    else:
+        out = {"flat": copy.deepcopy(state)}
+    for alias in _AFFECT_ALIASES:
+        if alias in out:
+            payload = out.pop(alias)
+            if isinstance(payload, dict) and isinstance(out.get("affect"), dict):
+                out["affect"] = deep_merge_state(out["affect"], payload)
+            else:
+                out["affect"] = payload
+    return out
 
 
 def get_path(state: dict[str, Any], path: str) -> tuple[bool, Any]:
@@ -88,6 +106,23 @@ def set_path(state: dict[str, Any], path: str, value: Any) -> bool:
         node = node[part]
     node[parts[-1]] = value
     return True
+
+
+def delete_path(state: dict[str, Any], path: str) -> bool:
+    """Delete a dotted path leaf. Returns True when something was removed."""
+    if not path:
+        return False
+    parts = path.split(".")
+    node: Any = state
+    for part in parts[:-1]:
+        if isinstance(node, dict) and part in node:
+            node = node[part]
+        else:
+            return False
+    if isinstance(node, dict) and parts[-1] in node:
+        del node[parts[-1]]
+        return True
+    return False
 
 
 def compare(op: str, left: Any, right: Any) -> bool:

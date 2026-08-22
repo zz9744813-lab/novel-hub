@@ -22,6 +22,8 @@ from app.models.tables import (
     PromptTemplateVersion, PromptTestRun,
     # v9.0 cognitive-causal
     CharacterCoreAnchor, SceneReasoningContract, StoryEventEdge,
+    # v9.1 research production
+    ResearchSource, ResearchTask, ResearchDocument, ResearchExport,
 )
 
 __all__ = [
@@ -44,4 +46,5 @@ __all__ = [
     "LocationCard", "CharacterRelationship", "OutlineVolume", "WritingConstraint",
     "PromptTemplateVersion", "PromptTestRun",
     "CharacterCoreAnchor", "SceneReasoningContract", "StoryEventEdge",
+    "ResearchSource", "ResearchTask", "ResearchDocument", "ResearchExport",
 ]

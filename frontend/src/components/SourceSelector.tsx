@@ -1,26 +1,38 @@
 import { useState, useMemo } from "react";
-import { ChevronDown, Search, BookOpen } from "lucide-react";
+import { ChevronDown, Search, BookOpen, ShieldCheck, FlaskConical, Ban } from "lucide-react";
 import clsx from "clsx";
-
-interface ResearchSource {
-  name: string;
-  base_url: string;
-  chapter_list_selector: string;
-  title_selector: string;
-  content_selector: string;
-  pagination_selector?: string;
-  output_format: "epub" | "pdf" | "txt";
-  encoding: string;
-  rate_limit: number;
-  description?: string;
-  tags?: string[];
-}
+import type { ResearchScrapeSource } from "../api";
 
 interface SourceSelectorProps {
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
-  sources: ResearchSource[];
+  sources: ResearchScrapeSource[];
+}
+
+function VerificationBadge({ status }: { status: string }) {
+  if (status === "verified") {
+    return (
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs bg-success/15 text-success border border-success/30">
+        <ShieldCheck size={10} />
+        已验证
+      </span>
+    );
+  }
+  if (status === "disabled") {
+    return (
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs bg-danger/15 text-danger border border-danger/30">
+        <Ban size={10} />
+        已禁用
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs bg-warning/15 text-warning border border-warning/30">
+      <FlaskConical size={10} />
+      实验性
+    </span>
+  );
 }
 
 export function SourceSelector({
@@ -34,24 +46,29 @@ export function SourceSelector({
 
   const filteredSources = useMemo(() => {
     if (!searchQuery.trim()) return sources;
-    
+
     const query = searchQuery.toLowerCase();
     return sources.filter(
       (s) =>
         s.name.toLowerCase().includes(query) ||
-        s.description?.toLowerCase().includes(query) ||
-        s.tags?.some((tag) => tag.toLowerCase().includes(query))
+        s.code.toLowerCase().includes(query) ||
+        (s.config?.description &&
+          String(s.config.description).toLowerCase().includes(query)) ||
+        (Array.isArray(s.config?.tags) &&
+          (s.config.tags as unknown[]).some((tag) =>
+            String(tag).toLowerCase().includes(query)
+          ))
     );
   }, [sources, searchQuery]);
 
-  const selectedSource = sources.find((s) => s.name === value);
+  const selectedSource = sources.find((s) => s.id === value);
 
   return (
     <div className="relative">
       <label className="block text-xs font-medium text-text-secondary mb-1.5">
         调研源
       </label>
-      
+
       <div className="relative">
         <button
           type="button"
@@ -72,6 +89,7 @@ export function SourceSelector({
                 <span className="text-body text-text-primary truncate">
                   {selectedSource.name}
                 </span>
+                <VerificationBadge status={selectedSource.verification_status} />
               </>
             ) : (
               <span className="text-body text-text-disabled">选择调研源...</span>
@@ -92,7 +110,7 @@ export function SourceSelector({
               className="fixed inset-0 z-10"
               onClick={() => setIsOpen(false)}
             />
-            
+
             <div className="absolute z-20 w-full mt-1 bg-bg-panel border border-border rounded-md shadow-lg max-h-64 overflow-hidden animate-modal-in">
               {/* Search input */}
               <div className="px-3 py-2 border-b border-border sticky top-0 bg-bg-panel">
@@ -119,16 +137,16 @@ export function SourceSelector({
                 ) : (
                   filteredSources.map((source) => (
                     <button
-                      key={source.name}
+                      key={source.id}
                       type="button"
                       onClick={() => {
-                        onChange(source.name);
+                        onChange(source.id);
                         setIsOpen(false);
                         setSearchQuery("");
                       }}
                       className={clsx(
                         "w-full text-left px-3 py-2.5 rounded-md transition-colors",
-                        value === source.name
+                        value === source.id
                           ? "bg-brand-muted text-brand-accent"
                           : "hover:bg-bg-hover text-text-secondary hover:text-text-primary"
                       )}
@@ -138,34 +156,38 @@ export function SourceSelector({
                           size={14}
                           className={clsx(
                             "shrink-0 mt-0.5",
-                            value === source.name
+                            value === source.id
                               ? "text-brand-accent"
                               : "text-text-disabled"
                           )}
                         />
                         <div className="min-w-0 flex-1">
-                          <div className="text-sm font-medium text-text-primary">
-                            {source.name}
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-sm font-medium text-text-primary">
+                              {source.name}
+                            </span>
+                            <VerificationBadge status={source.verification_status} />
                           </div>
-                          {source.description && (
+                          {source.config?.description != null && (
                             <div className="text-2xs text-text-tertiary mt-0.5 line-clamp-2">
-                              {source.description}
+                              {String(source.config.description)}
                             </div>
                           )}
                           <div className="flex flex-wrap gap-1 mt-1.5">
-                            {source.output_format && (
-                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-2xs font-mono bg-bg-surface text-text-disabled border border-border">
-                                {source.output_format.toUpperCase()}
-                              </span>
-                            )}
-                            {source.tags?.slice(0, 2).map((tag) => (
-                              <span
-                                key={tag}
-                                className="inline-flex items-center px-1.5 py-0.5 rounded text-2xs bg-brand-muted/20 text-brand-accent"
-                              >
-                                {tag}
-                              </span>
-                            ))}
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-2xs font-mono bg-bg-surface text-text-disabled border border-border">
+                              {source.encoding.toUpperCase()}
+                            </span>
+                            {Array.isArray(source.config?.tags) &&
+                              (source.config.tags as unknown[])
+                                .slice(0, 2)
+                                .map((tag) => (
+                                  <span
+                                    key={String(tag)}
+                                    className="inline-flex items-center px-1.5 py-0.5 rounded text-2xs bg-brand-muted/20 text-brand-accent"
+                                  >
+                                    {String(tag)}
+                                  </span>
+                                ))}
                           </div>
                         </div>
                       </div>

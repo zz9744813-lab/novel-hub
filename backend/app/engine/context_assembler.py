@@ -162,11 +162,17 @@ async def assemble_context(
     current_chapter: int = 1,
     *,
     scene_contract: dict | SceneContract | None = None,
+    relevant_state: dict | None = None,
     agent_role: str = "draft_writer",
     context_window: int = 128000,
     max_output_tokens: int = 8192,
 ) -> dict:
-    """Build Context Package + itemized Manifest. No hard trim / no block."""
+    """Build Context Package + itemized Manifest. No hard trim / no block.
+
+    v9.1: when ``relevant_state`` (from select_relevant_scene_state) is given,
+    L4 cognitive slices are scoped to that scene's characters/paths only —
+    no scene receives the whole chapter's state (spec §5/§6).
+    """
     items: list[dict] = []
 
     contract: SceneContract | None = None
@@ -265,9 +271,17 @@ async def assemble_context(
             )
         )
 
-    # L4
+    # L4 — scoped to the scene's relevant characters when relevant_state given
     l4_states: dict[str, Any] = {}
-    for char_id in outline_node.involved_character_ids or []:
+    relevant_char_ids: list[str] | None = None
+    if relevant_state and isinstance(relevant_state.get("character_ids"), list):
+        relevant_char_ids = [
+            str(c) for c in relevant_state["character_ids"] if c
+        ]
+    l4_char_filter = relevant_char_ids or list(
+        outline_node.involved_character_ids or []
+    )
+    for char_id in l4_char_filter:
         cid = uuid.UUID(char_id) if isinstance(char_id, str) else char_id
         snap = await db.execute(
             select(MemoryL4StateSnapshot)
@@ -301,6 +315,7 @@ async def assemble_context(
             )
 
     # ── v9: Core Anchors (spec §5) — locked first, then priority ────
+    # v9.1: scoped to the scene's characters when relevant_state given
     try:
         anchor_rows = (
             await db.execute(
@@ -311,6 +326,10 @@ async def assemble_context(
             )
         ).scalars().all()
         anchor_rows.sort(key=lambda r: (not r.is_locked, -(r.priority or 0.5)))
+        if relevant_char_ids:
+            anchor_rows = [
+                r for r in anchor_rows if str(r.character_id) in set(relevant_char_ids)
+            ]
         core_anchor_payload = [
             {
                 "character_id": str(r.character_id),
@@ -339,7 +358,32 @@ async def assemble_context(
         logger.debug("core anchors skip: %s", e)
 
     # ── v9: cognitive slices from L4 (beliefs / goals / affect) ─────
-    if l4_states:
+    # v9.1: with relevant_state, use the scene-scoped slices directly
+    if relevant_state and relevant_state.get("characters"):
+        items.append(
+            _item(
+                kind="relevant_l4_cognitive_state",
+                content=relevant_state["characters"],
+                priority=968,
+                required=True,
+                reason="v9_scene_relevant_state",
+                canon_level="canon",
+                agent_role=agent_role,
+            )
+        )
+        if relevant_state.get("causal_frontier"):
+            items.append(
+                _item(
+                    kind="causal_frontier",
+                    content=relevant_state["causal_frontier"],
+                    priority=690,
+                    required=False,
+                    reason="v9_scene_causal_frontier",
+                    canon_level="canon",
+                    agent_role=agent_role,
+                )
+            )
+    elif l4_states:
         belief_slice: dict[str, Any] = {}
         goal_slice: dict[str, Any] = {}
         affect_slice: dict[str, Any] = {}
@@ -899,6 +943,7 @@ async def assemble_context(
             if contract is not None
             else None
         ),
+        "relevant_state": relevant_state,
         "core_anchors": core_anchor_payload,
         "voice_cards": [
             {

@@ -18,9 +18,10 @@ from app.engine.retrieval import (
     dependency_resolver, state_resolver, plot_thread_resolver,
     event_ledger_search, full_text_search, candidate_merge_and_score,
     evidence_ranker_agent, query_planner_agent, deterministic_query_template,
-    build_retrieval_candidates,
+    build_retrieval_candidates, causal_frontier_step,
 )
 from app.engine.context_assembler import assemble_context
+from app.engine.relevant_state import select_relevant_scene_state
 from app.agents.chapter_planner import plan_chapter
 from app.agents.draft_writer import write_scene
 from app.agents.review_agent import review_chapter
@@ -185,6 +186,7 @@ async def execute_pipeline(
             "involved_character_ids": outline_node.involved_character_ids,
             "plot_thread_ids": outline_node.plot_thread_ids,
             "depends_on": outline_node.depends_on,
+            "expected_state_changes": getattr(outline_node, "expected_state_changes", None) or [],
             "title": outline_node.title,
         }
 
@@ -314,6 +316,14 @@ async def execute_pipeline(
             (cr_from, cr_to)
         )
 
+        # v9.1 §15: true causal frontier via StoryEventEdge BFS
+        causal_nodes = await causal_frontier_step(db, book_id, query_plan, char_ids)
+        if causal_nodes:
+            existing = {c.get("event_id") for c in event_candidates}
+            for node in causal_nodes:
+                if node.get("event_id") not in existing:
+                    event_candidates.append(node)
+
         search_terms = query_plan.get("exact_terms", []) or []
         if isinstance(search_terms, str):
             search_terms = [search_terms]
@@ -348,18 +358,14 @@ async def execute_pipeline(
         await db.commit()
 
     # === Phase 4: ContextAssembler ===
-    async with async_session_factory() as db:
-        outline_node = await _get_outline_node(uuid.UUID(outline_data["id"]))
-        if not outline_node:
-            logger.error(f"Outline node disappeared for chapter {chapter_no}")
-            await _set_chapter_status(chapter_id, ChapterState.FAILED.value, "outline disappeared")
-            return _result(PipelineOutcome.PERMANENT_FAILURE, error_code="outline_disappeared")
-
-        context_pkg = await assemble_context(
-            db, book_id, outline_node, {}, forced_deps,
-            retrieved_evidence, "", chapter_no,
-            agent_role="draft_writer",
-        )
+    # v9.1: context is now assembled per scene inside the DraftWriter loop
+    # (scoped via select_relevant_scene_state); here we only fetch + guard the
+    # outline node each scene assembly needs.
+    outline_node = await _get_outline_node(uuid.UUID(outline_data["id"]))
+    if not outline_node:
+        logger.error(f"Outline node disappeared for chapter {chapter_no}")
+        await _set_chapter_status(chapter_id, ChapterState.FAILED.value, "outline disappeared")
+        return _result(PipelineOutcome.PERMANENT_FAILURE, error_code="outline_disappeared")
 
     # === Phase 5: ChapterPlanner (checkpointed) ===
     await _set_chapter_status(chapter_id, ChapterState.PLANNING.value, "enter planning", chapter_run_id)
@@ -427,6 +433,7 @@ async def execute_pipeline(
     involved_ids = list(outline_data.get("involved_character_ids") or [])
     try:
         from app.engine.causal_compile import load_states_and_anchors
+        from app.engine.causal_errors import CausalHardBlockError
 
         _states_for_compile, _anchors_by_char = await load_states_and_anchors(
             book_id, involved_ids, chapter_no
@@ -445,24 +452,62 @@ async def execute_pipeline(
             source_run_id=chapter_run_id,
         )
         scene_contracts = compile_result.get("contracts") or []
-        if compile_result.get("blockers"):
-            logger.warning(
-                "v9 contract blockers for chapter %s: %s",
-                chapter_no,
-                [b.get("code") for b in compile_result["blockers"]][:8],
-            )
         logger.info(
             "v9 compiled %s scene contracts for chapter %s (blockers=%s)",
             len(scene_contracts), chapter_no, len(compile_result.get("blockers") or []),
         )
+    except CausalHardBlockError as e:
+        # v9.1 §3.3: hard constraint violations must never silently degrade
+        logger.error("v9 contract hard block for chapter %s: %s", chapter_no, e)
+        await _set_chapter_status(
+            chapter_id, ChapterState.NEEDS_HUMAN.value,
+            f"causal_compile_blocked:{e.code}", chapter_run_id,
+        )
+        return _result(
+            PipelineOutcome.NEEDS_HUMAN,
+            error_code="causal_compile_blocked",
+            detail={"cause": e.code, "message": str(e)},
+        )
     except Exception as e:
-        # Degradation: drafting proceeds without contracts; gate stays lenient.
+        # deterministic engine runtime error — retryable, not silent degradation
         logger.warning("v9 contract compile failed for chapter %s: %s", chapter_no, e)
-        scene_contracts = []
-        _anchors_by_char = {}
+        await _set_chapter_status(
+            chapter_id, ChapterState.FAILED.value,
+            "causal_compile_error", chapter_run_id,
+        )
+        return _result(
+            PipelineOutcome.RETRYABLE_FAILURE,
+            error_code="causal_compile_error",
+            detail={"error": str(e)},
+        )
     contract_by_scene = {
         int(c.get("scene_no") or 0): c for c in scene_contracts if isinstance(c, dict)
     }
+    # v9.1: per-scene working state snapshots (state BEFORE each scene runs)
+    working_states_by_scene: dict[int, dict] = compile_result.get("working_states_by_scene") or {}
+
+    # === Phase 5.6: v9.1 Pre-Draft Contract Gate (spec §7.1) ===
+    # Fail-closed: no scene may enter drafting while its contract has blockers.
+    from app.engine.contract_gate import run_contract_gate
+
+    cg = run_contract_gate(scene_contracts, compile_result.get("reports"))
+    if not cg.ok:
+        logger.error(
+            "v9.1 contract gate blocked chapter %s: %s blocker(s)", chapter_no, len(cg.blockers)
+        )
+        await _set_chapter_status(
+            chapter_id, ChapterState.NEEDS_HUMAN.value,
+            "contract_gate_blocked", chapter_run_id,
+        )
+        return _result(
+            PipelineOutcome.NEEDS_HUMAN,
+            error_code="contract_gate_blocked",
+            detail={"blockers": cg.blockers[:20], "warnings": cg.warnings[:20]},
+        )
+    logger.info(
+        "v9.1 contract gate passed chapter %s (%s scenes, %s warnings)",
+        chapter_no, cg.contracts_checked, len(cg.warnings),
+    )
 
     # === Phase 6: DraftWriter (per scene, checkpointed) ===
     await _set_chapter_status(chapter_id, ChapterState.DRAFTING.value, "enter drafting", chapter_run_id)
@@ -475,12 +520,39 @@ async def execute_pipeline(
         target_wc = scene_def.get("target_word_count", 2000)
         step_key = f"draft_scene:{scene_no}"
 
-        async def _do_draft(_payload, _sd=scene_def, _twc=target_wc, _pt=previous_tail, _sc=contract_by_scene.get(scene_no)):
+        # v9.1 per-scene context: this scene's contract + working-state snapshot
+        scene_contract = contract_by_scene.get(scene_no)
+        scene_working_state = working_states_by_scene.get(scene_no) or {}
+        relevant_state = select_relevant_scene_state(
+            scene_contract=scene_contract,
+            l4_states=scene_working_state,
+            core_anchors_by_char=_anchors_by_char,
+        )
+
+        async def _do_draft(
+            _payload,
+            _sd=scene_def,
+            _twc=target_wc,
+            _pt=previous_tail,
+            _sc=scene_contract,
+            _rs=relevant_state,
+        ):
+            # v9.1: each scene assembles its own context package scoped to the
+            # characters/state slices it actually touches (spec §5/§6) — no
+            # scene receives the whole chapter's L4 state.
+            async with async_session_factory() as db:
+                scene_context = await assemble_context(
+                    db, book_id, outline_node, _sd, forced_deps,
+                    retrieved_evidence, _pt, chapter_no,
+                    scene_contract=_sc,
+                    relevant_state=_rs,
+                    agent_role="draft_writer",
+                )
             content, error = await write_scene(
                 book_id=book_id,
                 chapter_id=chapter_id,
                 scene_plan=_sd,
-                context_package=context_pkg,
+                context_package=scene_context,
                 previous_scene_tail=_pt,
                 target_word_count=_twc,
                 scene_contract=_sc,
@@ -491,7 +563,7 @@ async def execute_pipeline(
                     book_id=book_id,
                     chapter_id=chapter_id,
                     scene_plan=_sd,
-                    context_package=context_pkg,
+                    context_package=scene_context,
                     previous_scene_tail=_pt,
                     target_word_count=_twc,
                     scene_contract=_sc,
@@ -907,7 +979,8 @@ async def execute_pipeline(
             scenes=scene_contents,
             outline_data=outline_data,
             scene_plan=scene_plan if isinstance(scene_plan, dict) else {},
-            scene_contract=contract_by_scene.get(1),
+            scene_contracts=contract_by_scene,
+            pre_states_by_scene=working_states_by_scene,
             pre_state=l4_states or {},
             core_anchors=[
                 {"anchor_code": a.get("anchor_code"), "statement": a.get("statement")}
@@ -1043,6 +1116,72 @@ async def execute_pipeline(
         )
         extract_payload = extract_art.output if isinstance(extract_art.output, dict) else {}
         candidate_events = extract_payload.get("events") or []
+    except _Ctrl as e:
+        await _set_chapter_status(
+            chapter_id,
+            ChapterState.NEEDS_HUMAN.value if e.control == "pause" else ChapterState.FAILED.value,
+            f"control:{e.control}",
+            chapter_run_id,
+        )
+        return _result(
+            PipelineOutcome.PAUSED if e.control == "pause" else PipelineOutcome.PERMANENT_FAILURE,
+            error_code=f"control_{e.control}",
+        )
+    except _Lease:
+        return _result(PipelineOutcome.RETRYABLE_FAILURE, error_code="lease_lost")
+    except _Retry as e:
+        await _set_chapter_status(chapter_id, ChapterState.FAILED.value, e.code, chapter_run_id)
+        return _result(PipelineOutcome.PERMANENT_FAILURE, error_code=e.code, detail=e.detail)
+
+    # === Phase 9c: v9.1 Post-Draft Realization Gate (spec §7.2) ===
+    # Verify the actual extracted events realize the compiled contracts
+    # BEFORE canon commit. Fail-closed: blocker/major → NEEDS_HUMAN.
+    from app.engine.realization_gate import run_realization_gate
+
+    async def _do_realization_gate(_payload):
+        extras = extract_payload.get("extras") or {}
+        rg = run_realization_gate(
+            scene_contracts=scene_contracts,
+            actual_events=candidate_events,
+            reaction_evidence=extras.get("reaction_evidence") or [],
+            attributions=extras.get("attributions") or [],
+        )
+        return rg.as_dict()
+
+    try:
+        rg_art = await _run_step(
+            ctx=ctx,
+            step_name="realization_gate",
+            step_key=f"realization:{_sha(chapter_content)[:16]}",
+            input_payload={
+                "content_hash": _sha(chapter_content),
+                "contract_count": len(scene_contracts),
+                "event_count": len(candidate_events),
+            },
+            execute_fn=_do_realization_gate,
+        )
+        rg = rg_art.output if isinstance(rg_art.output, dict) else {}
+        if not rg.get("ok", False):
+            rg_hard = [
+                f for f in (rg.get("findings") or [])
+                if f.get("severity") in ("blocker", "major")
+            ]
+            logger.error(
+                "realization gate failed chapter %s: %s hard finding(s), summary=%s",
+                chapter_no, len(rg_hard), rg.get("summary"),
+            )
+            await _set_chapter_status(
+                chapter_id, ChapterState.NEEDS_HUMAN.value,
+                "realization_gate_failed", chapter_run_id,
+            )
+            return _result(
+                PipelineOutcome.NEEDS_HUMAN,
+                error_code="realization_gate_failed",
+                detail={
+                    "findings": rg_hard[:20],
+                    "summary": rg.get("summary") or {},
+                },
+            )
     except _Ctrl as e:
         await _set_chapter_status(
             chapter_id,

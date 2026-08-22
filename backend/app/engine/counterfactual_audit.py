@@ -86,7 +86,7 @@ def _collect_contracts(contracts: list[dict]) -> tuple[list[dict], list[dict]]:
     for c in contracts or []:
         if not isinstance(c, dict):
             continue
-        for ev in c.get("events") or []:
+        for ev in c.get("provisional_events") or []:
             if isinstance(ev, dict) and ev.get("event_key"):
                 events.append(ev)
         for e in c.get("causal_edges") or []:
@@ -112,6 +112,8 @@ def _replay(
     removed_key: str | None,
 ) -> dict[str, dict[str, Any]]:
     """Clone + apply hard effects of every event except removed_key."""
+    from app.contracts.narrative import StateDelta
+
     working = {k: normalize_state(v) for k, v in states.items()}
     for ev in events:
         if removed_key and ev.get("event_key") == removed_key:
@@ -124,14 +126,17 @@ def _replay(
                 continue
             head = path.split(".")[0]
             if head in working and "." in path:
-                rel = dict(eff)
-                rel["path"] = path.split(".", 1)[1]
-                working[head] = apply_state_deltas(working[head], [rel])
+                payload = dict(eff)
+                payload["path"] = path.split(".", 1)[1]
+                working[head] = apply_state_deltas(
+                    working[head], [StateDelta.model_validate(payload)]
+                )
             elif head in working:
                 continue
             else:
+                delta = StateDelta.model_validate(eff)
                 for k in list(working.keys()):
-                    working[k] = apply_state_deltas(working[k], [eff])
+                    working[k] = apply_state_deltas(working[k], [delta])
     return working
 
 

@@ -59,6 +59,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"seed_prompt_templates: {e}")
 
+    # v9.1: idempotent research source seeding (spec §18)
+    try:
+        from app.database import async_session_factory
+        from app.research.seeding import seed_research_sources
+
+        async with async_session_factory() as db:
+            report = await seed_research_sources(db)
+            await db.commit()
+            logger.info(f"research sources seeded: {report}")
+    except Exception as e:
+        logger.warning(f"seed_research_sources skipped: {e}")
+
     # Model bindings are an approval-controlled production input. Bootstrap is
     # available only as an explicit non-production opt-in, never during prod boot.
     if (

@@ -140,24 +140,31 @@ class SceneContractCompiler:
         events: list[ProvisionalEvent],
         scene: SceneProposal,
     ) -> list[PerceptionDelta]:
-        """Everyone present perceives public events; private events only reach
-        actor + explicit involves."""
+        """Everyone present perceives public events; private events reach
+        actor + explicit involves. The actor always perceives their own
+        action — otherwise beliefs sourced from one's own deeds would be
+        flagged ILLEGAL_KNOWLEDGE."""
         perceptions: list[PerceptionDelta] = []
         present = set(self._present_ids(scene, events))
         for ev in events:
+            actor = str(ev.actor_id) if ev.actor_id else None
             if ev.is_public:
-                audience = present - ({str(ev.actor_id)} if ev.actor_id else set())
+                audience = present
             else:
-                audience = {str(i) for i in ev.involves if i} - (
-                    {str(ev.actor_id)} if ev.actor_id else set()
-                )
+                audience = {str(i) for i in ev.involves if i}
+                if actor:
+                    audience.add(actor)
             for cid in sorted(audience):
                 perceptions.append(
                     PerceptionDelta(
                         character_id=cid,
                         event_key=ev.event_key,
                         channel="saw",
-                        detail=f"在场感知: {ev.action[:60]}",
+                        detail=(
+                            f"亲身行动: {ev.action[:60]}"
+                            if cid == actor
+                            else f"在场感知: {ev.action[:60]}"
+                        ),
                     )
                 )
         return perceptions
@@ -272,9 +279,11 @@ class SceneContractCompiler:
             state = normalize_state(states_by_char.get(b.character_id) or {})
             found, cur = get_path(state, f"beliefs.{b.belief_key}.confidence")
             if found and b.before is not None:
+                # char-headed path: validate_preconditions strips the head when
+                # simulating that character's slice (same convention as hard effects)
                 preds.append(
                     StatePredicate(
-                        path=f"characters.{b.character_id}.beliefs.{b.belief_key}.confidence",
+                        path=f"{b.character_id}.beliefs.{b.belief_key}.confidence",
                         op=">=",
                         value=min(b.before, 0.99) if b.before > 0 else 0.0,
                     )
@@ -441,7 +450,15 @@ class SceneContractCompiler:
 
 
 def _scope_contract_to_character(contract: SceneContract, cid: str) -> SceneContract:
-    """Filter a contract down to one character's causal slice for simulation."""
+    """Filter a contract down to one character's causal slice for simulation.
+
+    The scoped contract speaks with cid's voice: simulate_scene derives its
+    char_id from pov_character_id, so setting it to cid makes POV-relative
+    path handling (strip own head, skip other characters' predicates) apply
+    to the slice actually being simulated. Keeping the original POV would
+    evaluate the POV's preconditions against every present character's
+    state and false-fail slices that never owned the belief.
+    """
     beliefs = [b for b in contract.belief_deltas if b.character_id == cid]
     belief_sources = {b.belief_key: b.source_event_keys for b in beliefs}
     perceptions = [p for p in contract.perceptions if p.character_id == cid]
@@ -451,7 +468,7 @@ def _scope_contract_to_character(contract: SceneContract, cid: str) -> SceneCont
     return SceneContract(
         scene_no=contract.scene_no,
         dramatic_goal=contract.dramatic_goal,
-        pov_character_id=contract.pov_character_id,
+        pov_character_id=cid,
         location_id=contract.location_id,
         relevant_entity_ids=[cid],
         preconditions=contract.preconditions,

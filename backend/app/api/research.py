@@ -27,6 +27,8 @@ from app.models.tables import (
     ResearchSource,
     ResearchTask,
 )
+from app.research.models import ResearchSourceConfig
+from app.research.probe import probe_source
 
 logger = logging.getLogger("novelforge.research_api")
 
@@ -91,6 +93,10 @@ class CreateTaskRequest(BaseModel):
     source_id: str
     target_url: str
     book_id: str | None = None
+
+
+class ProbeRequest(BaseModel):
+    test_url: str
 
 
 class TaskListResponse(BaseModel):
@@ -224,6 +230,32 @@ async def list_sources(
         stmt = stmt.where(ResearchSource.enabled.is_(True))
     rows = (await db.execute(stmt)).scalars().all()
     return [_source_out(r) for r in rows]
+
+
+@router.post("/sources/{source_id}/probe")
+async def probe_source_url(
+    source_id: str,
+    req: ProbeRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Test a URL against a source's current selector rules (spec §7, §9)."""
+    source = await _load_source(db, source_id)
+    test_url = _validate_target_url(req.test_url)
+
+    config = ResearchSourceConfig(
+        code=source.code,
+        name=source.name,
+        base_url=source.base_url,
+        chapter_list_selector=source.chapter_list_selector,
+        title_selector=source.title_selector,
+        content_selector=source.content_selector,
+        pagination_selector=source.pagination_selector,
+        encoding=source.encoding,
+        rate_limit=source.rate_limit,
+        verification_status=source.verification_status,
+    )
+    result = await probe_source(source=config, test_url=test_url)
+    return result.to_dict()
 
 
 @router.post("/tasks", response_model=ResearchTaskOut, status_code=201)

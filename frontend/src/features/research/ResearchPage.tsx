@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api";
-import type { ResearchScrapeSource, ResearchScrapeTask } from "../../api";
+import type { ResearchProbeResult, ResearchScrapeSource, ResearchScrapeTask } from "../../api";
 import {
   Loader2,
   Globe,
@@ -12,6 +12,7 @@ import {
   RefreshCw,
   Download,
   BookPlus,
+  Zap,
 } from "lucide-react";
 import { SourceSelector } from "../../components/SourceSelector";
 
@@ -61,6 +62,8 @@ export function ResearchPage({ bookId }: { bookId?: string }) {
   const [exportingId, setExportingId] = useState<string | null>(null);
   const [importingId, setImportingId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [probing, setProbing] = useState(false);
+  const [probeResult, setProbeResult] = useState<ResearchProbeResult | null>(null);
 
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -140,6 +143,24 @@ export function ResearchPage({ bookId }: { bookId?: string }) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setCreating(false);
+    }
+  };
+
+  const handleProbe = async () => {
+    if (!selectedSourceId || !targetUrl.trim()) return;
+    setProbing(true);
+    setError(null);
+    setProbeResult(null);
+    try {
+      const result = await api.researchScrape.probe(
+        selectedSourceId,
+        targetUrl.trim()
+      );
+      setProbeResult(result);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setProbing(false);
     }
   };
 
@@ -274,9 +295,12 @@ export function ResearchPage({ bookId }: { bookId?: string }) {
             </label>
             <input
               type="url"
-              placeholder="https://example.com/novel/chapters"
+              placeholder="请粘贴真实作品目录页或章节页 URL"
               value={targetUrl}
-              onChange={(e) => setTargetUrl(e.target.value)}
+              onChange={(e) => {
+                setTargetUrl(e.target.value);
+                setProbeResult(null);
+              }}
               disabled={!!creating}
               className="w-full input text-xs py-2.5 px-3 focus:ring-2 focus:ring-brand-muted focus:border-brand-accent transition-all duration-150"
             />
@@ -285,29 +309,56 @@ export function ResearchPage({ bookId }: { bookId?: string }) {
                 URL 格式不正确，请以 http(s):// 开头
               </p>
             )}
+            {!targetUrl.trim() && (
+              <p className="text-2xs text-warning mt-1.5">
+                请输入真实 URL 后才能开始
+              </p>
+            )}
             <p className="text-2xs text-text-disabled mt-1.5 flex items-center gap-1">
               <Globe size={10} />
               支持小说章节列表页或单章详情页
             </p>
           </div>
 
-          <button
-            onClick={handleCreateTask}
-            disabled={!selectedSourceId || !targetUrl.trim() || urlInvalid || !!creating}
-            className="btn-primary w-full py-2.5 px-3 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl transition-all duration-200 transform hover:-translate-y-0.5"
-          >
-            {creating ? (
-              <>
-                <Loader2 size={14} className="animate-spin" />
-                创建中...
-              </>
-            ) : (
-              <>
-                <Play size={14} />
-                开始调研
-              </>
-            )}
-          </button>
+          {probeResult && <ProbeResultPanel result={probeResult} />}
+
+          <div className="flex gap-2">
+            <button
+              onClick={handleProbe}
+              disabled={!selectedSourceId || !targetUrl.trim() || urlInvalid || probing}
+              className="btn flex-1 py-2.5 px-3 items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="先测试该地址能否解析，再决定是否采集"
+            >
+              {probing ? (
+                <>
+                  <Loader2 size={14} className="animate-spin" />
+                  测试中...
+                </>
+              ) : (
+                <>
+                  <Zap size={14} />
+                  测试该地址
+                </>
+              )}
+            </button>
+            <button
+              onClick={handleCreateTask}
+              disabled={!selectedSourceId || !targetUrl.trim() || urlInvalid || !!creating}
+              className="btn-primary flex-1 py-2.5 px-3 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl transition-all duration-200 transform hover:-translate-y-0.5"
+            >
+              {creating ? (
+                <>
+                  <Loader2 size={14} className="animate-spin" />
+                  创建中...
+                </>
+              ) : (
+                <>
+                  <Play size={14} />
+                  开始采集
+                </>
+              )}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -493,6 +544,77 @@ export function ResearchPage({ bookId }: { bookId?: string }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function ProbeResultPanel({ result }: { result: ResearchProbeResult }) {
+  const passed = result.status === "passed";
+  const blocked = result.status === "blocked";
+  const pageTypeLabel =
+    result.page_type === "book"
+      ? "章节目录"
+      : result.page_type === "chapter"
+        ? "正文页"
+        : "未识别";
+
+  return (
+    <div
+      className={
+        passed
+          ? "rounded-md border border-emerald-400/25 bg-emerald-400/5 px-3.5 py-3"
+          : blocked
+            ? "rounded-md border border-warning/25 bg-warning/5 px-3.5 py-3"
+            : "rounded-md border border-red-400/25 bg-red-400/5 px-3.5 py-3"
+      }
+    >
+      <div className="flex items-center gap-2 mb-1.5">
+        {passed ? (
+          <CheckCircle size={14} className="text-success shrink-0" />
+        ) : blocked ? (
+          <Ban size={14} className="text-warning shrink-0" />
+        ) : (
+          <XCircle size={14} className="text-danger shrink-0" />
+        )}
+        <span className="text-xs font-medium text-text-primary">
+          {passed
+            ? "当前地址可解析"
+            : blocked
+              ? "该地址被拦截 / 访问受限"
+              : "当前地址无法解析"}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1 text-2xs text-text-secondary">
+        <span>HTTP {result.http_status ?? "—"}</span>
+        <span>页面类型 {pageTypeLabel}</span>
+        <span>目录链接 {result.list_link_count}</span>
+        <span>标题命中 {result.title_hit_count}</span>
+        <span>正文字符 {result.extracted_chars.toLocaleString()}</span>
+        <span>耗时 {result.latency_ms ?? "—"}ms</span>
+      </div>
+
+      {result.anti_bot_type && (
+        <p className="mt-1.5 text-2xs text-warning">
+          检测到访问控制：{result.anti_bot_type}（请使用合法可访问的页面）
+        </p>
+      )}
+
+      {!passed && result.candidate_selectors.length > 0 && (
+        <div className="mt-2 pt-2 border-t border-border">
+          <div className="text-2xs text-text-disabled mb-1">
+            候选节点（当前规则未命中，建议更新规则后重试）：
+          </div>
+          <div className="flex flex-col gap-0.5">
+            {result.candidate_selectors.map((c) => (
+              <span key={c.selector} className="font-mono text-2xs text-text-secondary">
+                {c.selector}{" "}
+                <span className="text-text-disabled">({c.chars.toLocaleString()} 字)</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -27,6 +27,7 @@ interface Props {
   onBackToBooks?: () => void;
   selectedBookId: string | null;
   selectedBookTitle?: string | null;
+  appVersion?: string;
 }
 
 /** Global IA (v8): always visible — 书架 / 任务 / 资料 / 设置 */
@@ -73,6 +74,7 @@ export function Sidebar({
   onBackToBooks,
   selectedBookId,
   selectedBookTitle,
+  appVersion,
 }: Props) {
   const inBook = !!selectedBookId;
   const showDiag =
@@ -128,7 +130,7 @@ export function Sidebar({
         <span className="text-xs text-text-primary tracking-wide" style={{ fontWeight: 590 }}>
           NovelForge
         </span>
-        <span className="ml-auto text-2xs text-text-disabled font-mono px-1.5 py-0.5 rounded bg-bg-surface/70 border border-border-subtle">v8.0</span>
+        <span className="ml-auto text-2xs text-text-disabled font-mono px-1.5 py-0.5 rounded bg-bg-surface/70 border border-border-subtle">{appVersion || "v9.2"}</span>
       </div>
 
       {selectedBookId && (

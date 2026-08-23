@@ -67,10 +67,20 @@ export default function App() {
   const [exporting, setExporting] = useState(false);
   const [exportMsg, setExportMsg] = useState<string | null>(null);
   const [theme, setTheme] = useState<ThemeMode>(() => getStoredTheme());
+  const [appVersion, setAppVersion] = useState("");
 
   useEffect(() => {
     applyTheme(theme);
   }, [theme]);
+
+  // Dynamic version label (spec v9.2 §19) — replaces the hardcoded "v8.0".
+  useEffect(() => {
+    if (!authed) return;
+    api.system
+      .version()
+      .then((v) => setAppVersion(v.app_version))
+      .catch(() => {});
+  }, [authed]);
 
   // Silent session restore: verify a saved token before showing any UI.
   // "unreachable" keeps the token and enters optimistically (old behavior) —
@@ -317,7 +327,7 @@ export default function App() {
           </div>
 
           <p className="auth-footer text-caption">
-            NovelForge v8.0 · 令牌仅保存在本机浏览器，不会上传
+            NovelForge v9.2 · 令牌仅保存在本机浏览器，不会上传
           </p>
         </div>
       </div>
@@ -415,6 +425,7 @@ export default function App() {
         onBackToBooks={handleBackToBooks}
         selectedBookId={selectedBookId}
         selectedBookTitle={(selectedBook as any)?.title}
+        appVersion={appVersion}
       />
 
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
@@ -436,7 +447,7 @@ export default function App() {
               <span className="inline-block w-1 h-3.5 rounded-sm bg-brand-accent shadow-glow-accent" aria-hidden="true" />
               NovelForge
             </span>
-            <span className="text-text-disabled font-mono text-2xs shrink-0 px-1.5 py-0.5 rounded bg-bg-surface/60 border border-border-subtle">v8.0</span>
+            <span className="text-text-disabled font-mono text-2xs shrink-0 px-1.5 py-0.5 rounded bg-bg-surface/60 border border-border-subtle">{appVersion || "v9.2"}</span>
             {selectedBook && (
               <>
                 <span className="text-text-disabled/60 shrink-0">/</span>

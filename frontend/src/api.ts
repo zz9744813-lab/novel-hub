@@ -354,6 +354,11 @@ export const api = {
   },
   researchScrape: {
     sources: () => fetchJSON<ResearchScrapeSource[]>("/api/research/sources"),
+    probe: (sourceId: string, testUrl: string) =>
+      fetchJSON<ResearchProbeResult>(`/api/research/sources/${sourceId}/probe`, {
+        method: "POST",
+        body: JSON.stringify({ test_url: testUrl }),
+      }),
     createTask: (data: { source_id: string; target_url: string; book_id?: string }) =>
       fetchJSON<ResearchScrapeTask>("/api/research/tasks", {
         method: "POST",
@@ -412,6 +417,15 @@ export const api = {
         `/api/research/tasks/${taskId}/import-reference`,
         { method: "POST", body: JSON.stringify(data) }
       ),
+  },
+  system: {
+    version: () =>
+      fetchJSON<{
+        app_version: string;
+        git_sha: string;
+        pipeline_version: string;
+        alembic_revision: string;
+      }>("/api/system/version"),
   },
   memory: {
     l4: (bookId: string) => fetchJSON<{ snapshots: L4Snapshot[] }>(`/api/books/${bookId}/memory/l4`),
@@ -911,4 +925,21 @@ export interface ResearchScrapeExport {
   byte_size: number;
   document_count: number;
   download_url: string;
+}
+
+export interface ResearchProbeResult {
+  status: string; // passed / failed / blocked
+  http_status: number | null;
+  final_url: string | null;
+  latency_ms: number | null;
+  response_bytes: number | null;
+  page_type: string; // book / chapter / generic
+  title_hit_count: number;
+  list_link_count: number;
+  content_hit_count: number;
+  extracted_chars: number;
+  anti_bot_type: string | null;
+  encoding_detected: string | null;
+  diagnostics: string[];
+  candidate_selectors: { selector: string; chars: number }[];
 }

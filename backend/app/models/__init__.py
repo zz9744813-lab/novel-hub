@@ -24,6 +24,8 @@ from app.models.tables import (
     CharacterCoreAnchor, SceneReasoningContract, StoryEventEdge,
     # v9.1 research production
     ResearchSource, ResearchTask, ResearchDocument, ResearchExport,
+    # v9.2 research source certification
+    ResearchSourceProbeRun, ResearchSourceVersion,
 )
 
 __all__ = [
@@ -47,4 +49,5 @@ __all__ = [
     "PromptTemplateVersion", "PromptTestRun",
     "CharacterCoreAnchor", "SceneReasoningContract", "StoryEventEdge",
     "ResearchSource", "ResearchTask", "ResearchDocument", "ResearchExport",
+    "ResearchSourceProbeRun", "ResearchSourceVersion",
 ]

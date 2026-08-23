@@ -25,10 +25,18 @@ from app.models.tables import (
     ResearchDocument,
     ResearchExport,
     ResearchSource,
+    ResearchSourceProbeRun,
     ResearchTask,
 )
+from app.research.diagnostics import from_probe_result
 from app.research.models import ResearchSourceConfig
 from app.research.probe import probe_source
+from app.research.source_health import (
+    build_health_report,
+    config_hash,
+    recompute_source_status,
+    source_config_dict,
+)
 
 logger = logging.getLogger("novelforge.research_api")
 
@@ -232,6 +240,22 @@ async def list_sources(
     return [_source_out(r) for r in rows]
 
 
+@router.get("/health")
+async def research_health(db: AsyncSession = Depends(get_db)) -> dict:
+    """Aggregate health snapshot (spec §18)."""
+    report = await build_health_report(db)
+    return {
+        "api": "ok",
+        "enabled_sources": report["enabled_sources"],
+        "verified_sources": report["verified_sources"],
+        "degraded_sources": report["degraded_sources"],
+        "blocked_sources": report["blocked_sources"],
+        "broken_sources": report["broken_sources"],
+        "experimental_sources": report["experimental_sources"],
+        "disabled_sources": report["disabled_sources"],
+    }
+
+
 @router.post("/sources/{source_id}/probe")
 async def probe_source_url(
     source_id: str,
@@ -255,7 +279,44 @@ async def probe_source_url(
         verification_status=source.verification_status,
     )
     result = await probe_source(source=config, test_url=test_url)
-    return result.to_dict()
+    result_dict = result.to_dict()
+
+    # Persist evidence + recompute certification (spec §4, §6).
+    try:
+        run = ResearchSourceProbeRun(
+            source_id=source.id,
+            source_config_hash=config_hash(source_config_dict(source)),
+            test_url=test_url,
+            probe_kind=(
+                result.page_type if result.page_type in ("book", "chapter") else "generic"
+            ),
+            status=result.status,
+            http_status=result.http_status,
+            final_url=result.final_url,
+            latency_ms=result.latency_ms,
+            response_bytes=result.response_bytes,
+            title_hit_count=result.title_hit_count,
+            list_link_count=result.list_link_count,
+            content_hit_count=result.content_hit_count,
+            extracted_chars=result.extracted_chars,
+            anti_bot_type=result.anti_bot_type,
+            encoding_detected=result.encoding_detected,
+            diagnostics_json={"diagnostics": result.diagnostics},
+        )
+        db.add(run)
+        await db.flush()
+        new_status = await recompute_source_status(db, source)
+        if new_status != source.verification_status:
+            source.verification_status = new_status
+            if new_status == "verified":
+                source.last_verified_at = datetime.now(timezone.utc)
+        await db.commit()
+        result_dict["source_status"] = source.verification_status
+    except Exception as e:  # probe result still returned even if persistence fails
+        logger.warning("probe persist failed source=%s: %s", source.code, e)
+
+    result_dict["diagnostic"] = from_probe_result(result_dict)
+    return result_dict
 
 
 @router.post("/tasks", response_model=ResearchTaskOut, status_code=201)

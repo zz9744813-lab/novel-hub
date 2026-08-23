@@ -1226,3 +1226,51 @@ class ResearchExport(Base, TimestampMixin):
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     byte_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
+
+# ---- v9.2 Research source certification tables (spec §4, §5) ----
+class ResearchSourceProbeRun(Base, TimestampMixin):
+    """Evidence record of one source probe (spec §4)."""
+    __tablename__ = "research_source_probe_runs"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("research_sources.id"), nullable=False, index=True
+    )
+    source_config_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    test_url: Mapped[str] = mapped_column(Text, nullable=False)
+    probe_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="generic")
+
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    final_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    response_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    title_hit_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    list_link_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    content_hit_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    extracted_chars: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+
+    anti_bot_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    encoding_detected: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    diagnostics_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+
+
+class ResearchSourceVersion(Base, TimestampMixin):
+    """Versioned rule configuration for a source (spec §5)."""
+    __tablename__ = "research_source_versions"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("research_sources.id"), nullable=False, index=True
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    config_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    config_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="experimental")
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    __table_args__ = (
+        UniqueConstraint("source_id", "version", name="uq_research_source_versions_source_version"),
+    )
+

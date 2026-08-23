@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../../api";
 import type { ResearchProbeResult, ResearchScrapeSource, ResearchScrapeTask } from "../../api";
 import {
@@ -13,8 +13,15 @@ import {
   Download,
   BookPlus,
   Zap,
+  ScrollText,
+  FlaskConical,
 } from "lucide-react";
 import { SourceSelector } from "../../components/SourceSelector";
+import { ResearchPanel } from "../../components/ResearchPanel";
+import { SourceDiagnosticsPanel } from "./SourceDiagnosticsPanel";
+import clsx from "clsx";
+
+type WorkbenchTab = "collect" | "topic" | "sources";
 
 const ACTIVE_STATUSES = ["queued", "running", "cancel_requested"];
 const POLL_INTERVAL_MS = 2000;
@@ -64,6 +71,14 @@ export function ResearchPage({ bookId }: { bookId?: string }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [probing, setProbing] = useState(false);
   const [probeResult, setProbeResult] = useState<ResearchProbeResult | null>(null);
+  const [tab, setTab] = useState<WorkbenchTab>("collect");
+
+  const handleProbeFromDiagnostics = useCallback((source: ResearchScrapeSource) => {
+    setSelectedSourceId(source.id);
+    setTargetUrl("");
+    setProbeResult(null);
+    setTab("collect");
+  }, []);
 
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -234,26 +249,22 @@ export function ResearchPage({ bookId }: { bookId?: string }) {
 
   return (
     <div className="h-full overflow-auto p-4 md:p-6 space-y-5">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h1 className="text-base text-text-primary" style={{ fontWeight: 510 }}>
-            外部调研
-          </h1>
-          <p className="text-xs text-text-tertiary mt-0.5">
-            从外部网站爬取结构化内容，导入参考资料库
-          </p>
+      <div className="flex flex-wrap items-center gap-3">
+        <h1 className="text-base text-text-primary" style={{ fontWeight: 510 }}>
+          调研工作台
+        </h1>
+        <div className="ml-auto flex items-center rounded-control border border-border bg-bg-surface p-0.5">
+          <TabButton active={tab === "topic"} onClick={() => setTab("topic")} icon={<ScrollText size={13} />} label="主题调研" />
+          <TabButton active={tab === "collect"} onClick={() => setTab("collect")} icon={<Globe size={13} />} label="参考作品采集" />
+          <TabButton active={tab === "sources"} onClick={() => setTab("sources")} icon={<FlaskConical size={13} />} label="书源诊断" />
         </div>
-        <button
-          onClick={() => loadTasks()}
-          disabled={refreshing}
-          className="btn-ghost px-2.5 py-1.5 flex items-center gap-1.5 text-xs disabled:opacity-50"
-          title="刷新任务列表"
-        >
-          <RefreshCw size={12} className={refreshing ? "animate-spin" : ""} />
-          刷新
-        </button>
       </div>
 
+      {tab === "topic" && <ResearchPanel bookId={bookId || ""} />}
+      {tab === "sources" && <SourceDiagnosticsPanel onProbeSource={handleProbeFromDiagnostics} />}
+
+      {tab === "collect" && (
+        <>
       {/* Create new task form */}
       <div
         className="panel-elevated rounded-card p-5 space-y-4 animate-fade-in"
@@ -544,7 +555,34 @@ export function ResearchPage({ bookId }: { bookId?: string }) {
           </div>
         )}
       </div>
+        </>
+      )}
     </div>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  icon,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: ReactNode;
+  label: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={clsx(
+        "flex items-center gap-1 rounded px-2.5 py-1 text-2xs transition-all",
+        active ? "bg-brand-muted text-brand-accent" : "text-text-tertiary hover:text-text-primary"
+      )}
+    >
+      {icon}
+      {label}
+    </button>
   );
 }
 

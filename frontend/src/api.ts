@@ -354,6 +354,7 @@ export const api = {
   },
   researchScrape: {
     sources: () => fetchJSON<ResearchScrapeSource[]>("/api/research/sources"),
+    health: () => fetchJSON<ResearchHealth>("/api/research/health"),
     probe: (sourceId: string, testUrl: string) =>
       fetchJSON<ResearchProbeResult>(`/api/research/sources/${sourceId}/probe`, {
         method: "POST",
@@ -942,4 +943,15 @@ export interface ResearchProbeResult {
   encoding_detected: string | null;
   diagnostics: string[];
   candidate_selectors: { selector: string; chars: number }[];
+}
+
+export interface ResearchHealth {
+  api: string;
+  enabled_sources: number;
+  verified_sources: number;
+  degraded_sources: number;
+  blocked_sources: number;
+  broken_sources: number;
+  experimental_sources: number;
+  disabled_sources: number;
 }

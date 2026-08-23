@@ -1,4 +1,4 @@
-"""NovelForge API main entry point.
+﻿"""NovelForge API main entry point.
 
 P0-08: production shared-token auth for all /api/*
 P0-09: lifespan fail-fast readiness (no background bootstrap sleep)
@@ -25,6 +25,7 @@ from app.routers import tasks as tasks_router
 from app.routers import system as system_router
 from app.routers import style as style_router
 from app.api import research as research_router
+from app.api import editorial as editorial_router
 
 logger = logging.getLogger("novelforge.main")
 
@@ -182,6 +183,7 @@ app.include_router(tasks_router.router)
 app.include_router(system_router.router)
 app.include_router(style_router.router)
 app.include_router(research_router.router)
+app.include_router(editorial_router.router)
 
 
 # WebSocket connection manager for real-time events

@@ -20,6 +20,7 @@ import { WritingTasksPage } from "./features/tasks/WritingTasksPage";
 import { ReferencesLibraryPage } from "./features/references/ReferencesLibraryPage";
 import { SystemSettingsPage } from "./features/settings/SystemSettingsPage";
 import { ResearchPage } from "./features/research/ResearchPage";
+import { EditorialPage } from "./features/editorial/EditorialPage";
 import {
   clearAdminToken,
   getAdminToken,
@@ -42,6 +43,7 @@ type Tab =
   | "outline"
   | "chapters"
   | "writing"
+  | "editorial"
   | "memory"
   | "prompts"
   | "audit"
@@ -354,6 +356,9 @@ export default function App() {
     }
     if (tab === "research") {
       return <ResearchPage bookId={selectedBookId ?? undefined} />;
+    }
+    if (tab === "editorial") {
+      return <EditorialPage bookId={selectedBookId ?? undefined} />;
     }
     if (tab === "settings") {
       return <SystemSettingsPage initialTab="models" />;

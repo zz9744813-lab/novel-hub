@@ -123,6 +123,11 @@ class Chapter(Base, TimestampMixin):
     chapter_no: Mapped[int] = mapped_column(Integer, nullable=False)
     outline_node_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="queued", nullable=False, index=True)
+    # v9.3: human editorial status is tracked independently of the AI pipeline
+    # status (spec §4) — "AI 写完了吗" vs "人工认可了吗" are separate questions.
+    editorial_status: Mapped[str] = mapped_column(
+        String(30), default="pending_review", nullable=False, index=True
+    )  # pending_review|in_review|accepted|accepted_with_notes|revision_requested|revising|awaiting_recheck|rejected|waived
     finalized_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     title: Mapped[str | None] = mapped_column(String(500), nullable=True)
     # P1 CORE-001: CAS / audit fields for State Transition Service
@@ -169,6 +174,10 @@ class ChapterVersion(Base, TimestampMixin):
     content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     chapter_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     finalization_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # v9.3 editorial lineage (spec §31): v4 parent=v3, origin=editorial_review
+    parent_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    editorial_review_round_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    revision_origin: Mapped[str | None] = mapped_column(String(40), nullable=True)  # editorial_revision|editorial_replan|human_direct_edit
     __table_args__ = (UniqueConstraint("chapter_id", "version"),)
 
 
@@ -1362,4 +1371,222 @@ class ResearchSourceVersion(Base, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("source_id", "version", name="uq_research_source_versions_source_version"),
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# v9.3 Tables: Editorial Learning Loop (ELL)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class EditorialReviewPolicy(Base, TimestampMixin):
+    """Per-book human review policy (spec §5, §6)."""
+    __tablename__ = "editorial_review_policies"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=False, unique=True)
+    mode: Mapped[str] = mapped_column(String(20), nullable=False, default="windowed")  # blocking|windowed|learning_only
+    max_unreviewed_ahead: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    review_sampling_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="all")  # all|risk_based|random|hybrid
+    require_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    good_score_threshold: Mapped[int] = mapped_column(Integer, nullable=False, default=85)
+    auto_pause_good_rate_threshold: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
+    auto_pause_consecutive_bad: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
+    rubric_template_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    experience_auto_activation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    low_risk_auto_promote: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+class EditorialRubricTemplate(Base, TimestampMixin):
+    """Scoring rubric: weighted dimensions with anchored descriptions (spec §11)."""
+    __tablename__ = "editorial_rubric_templates"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=True, index=True)  # NULL = default template
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    dimensions: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    __table_args__ = (UniqueConstraint("book_id", "name"),)
+
+
+class EditorialReviewRound(Base, TimestampMixin):
+    """One human review pass over a chapter version (spec §14)."""
+    __tablename__ = "editorial_review_rounds"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    chapter_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("chapters.id"), nullable=False, index=True)
+    chapter_version_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("chapter_versions.id"), nullable=False)
+    round_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="draft")  # draft|submitted
+    verdict: Mapped[str | None] = mapped_column(String(30), nullable=True)  # accept|accept_with_notes|revise|reject
+    score_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    grade: Mapped[str | None] = mapped_column(String(2), nullable=True)  # A|B|C|D
+    rubric_template_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    rubric_scores_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    overall_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewer_kind: Mapped[str] = mapped_column(String(20), nullable=False, default="human")
+    reviewer_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    ai_issue_dispositions: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)  # issue_id → confirmed|dismissed|corrected
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    __table_args__ = (UniqueConstraint("chapter_id", "round_no"),)
+
+
+class EditorialAnnotation(Base, TimestampMixin):
+    """Human markup on chapter text with composite anchor (spec §15, §16)."""
+    __tablename__ = "editorial_annotations"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    review_round_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("editorial_review_rounds.id", ondelete="CASCADE"), nullable=False, index=True)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    chapter_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    chapter_version_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    annotation_type: Mapped[str] = mapped_column(String(30), nullable=False)  # issue|suggestion|direct_edit|praise|question|preference|forbidden_pattern
+    category: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    severity: Mapped[str] = mapped_column(String(20), nullable=False, default="minor")  # critical|major|minor|note|praise
+    scope: Mapped[str] = mapped_column(String(20), nullable=False, default="local_span")  # local_span|scene|chapter|character|scene_type|book_future|global
+    scene_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    paragraph_key: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    start_offset: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_offset: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quoted_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    quote_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    context_before: Mapped[str | None] = mapped_column(Text, nullable=True)
+    context_after: Mapped[str | None] = mapped_column(Text, nullable=True)
+    context_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    suggested_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_blocking: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    ai_issue_match_ids: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    tags: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    resolution_status: Mapped[str] = mapped_column(String(20), nullable=False, default="open")  # open|resolved|unresolved|moved
+    resolved_by_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+
+
+class EditorialFeedbackInsight(Base, TimestampMixin):
+    """Structured interpretation of one annotation (spec §42)."""
+    __tablename__ = "editorial_feedback_insights"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    annotation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("editorial_annotations.id", ondelete="CASCADE"), nullable=False, unique=True)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    normalized_category: Mapped[str] = mapped_column(String(50), nullable=False)
+    human_intent: Mapped[str | None] = mapped_column(Text, nullable=True)
+    symptom: Mapped[str | None] = mapped_column(Text, nullable=True)
+    root_cause_component: Mapped[str] = mapped_column(String(50), nullable=False)  # chapter_planner|ccne|context|draft_writer|style|voice|review_agent|patch_editor|memory
+    secondary_components: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    remediation_level: Mapped[str] = mapped_column(String(30), nullable=False, default="L1")  # L0..L5
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
+    evidence_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    analysis_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+
+
+class EditorialExperienceCard(Base, TimestampMixin):
+    """Editorial '错题本': generalized, retrievable experience (spec §33-§40)."""
+    __tablename__ = "editorial_experience_cards"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)  # NULL = global
+    rule_type: Mapped[str] = mapped_column(String(30), nullable=False)  # preference|anti_pattern|positive_pattern|character_rule|scene_mode_rule|review_rule|planning_rule|style_rule
+    scope_type: Mapped[str] = mapped_column(String(20), nullable=False, default="book")  # book|global|character|scene_type
+    scope_ref: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    category: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    trigger_conditions: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    instruction: Mapped[str] = mapped_column(Text, nullable=False)
+    rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
+    avoid_when: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    target_components: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    positive_example_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    negative_example_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    support_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    contradiction_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="candidate")  # candidate|active|locked|superseded|rejected
+    is_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    effective_from_chapter: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    source_annotation_ids: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+
+
+class EditorialPreferencePair(Base, TimestampMixin):
+    """Direct-edit supervision pair: rejected=AI, chosen=human (spec §17, §18)."""
+    __tablename__ = "editorial_preference_pairs"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    chapter_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    review_round_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    annotation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    context_package_ref: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    scene_contract_ref: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    style_contract_ref: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    rejected_text: Mapped[str] = mapped_column(Text, nullable=False)
+    chosen_text: Mapped[str] = mapped_column(Text, nullable=False)
+    preference_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    category: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    scope: Mapped[str] = mapped_column(String(20), nullable=False, default="local_span")
+    source: Mapped[str] = mapped_column(String(30), nullable=False, default="human_direct_edit")
+
+
+class EditorialImprovementProposal(Base, TimestampMixin):
+    """Candidate system change backed by evidence; never auto-applied (spec §43-§47, §80)."""
+    __tablename__ = "editorial_improvement_proposals"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    proposal_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    target_component: Mapped[str] = mapped_column(String(50), nullable=False)
+    target_scope: Mapped[str] = mapped_column(String(20), nullable=False, default="book")
+    current_version_ref: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    candidate_patch: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    risk_level: Mapped[str] = mapped_column(String(10), nullable=False, default="low")  # low|medium|high
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    supporting_experience_ids: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    supporting_review_ids: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="proposed")  # proposed|approved|experimenting|promoted|rolled_back|rejected
+    created_by_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    experiment_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    promoted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    effective_from_chapter: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rolled_back_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class EditorialRegressionCase(Base, TimestampMixin):
+    """Historical human-reviewed chapter as replayable test case (spec §48-§50)."""
+    __tablename__ = "editorial_regression_cases"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    source_review_round_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    chapter_version_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    scene_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    case_type: Mapped[str] = mapped_column(String(30), nullable=False, default="chapter_review")  # chapter_review|review_agent|draft_scene|planner
+    target_component: Mapped[str] = mapped_column(String(50), nullable=False, default="review_agent")
+    context_package_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    prompt_version_ref: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    model_binding_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    scene_contract_ref: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    style_contract_ref: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    chapter_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    human_verdict: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    rubric_scores: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    human_annotation_ids: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    expected_properties: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    forbidden_properties: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    difficulty: Mapped[str] = mapped_column(String(20), nullable=False, default="normal")
+    scene_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class EditorialExperiment(Base, TimestampMixin):
+    """Baseline vs candidate replay with hard gates (spec §51-§58, §81)."""
+    __tablename__ = "editorial_experiments"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    proposal_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    baseline_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    candidate_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    case_ids: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    metrics_baseline: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    metrics_candidate: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    delta_metrics: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    hard_gate_results: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    pareto_candidates: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="running")  # running|completed|failed
+    recommendation: Mapped[str | None] = mapped_column(String(20), nullable=True)  # promote|hold|reject
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
 

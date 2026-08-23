@@ -576,11 +576,32 @@ async def run_research_task_job(ctx, task_id: str):
     return await run_research_task(ctx, task_id)
 
 
+async def run_editorial_revision_job(ctx, review_id: str, level: str | None = None):
+    """v9.3 ELL revision ladder L0..L5 (spec §87, §29)."""
+    from app.editorial.jobs import run_editorial_revision_job as _job
+
+    return await _job(ctx, review_id, level)
+
+
+async def analyze_editorial_review_job(ctx, review_id: str):
+    """v9.3 ELL deterministic feedback analysis (spec §42)."""
+    from app.editorial.jobs import analyze_editorial_review_job as _job
+
+    return await _job(ctx, review_id)
+
+
 class WorkerSettings:
     # arq cron: minute-level outbox drain (B-11)
     cron_jobs = [cron(outbox_tick, second={0, 30})]
 
-    functions = [run_chapter_pipeline, outbox_tick, run_import_pipeline_job, run_research_task_job]
+    functions = [
+        run_chapter_pipeline,
+        outbox_tick,
+        run_import_pipeline_job,
+        run_research_task_job,
+        run_editorial_revision_job,
+        analyze_editorial_review_job,
+    ]
     on_startup = on_startup
     on_shutdown = on_shutdown
     redis_settings = RedisSettings(

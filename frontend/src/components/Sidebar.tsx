@@ -17,6 +17,7 @@ import {
   ListTodo,
   FolderOpen,
   Settings,
+  ClipboardCheck,
 } from "lucide-react";
 import clsx from "clsx";
 
@@ -44,6 +45,7 @@ const bookTabs = [
   { id: "outline", label: "大纲", icon: GitGraph, desc: "OUT", needsBook: true },
   { id: "chapters", label: "章节", icon: FileText, desc: "CH", needsBook: true },
   { id: "writing", label: "写作台", icon: PenTool, desc: "WRITE", needsBook: true },
+  { id: "editorial", label: "人工审核", icon: ClipboardCheck, desc: "EDIT", needsBook: false },
   { id: "memory", label: "记忆", icon: Brain, desc: "MEM", needsBook: true },
   { id: "prompts", label: "提示词工坊", icon: Sparkles, desc: "PROMPT", needsBook: false },
   { id: "genre", label: "文风档案", icon: Palette, desc: "GENRE", needsBook: false },
@@ -130,7 +132,7 @@ export function Sidebar({
         <span className="text-xs text-text-primary tracking-wide" style={{ fontWeight: 590 }}>
           NovelForge
         </span>
-        <span className="ml-auto text-2xs text-text-disabled font-mono px-1.5 py-0.5 rounded bg-bg-surface/70 border border-border-subtle">{appVersion || "v9.2"}</span>
+        <span className="ml-auto text-2xs text-text-disabled font-mono px-1.5 py-0.5 rounded bg-bg-surface/70 border border-border-subtle">{appVersion || "v9.3"}</span>
       </div>
 
       {selectedBookId && (

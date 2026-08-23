@@ -1,4 +1,4 @@
-const BASE = "";
+﻿const BASE = "";
 const TOKEN_KEY = "novelforge_admin_token";
 const DRAFT_KEY = "novelforge_admin_token_draft";
 const REMEMBER_KEY = "novelforge_admin_token_remember";
@@ -144,6 +144,217 @@ export async function fetchAuthenticatedAsset(url: string): Promise<string> {
 }
 
 export interface LibraryBooksResponse { books: any[]; total: number }
+
+// ── v9.3 Editorial Learning Loop (ELL) types ──────────────────────────
+
+export interface EditorialPolicy {
+  book_id: string;
+  mode: "blocking" | "windowed" | "learning_only" | string;
+  max_unreviewed_ahead: number;
+  review_sampling_mode: string;
+  require_review: boolean;
+  good_score_threshold: number;
+  auto_pause_good_rate_threshold: number;
+  auto_pause_consecutive_bad: number;
+  rubric_template_id: string | null;
+  experience_auto_activation: boolean;
+  low_risk_auto_promote: boolean;
+}
+
+export interface EditorialQueueCard {
+  chapter_id: string;
+  book_id: string;
+  book_title: string | null;
+  chapter_no: number;
+  title: string | null;
+  editorial_status: string;
+  ai_status: string;
+  latest_version_id: string | null;
+  ai_issue_count: number;
+  waiting_hours: number;
+  rounds: number;
+}
+
+export interface EditorialReviewRound {
+  id: string;
+  book_id: string;
+  chapter_id: string;
+  chapter_version_id: string;
+  round_no: number;
+  status: string;
+  verdict: string | null;
+  score_total: number | null;
+  grade: string | null;
+  rubric_scores: Record<string, number> | null;
+  overall_comment: string | null;
+  reviewer_kind: string;
+  reviewer_id: string | null;
+  ai_issue_dispositions: Record<string, string>;
+  submitted_at: string | null;
+  completed_at: string | null;
+}
+
+export interface EditorialAnnotationInput {
+  annotation_type: string;
+  category?: string | null;
+  severity?: string | null;
+  scope?: string;
+  scene_no?: number | null;
+  paragraph_key?: number | null;
+  start_offset?: number | null;
+  end_offset?: number | null;
+  quoted_text?: string | null;
+  comment?: string | null;
+  suggested_text?: string | null;
+  is_blocking?: boolean;
+  tags?: string[];
+}
+
+export interface EditorialAnnotation {
+  id: string;
+  review_round_id: string;
+  annotation_type: string;
+  category: string | null;
+  severity: string;
+  scope: string;
+  scene_no: number | null;
+  paragraph_key: number | null;
+  start_offset: number | null;
+  end_offset: number | null;
+  quoted_text: string | null;
+  comment: string | null;
+  suggested_text: string | null;
+  is_blocking: boolean;
+  ai_issue_match_ids: unknown[];
+  tags: string[];
+  resolution_status: string;
+  resolved_by_version_id: string | null;
+}
+
+export interface EditorialAiIssue {
+  id: string;
+  issue_type: string;
+  severity: string;
+  evidence: string;
+  paragraph_id: string;
+  repair_instruction: string | null;
+  disposition: string | null;
+}
+
+export interface EditorialRubricDimension {
+  key: string;
+  name: string;
+  weight: number;
+  anchors: Record<string, string>;
+}
+
+export interface EditorialReviewDetail {
+  round: EditorialReviewRound;
+  chapter: { id?: string; chapter_no?: number; title?: string | null; [k: string]: unknown };
+  version_content: string;
+  paragraphs: string[];
+  rubric: EditorialRubricDimension[];
+  annotations: EditorialAnnotation[];
+  ai_issues: EditorialAiIssue[];
+  version_lineage: Array<Record<string, unknown>>;
+}
+
+export interface EditorialRevisionStatus {
+  editorial_status: string;
+  latest_version: { id: string; version: number; revision_origin: string | null; parent_version_id: string | null } | null;
+  revised_from_round: string;
+}
+
+export interface EditorialMetrics {
+  total_reviewed: number;
+  first_pass_accepted: number;
+  first_pass_yield: number | null;
+  score_trend: Array<{ chapter_no: number | null; round_no: number; score: number | null; grade: string | null; verdict: string | null }>;
+  revision_depth: Record<string, number>;
+  category_pareto: Record<string, number>;
+  root_causes: Record<string, number>;
+  ai_calibration: {
+    confirmed: number;
+    dismissed: number;
+    corrected: number;
+    agreement: number | null;
+    severe_human_issues: number;
+    escaped: number;
+    escape_rate: number | null;
+  };
+  status_distribution: Record<string, number>;
+  consecutive_bad: number;
+  window_good_rate: number | null;
+  experience_cards: { active: number; candidate: number; locked: number; rejected: number };
+  annotation_total: number;
+}
+
+export interface EditorialExperienceCardItem {
+  id: string;
+  book_id: string | null;
+  rule_type: string;
+  scope_type: string;
+  category: string;
+  trigger_conditions: Record<string, unknown>;
+  instruction: string;
+  rationale: string | null;
+  target_components: string[];
+  support_count: number;
+  contradiction_count: number;
+  confidence: number;
+  status: string;
+  is_locked: boolean;
+  effective_from_chapter: number | null;
+  last_confirmed_at: string | null;
+  source_annotation_ids: string[];
+}
+
+export interface EditorialInsightItem {
+  id: string;
+  annotation_id: string;
+  normalized_category: string;
+  human_intent: string | null;
+  symptom: string | null;
+  root_cause_component: string;
+  remediation_level: string;
+  confidence: number;
+}
+
+export interface EditorialProposalItem {
+  id: string;
+  proposal_type: string;
+  target_component: string;
+  risk_level: string;
+  reason: string | null;
+  candidate_patch: Record<string, unknown>;
+  status: string;
+  approved_by: string | null;
+  approved_at: string | null;
+  experiment_id: string | null;
+  promoted_at: string | null;
+  effective_from_chapter: number | null;
+}
+
+export interface EditorialParetoCandidate {
+  name: string;
+  source: string;
+  pass_rate: number | null;
+  retention: number;
+  changed: number;
+  pareto_rank: number;
+}
+
+export interface EditorialExperimentItem {
+  id: string;
+  proposal_id: string | null;
+  status: string;
+  recommendation: string | null;
+  metrics_baseline: Record<string, unknown>;
+  metrics_candidate: Record<string, unknown>;
+  case_count: number;
+  hard_pass: boolean | null;
+  started_at: string | null;
+}
 
 export const api = {
   books: {
@@ -452,6 +663,111 @@ export const api = {
         pipeline_version: string;
         alembic_revision: string;
       }>("/api/system/version"),
+  },
+  editorial: {
+    policy: (bookId: string) => fetchJSON<EditorialPolicy>(`/api/books/${bookId}/editorial/policy`),
+    updatePolicy: (bookId: string, data: Partial<EditorialPolicy>) =>
+      fetchJSON<EditorialPolicy>(`/api/books/${bookId}/editorial/policy`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }),
+    queue: (filter: string, bookId?: string) => {
+      const q = new URLSearchParams({ filter });
+      const base = bookId ? `/api/books/${bookId}/editorial/review-queue` : "/api/editorial/review-queue";
+      return fetchJSON<EditorialQueueCard[]>(`${base}?${q.toString()}`);
+    },
+    createRound: (chapterId: string) =>
+      fetchJSON<EditorialReviewRound>(`/api/chapters/${chapterId}/editorial/reviews`, { method: "POST" }),
+    roundDetail: (reviewId: string) => fetchJSON<EditorialReviewDetail>(`/api/editorial/reviews/${reviewId}`),
+    listRounds: (chapterId: string) =>
+      fetchJSON<EditorialReviewRound[]>(`/api/chapters/${chapterId}/editorial/reviews`),
+    submitRound: (
+      reviewId: string,
+      data: { verdict: string; score_total?: number; rubric_scores?: Record<string, number>; quick_grade?: string; overall_comment?: string }
+    ) =>
+      fetchJSON<EditorialReviewRound>(`/api/editorial/reviews/${reviewId}/submit`, {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    addAnnotation: (reviewId: string, data: EditorialAnnotationInput) =>
+      fetchJSON<EditorialAnnotation>(`/api/editorial/reviews/${reviewId}/annotations`, {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    patchAnnotation: (annotationId: string, data: Partial<EditorialAnnotationInput> & { resolution_status?: string }) =>
+      fetchJSON<EditorialAnnotation>(`/api/editorial/annotations/${annotationId}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }),
+    deleteAnnotation: (annotationId: string) =>
+      fetchJSON<void>(`/api/editorial/annotations/${annotationId}`, { method: "DELETE" }),
+    dispositionAiIssue: (reviewId: string, issueId: string, action: "confirm" | "dismiss" | "correct") =>
+      fetchJSON<EditorialReviewRound>(`/api/editorial/reviews/${reviewId}/ai-issues/${issueId}/${action}`, {
+        method: "POST",
+      }),
+    requestRevision: (reviewId: string, remediationLevel?: string) =>
+      fetchJSON<{ status: string }>(`/api/editorial/reviews/${reviewId}/revision`, {
+        method: "POST",
+        body: JSON.stringify(remediationLevel ? { remediation_level: remediationLevel } : {}),
+      }),
+    revisionStatus: (reviewId: string) =>
+      fetchJSON<EditorialRevisionStatus>(`/api/editorial/reviews/${reviewId}/revision-status`),
+    metrics: (bookId: string) =>
+      fetchJSON<EditorialMetrics>(`/api/books/${bookId}/editorial/metrics`),
+    experienceCards: (bookId: string, status?: string) => {
+      const q = status ? `?status=${encodeURIComponent(status)}` : "";
+      return fetchJSON<EditorialExperienceCardItem[]>(
+        `/api/books/${bookId}/editorial/experience-cards${q}`
+      );
+    },
+    updateExperienceCard: (cardId: string, data: { status: string; is_locked?: boolean | null }) =>
+      fetchJSON<EditorialExperienceCardItem>(`/api/editorial/experience-cards/${cardId}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }),
+    previewExperience: (
+      bookId: string,
+      data: { chapter_no?: number | null; scene_type?: string | null; character_ids?: string[]; include_candidates?: boolean }
+    ) =>
+      fetchJSON<{ cards: EditorialExperienceCardItem[]; prompt_block: string }>(
+        `/api/books/${bookId}/editorial/experience-cards/preview`,
+        { method: "POST", body: JSON.stringify(data) }
+      ),
+    insights: (bookId: string) =>
+      fetchJSON<EditorialInsightItem[]>(`/api/books/${bookId}/editorial/insights`),
+    proposals: (bookId: string) =>
+      fetchJSON<EditorialProposalItem[]>(`/api/books/${bookId}/editorial/proposals`),
+    reviewProposal: (proposalId: string, approve: boolean, reviewer?: string) =>
+      fetchJSON<{ status: string }>(`/api/editorial/proposals/${proposalId}/review`, {
+        method: "POST",
+        body: JSON.stringify({ approve, reviewer }),
+      }),
+    promoteProposal: (proposalId: string, effectiveFromChapter?: number) =>
+      fetchJSON<{ status: string; effective_from_chapter: number | null }>(
+        `/api/editorial/proposals/${proposalId}/promote`,
+        { method: "POST", body: JSON.stringify({ effective_from_chapter: effectiveFromChapter ?? null }) }
+      ),
+    rollbackProposal: (proposalId: string) =>
+      fetchJSON<{ status: string }>(`/api/editorial/proposals/${proposalId}/rollback`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      }),
+    experiments: (bookId: string) =>
+      fetchJSON<EditorialExperimentItem[]>(`/api/books/${bookId}/editorial/experiments`),
+    createExperiment: (
+      bookId: string,
+      proposalId?: string | null,
+      useGepa?: boolean
+    ) =>
+      fetchJSON<{
+        id: string;
+        status: string;
+        recommendation: string | null;
+        pareto_candidates: EditorialParetoCandidate[];
+      }>(`/api/books/${bookId}/editorial/experiments`, {
+        method: "POST",
+        body: JSON.stringify({ proposal_id: proposalId ?? null, use_gepa: useGepa ?? false }),
+      }),
   },
   memory: {
     l4: (bookId: string) => fetchJSON<{ snapshots: L4Snapshot[] }>(`/api/books/${bookId}/memory/l4`),

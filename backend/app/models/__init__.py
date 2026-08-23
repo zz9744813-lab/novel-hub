@@ -28,6 +28,11 @@ from app.models.tables import (
     ResearchSourceProbeRun, ResearchSourceVersion,
     # v9.2 style intelligence engine
     StyleProfile, ChapterStyleScore, StyleSampleSegment, SceneStyleContract,
+    # v9.3 editorial learning loop
+    EditorialReviewPolicy, EditorialRubricTemplate, EditorialReviewRound,
+    EditorialAnnotation, EditorialFeedbackInsight, EditorialExperienceCard,
+    EditorialPreferencePair, EditorialImprovementProposal,
+    EditorialRegressionCase, EditorialExperiment,
 )
 
 __all__ = [
@@ -53,4 +58,8 @@ __all__ = [
     "ResearchSource", "ResearchTask", "ResearchDocument", "ResearchExport",
     "ResearchSourceProbeRun", "ResearchSourceVersion",
     "StyleProfile", "ChapterStyleScore", "StyleSampleSegment", "SceneStyleContract",
+    "EditorialReviewPolicy", "EditorialRubricTemplate", "EditorialReviewRound",
+    "EditorialAnnotation", "EditorialFeedbackInsight", "EditorialExperienceCard",
+    "EditorialPreferencePair", "EditorialImprovementProposal",
+    "EditorialRegressionCase", "EditorialExperiment",
 ]

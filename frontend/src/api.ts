@@ -334,6 +334,22 @@ export const api = {
         { method: "POST" }
       ),
   },
+  styleProfile: {
+    analyze: (bookId: string, data?: { genre_hint?: string; text?: string }) =>
+      fetchJSON<StyleProfileOut>(`/api/books/${bookId}/style-profile/analyze`, {
+        method: "POST",
+        body: JSON.stringify(data || {}),
+      }),
+    get: (bookId: string) =>
+      fetchJSON<{ status: string; profile: StyleProfileOut | null }>(
+        `/api/books/${bookId}/style-profile`
+      ),
+    scoreChapter: (bookId: string, chapterNo: number, data?: { content?: string }) =>
+      fetchJSON<ChapterStyleScoreOut>(
+        `/api/books/${bookId}/chapters/${chapterNo}/style-score`,
+        { method: "POST", body: JSON.stringify(data || {}) }
+      ),
+  },
   research: {
     list: (bookId: string) => fetchJSON<ResearchSessionSummary[]>(`/api/books/${bookId}/research-sessions`),
     get: (sessionId: string) => fetchJSON<ResearchSessionDetail>(`/api/research-sessions/${sessionId}`),
@@ -841,6 +857,48 @@ export interface ReferenceSample {
   character_count: number;
   genre_hint?: string | null;
   uploaded_at?: string | null;
+}
+
+export interface StyleMetricVector {
+  surface: Record<string, number>;
+  rhythm: Record<string, number>;
+  dialogue: Record<string, number>;
+  emotion: Record<string, number>;
+  meta?: Record<string, number>;
+}
+
+export interface StyleProfileOut {
+  id: string;
+  book_id: string;
+  version: number;
+  status: string;
+  metric_vector: StyleMetricVector;
+  metric_ranges: Record<string, { target: number; preferred_min: number; preferred_max: number; hard_min: number; hard_max: number }>;
+  fingerprint: number[];
+  narrative_profile: Record<string, unknown>;
+  dialogue_profile: Record<string, unknown>;
+  rhythm_profile: Record<string, unknown>;
+  emotion_expression_profile: Record<string, unknown>;
+  technique_profile: Record<string, unknown>;
+  scene_mode_profiles: Record<string, unknown>;
+  confidence_by_dimension: Record<string, unknown>;
+  analyzer_version: string | null;
+  metric_engine_version: string | null;
+  approved_by: string | null;
+  approved_at: string | null;
+  created_at: string | null;
+}
+
+export interface ChapterStyleScoreOut {
+  chapter_no: number;
+  surface_score: number;
+  rhythm_score: number;
+  dialogue_score: number;
+  narrative_score: number;
+  emotion_score: number;
+  voice_score: number;
+  overall_score: number;
+  distance_to_profile: number;
 }
 
 export interface ResearchSessionSummary {

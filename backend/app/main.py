@@ -23,6 +23,7 @@ from app.routers import imports as imports_router
 from app.routers import prompt_studio as prompt_studio_router
 from app.routers import tasks as tasks_router
 from app.routers import system as system_router
+from app.routers import style as style_router
 from app.api import research as research_router
 
 logger = logging.getLogger("novelforge.main")
@@ -179,6 +180,7 @@ app.include_router(imports_router.router)
 app.include_router(prompt_studio_router.router)
 app.include_router(tasks_router.router)
 app.include_router(system_router.router)
+app.include_router(style_router.router)
 app.include_router(research_router.router)
 
 

@@ -26,6 +26,8 @@ from app.models.tables import (
     ResearchSource, ResearchTask, ResearchDocument, ResearchExport,
     # v9.2 research source certification
     ResearchSourceProbeRun, ResearchSourceVersion,
+    # v9.2 style intelligence engine
+    StyleProfile, ChapterStyleScore,
 )
 
 __all__ = [
@@ -50,4 +52,5 @@ __all__ = [
     "CharacterCoreAnchor", "SceneReasoningContract", "StoryEventEdge",
     "ResearchSource", "ResearchTask", "ResearchDocument", "ResearchExport",
     "ResearchSourceProbeRun", "ResearchSourceVersion",
+    "StyleProfile", "ChapterStyleScore",
 ]

@@ -16,3 +16,7 @@ python-docx>=1.1.0
 pypdf>=4.0.0
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
+# v9.2 Style Intelligence Engine
+jieba>=0.42.1          # 中文分词 / 功能词统计 / 词汇丰富度 (spec §26)
+beautifulsoup4>=4.12.0  # research parser 的 CSS selector 提取
+# trafilatura>=1.8.0   # 通用网页提取 (spec §15) — generic_extractor 接入时启用

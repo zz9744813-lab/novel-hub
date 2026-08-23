@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import { api, GenreProfileSummary, ReferenceSample } from "../api";
 import { Palette, RefreshCw, CheckCircle2, Clock, XCircle, Upload, Sparkles } from "lucide-react";
+import { StyleMetricsPanel } from "./StyleMetricsPanel";
 
 interface Props {
   bookId: string;
@@ -127,6 +128,7 @@ export function GenreProfilePanel({ bookId }: Props) {
 
   return (
     <div className="space-y-4">
+      <StyleMetricsPanel bookId={bookId} />
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-sm text-text-primary" style={{ fontWeight: 510 }}>Genre Profile</h2>

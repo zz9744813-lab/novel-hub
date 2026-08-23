@@ -851,6 +851,55 @@ class GenreProfile(Base):
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+# ---- v9.2 Style Intelligence Engine tables (spec §41, §52) ----
+class StyleProfile(Base, TimestampMixin):
+    """StyleProfile v2 — deterministic metrics + LLM semantic analysis (spec §41)."""
+    __tablename__ = "style_profiles"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+
+    metric_vector: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    metric_ranges: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    fingerprint: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+
+    narrative_profile: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    dialogue_profile: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    rhythm_profile: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    emotion_expression_profile: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    technique_profile: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    scene_mode_profiles: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+
+    confidence_by_dimension: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+
+    analyzer_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    metric_engine_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    approved_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ChapterStyleScore(Base, TimestampMixin):
+    """Per-chapter style score + drift distance (spec §52)."""
+    __tablename__ = "chapter_style_scores"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=False, index=True)
+    chapter_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    surface_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
+    rhythm_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
+    dialogue_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
+    narrative_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
+    emotion_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
+    voice_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
+    overall_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
+    distance_to_profile: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
+    metric_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    __table_args__ = (
+        UniqueConstraint("book_id", "chapter_no", name="uq_chapter_style_scores_book_chapter"),
+    )
+
+
 class ResearchSession(Base):
     __tablename__ = "research_sessions"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)

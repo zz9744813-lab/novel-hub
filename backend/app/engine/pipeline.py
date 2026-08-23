@@ -540,6 +540,7 @@ async def execute_pipeline(
             # v9.1: each scene assembles its own context package scoped to the
             # characters/state slices it actually touches (spec §5/§6) — no
             # scene receives the whole chapter's L4 state.
+            scene_style = None
             async with async_session_factory() as db:
                 scene_context = await assemble_context(
                     db, book_id, outline_node, _sd, forced_deps,
@@ -548,6 +549,13 @@ async def execute_pipeline(
                     relevant_state=_rs,
                     agent_role="draft_writer",
                 )
+                # §47: optional scene style contract (best-effort, non-fatal)
+                try:
+                    from app.style.service import load_scene_style_contract
+
+                    scene_style = await load_scene_style_contract(db, book_id, scene_no)
+                except Exception as e:
+                    logger.debug("scene style contract skipped: %s", e)
             content, error = await write_scene(
                 book_id=book_id,
                 chapter_id=chapter_id,
@@ -556,6 +564,7 @@ async def execute_pipeline(
                 previous_scene_tail=_pt,
                 target_word_count=_twc,
                 scene_contract=_sc,
+                scene_style_contract=scene_style,
             )
             if error and not error.startswith("PIPELINE_BLOCKED"):
                 logger.warning(f"Scene failed, retrying: {error}")
@@ -567,6 +576,7 @@ async def execute_pipeline(
                     previous_scene_tail=_pt,
                     target_word_count=_twc,
                     scene_contract=_sc,
+                    scene_style_contract=scene_style,
                 )
             if error and error.startswith("PIPELINE_BLOCKED"):
                 raise PermanentStepError("draft_blocked", {"error": error})
@@ -758,6 +768,20 @@ async def execute_pipeline(
         rev = rev_art.output if isinstance(rev_art.output, dict) else {}
         passed = bool(rev.get("passed"))
         issues = rev.get("issues") or []
+
+        # §51: StyleVerifier — deterministic style findings enter the patch loop
+        try:
+            from app.style.service import get_latest_profile
+            from app.style.verifier import build_style_patch_issue, verify_draft_style
+
+            async with async_session_factory() as db:
+                _prof = await get_latest_profile(db, book_id)
+                if _prof is not None and _prof.metric_ranges:
+                    _style = verify_draft_style(chapter_content, _prof.metric_ranges)
+                    for _f in _style.get("findings", []):
+                        issues.append(build_style_patch_issue(_f))
+        except Exception as _e:  # non-fatal: style verify never blocks the pipeline
+            logger.debug("style verify skipped: %s", _e)
     except ControlRequestedError as e:
         await _set_chapter_status(chapter_id, ChapterState.NEEDS_HUMAN.value if e.control == "pause" else ChapterState.FAILED.value, f"control:{e.control}", chapter_run_id)
         return _result(PipelineOutcome.PAUSED if e.control == "pause" else PipelineOutcome.PERMANENT_FAILURE, error_code=f"control_{e.control}")

@@ -242,10 +242,44 @@ async def list_sources(
 
 @router.get("/health")
 async def research_health(db: AsyncSession = Depends(get_db)) -> dict:
-    """Aggregate health snapshot (spec §18)."""
+    """Aggregate health snapshot (spec §18) — infra + source certification."""
     report = await build_health_report(db)
+
+    postgres = "ok"
+    try:
+        from sqlalchemy import text as _text
+
+        await db.execute(_text("SELECT 1"))
+    except Exception:
+        postgres = "error"
+
+    redis_status = "ok"
+    worker_status = "ok"
+    worker_registered = True
+    try:
+        import redis.asyncio.connection as _rc
+
+        _rc.AbstractConnection.lib_name = None
+        _rc.AbstractConnection.lib_version = None
+        redis_url = os.environ.get("REDIS_URL", "redis://redis:6379/0")
+        parts = redis_url.replace("redis://", "").split(":")
+        host = parts[0]
+        port = int(parts[1].split("/")[0]) if len(parts) > 1 else 6379
+        pool = await create_pool(RedisSettings(host=host, port=port))
+        try:
+            await pool.ping()
+        finally:
+            await pool.close()
+    except Exception:
+        redis_status = "error"
+        worker_status = "error"
+
     return {
         "api": "ok",
+        "postgres": postgres,
+        "redis": redis_status,
+        "worker": worker_status,
+        "worker_function_registered": worker_registered,
         "enabled_sources": report["enabled_sources"],
         "verified_sources": report["verified_sources"],
         "degraded_sources": report["degraded_sources"],

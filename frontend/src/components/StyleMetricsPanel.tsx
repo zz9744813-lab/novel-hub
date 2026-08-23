@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { api } from "../api";
-import type { StyleProfileOut } from "../api";
+import type { StyleDriftOut, StyleProfileOut } from "../api";
 import { Gauge, Loader2, RefreshCw, Sparkles } from "lucide-react";
 
 function MetricBar({
@@ -36,7 +36,7 @@ function DimensionCard({
   children,
 }: {
   title: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <div className="rounded-card border border-border bg-bg-panel p-3.5">
@@ -48,8 +48,35 @@ function DimensionCard({
   );
 }
 
+function SemanticCard({
+  title,
+  lines,
+  extra,
+}: {
+  title: string;
+  lines: string[];
+  extra?: string | null;
+}) {
+  return (
+    <div className="rounded-card border border-border bg-bg-panel p-3.5">
+      <div className="mb-1.5 text-2xs font-medium uppercase tracking-wide text-text-secondary">
+        {title}
+      </div>
+      <div className="space-y-1">
+        {lines.map((l, i) => (
+          <div key={i} className="text-xs text-text-primary">
+            {l}
+          </div>
+        ))}
+      </div>
+      {extra && <div className="mt-1.5 text-2xs text-text-tertiary">{extra}</div>}
+    </div>
+  );
+}
+
 export function StyleMetricsPanel({ bookId }: { bookId: string }) {
   const [profile, setProfile] = useState<StyleProfileOut | null>(null);
+  const [drift, setDrift] = useState<StyleDriftOut | null>(null);
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -71,6 +98,14 @@ export function StyleMetricsPanel({ bookId }: { bookId: string }) {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (!bookId) return;
+    api.styleProfile
+      .drift(bookId)
+      .then((r) => setDrift(r.drift))
+      .catch(() => {});
+  }, [bookId]);
 
   const analyze = async () => {
     setAnalyzing(true);
@@ -130,7 +165,8 @@ export function StyleMetricsPanel({ bookId }: { bookId: string }) {
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <DimensionCard title="表层 · Surface">
             <MetricBar label="句长均值" value={profile.metric_vector.surface.sentence_chars_mean ?? 0} max={50} unit=" 字" />
             <MetricBar label="段长均值" value={profile.metric_vector.surface.paragraph_chars_mean ?? 0} max={200} unit=" 字" />
@@ -157,6 +193,90 @@ export function StyleMetricsPanel({ bookId }: { bookId: string }) {
             <MetricBar label="内心独白密度" value={profile.metric_vector.emotion.internal_monologue_ratio ?? 0} max={20} unit="/千字" />
           </DimensionCard>
         </div>
+
+        {/* 语义维度（style_analyzer LLM 层，§44） */}
+        {profile.narrative_profile && Object.keys(profile.narrative_profile).length > 0 && (
+          <div className="space-y-2">
+            <div className="text-2xs font-medium uppercase tracking-wide text-text-secondary">
+              语义维度（AI 分析）
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <SemanticCard
+                title="叙述 · Narrative"
+                lines={[
+                  `人称 ${(profile.narrative_profile as any).person || "–"}`,
+                  `距离 ${(profile.narrative_profile as any).distance || "–"}`,
+                  `聚焦 ${(profile.narrative_profile as any).focalization || "–"}`,
+                ]}
+                extra={
+                  (profile.narrative_profile as any).information_release?.length
+                    ? `信息释放：${((profile.narrative_profile as any).information_release as string[]).join("、")}`
+                    : null
+                }
+              />
+              <SemanticCard
+                title="对白 · Dialogue"
+                lines={[
+                  `潜台词 ${((profile.dialogue_profile as any).subtext_level ?? 0).toFixed(2)}`,
+                  `直接度 ${((profile.dialogue_profile as any).directness ?? 0).toFixed(2)}`,
+                ]}
+                extra={
+                  (profile.dialogue_profile as any).speech_action_patterns?.length
+                    ? `动作模式：${((profile.dialogue_profile as any).speech_action_patterns as string[]).join("、")}`
+                    : null
+                }
+              />
+              <SemanticCard
+                title="情绪表达 · Emotion"
+                lines={[
+                  `显性 ${((profile.emotion_expression_profile as any).explicitness ?? 0).toFixed(2)}`,
+                  `身体化 ${((profile.emotion_expression_profile as any).somatic_usage ?? 0).toFixed(2)}`,
+                  `行为化 ${((profile.emotion_expression_profile as any).behavioral_usage ?? 0).toFixed(2)}`,
+                  `克制 ${((profile.emotion_expression_profile as any).suppression ?? 0).toFixed(2)}`,
+                ]}
+              />
+              <SemanticCard
+                title="技法 · Techniques"
+                lines={(profile.technique_profile as any).techniques?.length
+                  ? ((profile.technique_profile as any).techniques as any[]).map(
+                      (t: any) => t.technique || ""
+                    ).filter(Boolean)
+                  : ["（未识别）"]}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* 风格漂移（§53） */}
+        {drift && drift.per_chapter.length > 0 && (
+          <div className="space-y-2">
+            <div className="text-2xs font-medium uppercase tracking-wide text-text-secondary">
+              风格漂移（跨章节）
+            </div>
+            <div className="flex h-16 items-end gap-1">
+              {drift.per_chapter.map((d, i) => (
+                <div
+                  key={i}
+                  className="flex-1 rounded-t"
+                  style={{
+                    height: `${Math.max(6, Math.min(100, d * 40))}%`,
+                    background: d > 1.0 ? "rgba(224,85,85,0.6)" : "rgba(139,142,255,0.55)",
+                  }}
+                  title={`第${i + 1}章 · 距离 ${d}`}
+                />
+              ))}
+            </div>
+            <div className="flex flex-wrap justify-between gap-2 text-2xs text-text-disabled">
+              <span>最近 {drift.latest_distance}</span>
+              <span>均值 {drift.style_distance_mean}</span>
+              <span>峰值 {drift.style_distance_max}</span>
+              {drift.drift_triggered && (
+                <span className="text-warning">⚠ 已触发漂移告警</span>
+              )}
+            </div>
+          </div>
+        )}
+        </>
       )}
     </div>
   );

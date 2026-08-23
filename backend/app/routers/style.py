@@ -15,13 +15,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import Chapter, ChapterVersion, StyleProfile
+from app.models import Chapter, ChapterStyleScore, ChapterVersion, StyleProfile
 from app.style.service import (
     create_style_profile,
     load_reference_text,
     score_chapter_against_profile,
     upsert_chapter_score,
 )
+from app.style.verifier import compute_style_drift, verify_draft_style
 
 router = APIRouter(prefix="/api/books", tags=["style"])
 
@@ -166,3 +167,44 @@ async def score_chapter_style(
         "overall_score": row.overall_score,
         "distance_to_profile": row.distance_to_profile,
     }
+
+
+@router.post("/{book_id}/chapters/{chapter_no}/style-verify")
+async def verify_chapter_style(
+    book_id: str,
+    chapter_no: int,
+    req: ScoreRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Deterministic style verification against the profile's metric ranges (spec §48, §49)."""
+    bid = _uuid(book_id, "book_id")
+    profile = await _latest_profile(db, bid)
+    if profile is None:
+        raise HTTPException(status_code=409, detail="尚未生成文风档案。请先执行风格分析。")
+    content = (req.content or "").strip() or await _chapter_content(db, bid, chapter_no)
+    if not content.strip():
+        raise HTTPException(status_code=409, detail="章节没有正文内容")
+    result = verify_draft_style(content, profile.metric_ranges)
+    return result
+
+
+@router.get("/{book_id}/style-drift")
+async def get_style_drift(
+    book_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Rolling style drift across chapters (spec §53)."""
+    bid = _uuid(book_id, "book_id")
+    profile = await _latest_profile(db, bid)
+    if profile is None:
+        return {"status": "not_found", "drift": None}
+    rows = (
+        await db.execute(
+            select(ChapterStyleScore)
+            .where(ChapterStyleScore.book_id == bid)
+            .order_by(ChapterStyleScore.chapter_no.asc())
+        )
+    ).scalars().all()
+    ref_fp = [float(x) for x in (profile.fingerprint or [])]
+    drift = compute_style_drift(ref_fp, [r.metric_json for r in rows])
+    return {"status": "ok", "drift": drift, "chapter_count": len(rows)}

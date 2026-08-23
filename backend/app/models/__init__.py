@@ -27,7 +27,7 @@ from app.models.tables import (
     # v9.2 research source certification
     ResearchSourceProbeRun, ResearchSourceVersion,
     # v9.2 style intelligence engine
-    StyleProfile, ChapterStyleScore,
+    StyleProfile, ChapterStyleScore, StyleSampleSegment, SceneStyleContract,
 )
 
 __all__ = [
@@ -52,5 +52,5 @@ __all__ = [
     "CharacterCoreAnchor", "SceneReasoningContract", "StoryEventEdge",
     "ResearchSource", "ResearchTask", "ResearchDocument", "ResearchExport",
     "ResearchSourceProbeRun", "ResearchSourceVersion",
-    "StyleProfile", "ChapterStyleScore",
+    "StyleProfile", "ChapterStyleScore", "StyleSampleSegment", "SceneStyleContract",
 ]

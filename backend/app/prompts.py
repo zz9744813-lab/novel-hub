@@ -169,6 +169,23 @@ attributions 只能从输入提供的 core_anchor_ids / belief_keys / goal_keys 
         "input_variables": ["premise", "genre", "tone", "themes", "target_chapter_count"],
         "output_schema": {"type": "object", "properties": {"title": {"type": "string"}, "logline": {"type": "string"}, "synopsis": {"type": "string"}, "genre": {"type": "string"}, "tone": {"type": "string"}, "themes": {"type": "array"}, "chapters": {"type": "array"}}},
     },
+    "style_analyzer": {
+        "version": "v2",
+        "system_prompt": """你是"文风分析 Agent"。你只判断难以定量的高层语义维度，不重新计算句长、对话率等已由 Python 提供的确定性指标。
+
+输入包含：分段采样元数据、确定性风格指标（deterministic metrics）、体裁提示。输出结构化 JSON，每个语义维度必须带 support_segment_ids（支撑该判断的采样段编号），不得把参考原句塞进输出。
+
+判断维度：
+- narrative：叙述人称 person、叙述距离 distance、聚焦方式 focalization、信息释放方式 information_release
+- dialogue：潜台词程度 subtext_level(0-1)、直接程度 directness(0-1)、对白动作模式 speech_action_patterns
+- emotion_expression：情绪显性 explicitness(0-1)、身体化 somatic_usage(0-1)、行为化 behavioral_usage(0-1)、克制 suppression(0-1)
+- techniques：叙事技法列表，每条含 technique/trigger_context/effect/use_frequency/avoid_when/confidence
+- scene_modes：按场景类型的风格倾向
+
+规则：不得复制参考文本连续 15 字以上；成人/暴力内容只描述表现方式与叙事作用，不复制片段；confidence 是判断置信度不是概率。输出只能是 JSON。""",
+        "input_variables": ["segments", "deterministic_metrics", "genre_hint"],
+        "output_schema": {"type": "object", "properties": {"narrative": {"type": "object"}, "dialogue": {"type": "object"}, "emotion_expression": {"type": "object"}, "techniques": {"type": "array"}, "scene_modes": {"type": "object"}, "confidence_by_dimension": {"type": "object"}, "warnings": {"type": "array"}}},
+    },
 }
 
 # Model assignment per agent
@@ -187,6 +204,7 @@ _DEFAULT_MODELS = {
     "drift_audit": "deepseek-v4-flash",
     "query_planner": "deepseek-v4-flash",
     "evidence_ranker": "deepseek-v4-flash",
+    "style_analyzer": "deepseek-v4-flash",
 }
 
 _ENV_MAP = {
@@ -200,6 +218,7 @@ _ENV_MAP = {
     "drift_audit": "REVIEW_MODEL",
     "query_planner": "QUERY_MODEL",
     "evidence_ranker": "RANKER_MODEL",
+    "style_analyzer": "QUERY_MODEL",
 }
 
 AGENT_MODELS = {
@@ -219,6 +238,7 @@ AGENT_TEMPERATURES = {
     "drift_audit": 0.0,
     "query_planner": 0.1,
     "evidence_ranker": 0.0,
+    "style_analyzer": 0.1,
 }
 
 # Whether agent outputs JSON or prose
@@ -233,6 +253,7 @@ AGENT_IS_JSON = {
     "drift_audit": True,
     "query_planner": True,
     "evidence_ranker": True,
+    "style_analyzer": True,
 }
 
 

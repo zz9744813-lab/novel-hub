@@ -7,6 +7,7 @@ The LLM (style_analyzer) fills the semantic dimensions separately.
 from __future__ import annotations
 
 import gzip
+import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,12 +15,14 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import ChapterStyleScore, ReferenceSample, StyleProfile
+from app.models import ChapterStyleScore, ReferenceSample, SceneStyleContract, StyleProfile
 from app.style.metrics import (
     compute_fingerprint,
     extract_style_metrics,
     fingerprint_distance,
 )
+
+logger = logging.getLogger("novelforge.style")
 
 METRIC_ENGINE_VERSION = "1.0"
 ANALYZER_VERSION = "style_analyzer_v2"
@@ -112,6 +115,49 @@ def build_metric_ranges(metric_list: list[dict]) -> dict:
     return ranges
 
 
+def aggregate_multiple_references(refs: list[tuple[dict, float]]) -> dict:
+    """Weighted metric aggregation across multiple references (spec §38).
+
+    refs: list of (metric_vector, weight). Weights normalize internally.
+    Returns {"metric_vector": merged, "conflicts": [...]} — a STYLE_CONFLICT is
+    raised when a key dimension (dialogue ratio) spreads too far across sources.
+    """
+    if not refs:
+        return {"metric_vector": {}, "conflicts": []}
+    total_w = sum(w for _, w in refs) or 1.0
+
+    fields: dict[str, set] = {}
+    for mv, _ in refs:
+        for section in ("surface", "rhythm", "dialogue", "emotion"):
+            for f in mv.get(section, {}):
+                fields.setdefault(section, set()).add(f)
+
+    merged: dict = {s: {} for s in ("surface", "rhythm", "dialogue", "emotion")}
+    for section, fset in fields.items():
+        for f in fset:
+            vals: list[tuple[float, float]] = []
+            for mv, w in refs:
+                v = mv.get(section, {}).get(f)
+                if isinstance(v, (int, float)):
+                    vals.append((float(v), w))
+            if vals:
+                weighted = sum(v * w for v, w in vals) / total_w
+                merged[section][f] = round(weighted, 4)
+
+    conflicts: list[dict] = []
+    d_ratios = [
+        mv.get("dialogue", {}).get("dialogue_ratio")
+        for mv, _ in refs
+        if isinstance(mv.get("dialogue", {}).get("dialogue_ratio"), (int, float))
+    ]
+    if len(d_ratios) >= 2 and (max(d_ratios) - min(d_ratios)) > 0.3:
+        conflicts.append(
+            {"dimension": "dialogue_ratio", "spread": round(max(d_ratios) - min(d_ratios), 3)}
+        )
+
+    return {"metric_vector": merged, "conflicts": conflicts}
+
+
 def build_profile_payload(text: str, genre_hint: str | None = None) -> dict:
     """Deterministic StyleProfile v2 payload from reference text."""
     segments = stratified_sample(text)
@@ -150,13 +196,50 @@ async def load_reference_text(db: AsyncSession, book_id: uuid.UUID) -> str:
     return "\n\n".join(parts)
 
 
+async def load_scene_style_contract(
+    db: AsyncSession, book_id: uuid.UUID, scene_no: int
+) -> dict | None:
+    """Load a scene's style contract for DraftWriter (spec §45, §47). Best-effort."""
+    row = (
+        await db.execute(
+            select(SceneStyleContract).where(
+                SceneStyleContract.book_id == book_id,
+                SceneStyleContract.scene_no == scene_no,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return None
+    return {
+        "scene_no": row.scene_no,
+        "scene_mode": row.scene_mode,
+        "targets": row.targets,
+        "semantic": row.semantic,
+        "avoid": row.avoid,
+    }
+
+
+async def get_latest_profile(db: AsyncSession, book_id: uuid.UUID) -> StyleProfile | None:
+    """Latest StyleProfile for a book (shared by router + pipeline)."""
+    return (
+        await db.execute(
+            select(StyleProfile)
+            .where(StyleProfile.book_id == book_id)
+            .order_by(StyleProfile.version.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
 async def create_style_profile(
     db: AsyncSession,
     *,
     book_id: uuid.UUID,
     reference_text: str,
     genre_hint: str | None = None,
+    run_llm: bool = True,
 ) -> StyleProfile:
+    segments = stratified_sample(reference_text)
     payload = build_profile_payload(reference_text, genre_hint)
     latest = (
         await db.execute(
@@ -186,6 +269,38 @@ async def create_style_profile(
         metric_engine_version=METRIC_ENGINE_VERSION,
     )
     db.add(profile)
+    await db.flush()
+
+    # Semantic layer: dedicated style_analyzer agent (spec §43). Best-effort —
+    # deterministic metrics are already persisted, LLM failure is non-fatal.
+    if run_llm and segments:
+        try:
+            from app.agents.style_analyzer import run_style_analyzer
+
+            result = await run_style_analyzer(
+                book_id,
+                segments=segments,
+                deterministic_metrics=payload["metric_vector"],
+                genre_hint=genre_hint,
+            )
+            if "error" not in result:
+                profile.narrative_profile = result.get("narrative", {}) or {}
+                profile.dialogue_profile = result.get("dialogue", {}) or {}
+                profile.emotion_expression_profile = result.get("emotion_expression", {}) or {}
+                profile.technique_profile = {
+                    "techniques": result.get("techniques", []) or []
+                }
+                profile.scene_mode_profiles = result.get("scene_modes", {}) or {}
+                profile.confidence_by_dimension = result.get("confidence_by_dimension", {}) or {}
+                if result.get("warnings"):
+                    profile.confidence_by_dimension = {
+                        **profile.confidence_by_dimension,
+                        "warnings": result["warnings"],
+                    }
+                profile.analyzer_version = f"{ANALYZER_VERSION}+llm"
+        except Exception as e:  # pragma: no cover - LLM best-effort
+            logger.warning("style_analyzer enrich failed book=%s: %s", book_id, e)
+
     return profile
 
 

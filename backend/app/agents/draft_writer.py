@@ -40,6 +40,7 @@ async def write_scene(
     previous_scene_tail: str = "",
     target_word_count: int = 2000,
     scene_contract: dict | SceneContract | None = None,
+    scene_style_contract: dict | None = None,
     **_deprecated,
 ) -> tuple[str | None, str | None]:
     """Write a single scene. Returns (content, error_reason)."""
@@ -51,6 +52,7 @@ async def write_scene(
         {
             "scene_plan": scene_plan,
             "scene_contract": contract_payload,
+            "scene_style_contract": scene_style_contract,  # spec §47
             "context_package": context_package,
             "previous_scene_tail": previous_scene_tail,
             "target_word_count": target_word_count,

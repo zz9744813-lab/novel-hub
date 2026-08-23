@@ -37,6 +37,7 @@ STRICT_ROLES = {
     "evidence_ranker",
     "aileak_judge",
     "drift_audit",
+    "style_analyzer",
 }
 
 

@@ -11,6 +11,8 @@ from typing import Any
 
 from bs4 import BeautifulSoup, Tag
 
+from app.research.parser import FALLBACK_CONTENT_SELECTORS
+
 # Minimum content floor before a selector is considered a viable candidate.
 MIN_CANDIDATE_CHARS = 50
 
@@ -59,3 +61,23 @@ def rank_content_candidates(
             )
     results.sort(key=lambda r: (-r["score"], -r["chars"]))
     return results[:limit]
+
+
+def content_selectors_from_config(config: dict) -> list[str]:
+    """Resolve content selectors from a config (spec §12, §13).
+
+    Supports the legacy single `content_selector` string and the Rule v2
+    `content_selectors` list, then appends fallback candidates. The parser
+    tries each in order and quality-scores the best match.
+    """
+    selectors: list[str] = []
+    legacy = config.get("content_selector")
+    if legacy:
+        selectors.append(str(legacy))
+    for s in config.get("content_selectors", []) or []:
+        if s and s not in selectors:
+            selectors.append(str(s))
+    for s in FALLBACK_CONTENT_SELECTORS:
+        if s not in selectors:
+            selectors.append(s)
+    return selectors

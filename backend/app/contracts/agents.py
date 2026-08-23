@@ -204,6 +204,59 @@ class DriftAuditContract(StrictModel):
     redline_findings: list[Any] = Field(default_factory=list)
 
 
+# ── v9.2 style analyzer (spec §44) ─────────────────────────────────
+
+# Semantic dimensions are judgment outputs; allow int→float coercion and
+# ignore unknown keys so a minor LLM drift doesn't fail-closed the whole call.
+
+
+class StyleNarrativeContract(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    person: str = ""
+    distance: str = ""
+    focalization: str = ""
+    information_release: list[str] = Field(default_factory=list)
+    support_segment_ids: list[int] = Field(default_factory=list)
+
+
+class StyleDialogueContract(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    subtext_level: float = 0.0
+    directness: float = 0.0
+    speech_action_patterns: list[str] = Field(default_factory=list)
+    support_segment_ids: list[int] = Field(default_factory=list)
+
+
+class StyleEmotionExpressionContract(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    explicitness: float = 0.0
+    somatic_usage: float = 0.0
+    behavioral_usage: float = 0.0
+    suppression: float = 0.0
+    support_segment_ids: list[int] = Field(default_factory=list)
+
+
+class StyleTechniqueContract(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    technique: str = ""
+    trigger_context: list[str] = Field(default_factory=list)
+    effect: str = ""
+    use_frequency: str = "medium"
+    avoid_when: list[str] = Field(default_factory=list)
+    confidence: float = 0.8
+
+
+class StyleAnalyzerContract(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    narrative: StyleNarrativeContract = Field(default_factory=StyleNarrativeContract)
+    dialogue: StyleDialogueContract = Field(default_factory=StyleDialogueContract)
+    emotion_expression: StyleEmotionExpressionContract = Field(default_factory=StyleEmotionExpressionContract)
+    techniques: list[StyleTechniqueContract] = Field(default_factory=list)
+    scene_modes: dict[str, Any] = Field(default_factory=dict)
+    confidence_by_dimension: dict[str, float] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+
+
 # ── registry ────────────────────────────────────────────────────────
 
 ROLE_CONTRACTS: dict[str, Type[BaseModel]] = {
@@ -216,6 +269,7 @@ ROLE_CONTRACTS: dict[str, Type[BaseModel]] = {
     "outline_parser": OutlineParseContract,
     "blank_planner": BlankPlanningContract,
     "drift_audit": DriftAuditContract,
+    "style_analyzer": StyleAnalyzerContract,
     # research_synth / aileak_judge: soft — no strict contract yet
 }
 

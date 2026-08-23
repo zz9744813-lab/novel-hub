@@ -225,3 +225,21 @@ def fingerprint_distance(a: list[float], b: list[float]) -> float:
         return float("inf")
     s = sum((x - y) ** 2 for x, y in zip(a, b))
     return round(s ** 0.5, 4)
+
+
+def detect_scene_type(metrics: dict) -> str:
+    """Heuristic scene type classification (spec §37).
+
+    dialogue / action / introspection / exposition — used to build Scene Mode
+    Style so a fight scene's short sentences don't become the global target.
+    """
+    dialogue = float(metrics.get("dialogue", {}).get("dialogue_ratio", 0.0))
+    internal = float(metrics.get("emotion", {}).get("internal_monologue_ratio", 0.0))
+    short = float(metrics.get("rhythm", {}).get("short_sentence_ratio", 0.0))
+    if dialogue >= 0.4:
+        return "dialogue"
+    if internal >= 2.0:
+        return "introspection"
+    if short >= 0.6:
+        return "action"
+    return "exposition"

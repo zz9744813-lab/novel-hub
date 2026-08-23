@@ -349,6 +349,15 @@ export const api = {
         `/api/books/${bookId}/chapters/${chapterNo}/style-score`,
         { method: "POST", body: JSON.stringify(data || {}) }
       ),
+    verifyChapter: (bookId: string, chapterNo: number, data?: { content?: string }) =>
+      fetchJSON<StyleVerifyOut>(
+        `/api/books/${bookId}/chapters/${chapterNo}/style-verify`,
+        { method: "POST", body: JSON.stringify(data || {}) }
+      ),
+    drift: (bookId: string) =>
+      fetchJSON<{ status: string; drift: StyleDriftOut | null; chapter_count: number }>(
+        `/api/books/${bookId}/style-drift`
+      ),
   },
   research: {
     list: (bookId: string) => fetchJSON<ResearchSessionSummary[]>(`/api/books/${bookId}/research-sessions`),
@@ -899,6 +908,27 @@ export interface ChapterStyleScoreOut {
   voice_score: number;
   overall_score: number;
   distance_to_profile: number;
+}
+
+export interface StyleFinding {
+  code: string;
+  target: number[];
+  actual: number;
+  severity: string;
+}
+
+export interface StyleVerifyOut {
+  passed: boolean;
+  findings: StyleFinding[];
+  metrics: StyleMetricVector;
+}
+
+export interface StyleDriftOut {
+  style_distance_mean: number;
+  style_distance_max: number;
+  latest_distance: number;
+  drift_triggered: boolean;
+  per_chapter: number[];
 }
 
 export interface ResearchSessionSummary {

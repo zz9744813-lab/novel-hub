@@ -900,6 +900,46 @@ class ChapterStyleScore(Base, TimestampMixin):
     )
 
 
+class StyleSampleSegment(Base, TimestampMixin):
+    """A stratified text segment of a reference sample (spec §42).
+
+    Original long text stays only in ReferenceSample; this stores the segment's
+    deterministic metrics + optional semantic analysis, never the raw copy.
+    """
+    __tablename__ = "style_sample_segments"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    reference_sample_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("reference_samples.id"), nullable=False, index=True
+    )
+    segment_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    scene_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    source_position_bucket: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    start_char: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    end_char: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    char_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    metric_vector: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    semantic_analysis: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+
+
+class SceneStyleContract(Base, TimestampMixin):
+    """Per-scene style contract (spec §45): numeric targets + semantic guidance."""
+    __tablename__ = "scene_style_contracts"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=False, index=True)
+    style_profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("style_profiles.id"), nullable=True
+    )
+    scene_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    scene_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="general")
+    targets: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    semantic: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    avoid: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    __table_args__ = (
+        UniqueConstraint("book_id", "scene_no", name="uq_scene_style_contracts_book_scene"),
+    )
+
+
 class ResearchSession(Base):
     __tablename__ = "research_sessions"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)

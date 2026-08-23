@@ -70,6 +70,33 @@ def _longest_common_substring_capped(a: str, b: str, max_b: int = 8000) -> str:
     return best
 
 
+# Named-entity extraction patterns (spec §54). Heuristic NER without a heavy
+# model: book-title marks 《》, quote marks 「」, and capitalized Latin names.
+_ENTITY_PATTERNS = [
+    re.compile(r"《([^》]{1,24})》"),
+    re.compile(r"「([^」]{2,20})」"),
+    re.compile(r"\b[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){0,3}\b"),
+]
+
+
+def _extract_named_entities(text: str) -> set[str]:
+    entities: set[str] = set()
+    for pat in _ENTITY_PATTERNS:
+        for m in pat.finditer(text or ""):
+            ent = m.group(1).strip()
+            if ent:
+                entities.add(ent)
+    return entities
+
+
+def _named_entity_violations(candidate: str, reference_entities: set[str]) -> list[dict]:
+    out = []
+    for ent in reference_entities:
+        if len(ent) >= 2 and ent in candidate:
+            out.append({"entity": ent[:50]})
+    return out
+
+
 def sanitize_genre_profile(
     profile: dict[str, Any],
     reference_text: str,
@@ -101,6 +128,16 @@ def sanitize_genre_profile(
             report["exact_span_violations"].append({"span": lcs[:50], "length": len(lcs)})
             report["passed"] = False
 
+    # Named-entity violations (spec §54): reference-specific names must not leak
+    ref_entities = _extract_named_entities(ref_sample)
+    if ref_entities:
+        for cand in candidates:
+            if not cand:
+                continue
+            for v in _named_entity_violations(cand, ref_entities):
+                report["named_entity_violations"].append(v)
+                report["passed"] = False
+
     ref_ng = _ngrams(ref_sample, 5)
     for cand in candidates:
         if not cand or len(cand) < 20:
@@ -122,7 +159,11 @@ def sanitize_genre_profile(
         report["manual_review_required"] = True
         report["passed"] = False
 
-    if report["exact_span_violations"] or report["high_similarity_sentences"]:
+    if (
+        report["exact_span_violations"]
+        or report["high_similarity_sentences"]
+        or report["named_entity_violations"]
+    ):
         report["manual_review_required"] = True
 
     return report

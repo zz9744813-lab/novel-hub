@@ -33,6 +33,8 @@ from app.models.tables import (
     EditorialAnnotation, EditorialFeedbackInsight, EditorialExperienceCard,
     EditorialPreferencePair, EditorialImprovementProposal,
     EditorialRegressionCase, EditorialExperiment,
+    # v9.4 autonomous writing session
+    WritingSession, WritingSessionEvent, SessionAdvanceOutbox,
 )
 
 __all__ = [
@@ -62,4 +64,5 @@ __all__ = [
     "EditorialAnnotation", "EditorialFeedbackInsight", "EditorialExperienceCard",
     "EditorialPreferencePair", "EditorialImprovementProposal",
     "EditorialRegressionCase", "EditorialExperiment",
+    "WritingSession", "WritingSessionEvent", "SessionAdvanceOutbox",
 ]

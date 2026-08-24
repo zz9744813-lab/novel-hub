@@ -627,6 +627,15 @@ async def submit_review_round(
         "reject": "rejected",
     }
     chapter.editorial_status = status_map[req.verdict]
+    # v9.4: submitting a verdict may release a session stuck on editorial
+    # backlog — poke it inside the same transaction (spec §24, outbox only).
+    try:
+        from app.services.writing_session_service import poke_waiting_editorial_sessions
+
+        await poke_waiting_editorial_sessions(db, rnd.book_id)
+    except Exception:  # noqa: BLE001 - never block a verdict on session poke
+        logger.warning("failed to poke waiting_editorial sessions", exc_info=True)
+
     await db.commit()
 
     # fire-and-forget analysis; worker owns failure handling

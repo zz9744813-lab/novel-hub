@@ -207,7 +207,12 @@ class ChapterRun(Base, TimestampMixin):
     created_by: Mapped[str] = mapped_column(Text, nullable=False, default="api")
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    __table_args__ = (UniqueConstraint("chapter_id", "request_id"),)
+    # v9.4: owning writing session, NULL for manual single-run chapters
+    writing_session_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    __table_args__ = (
+        UniqueConstraint("chapter_id", "request_id"),
+        Index("ix_chapter_runs_session_status", "writing_session_id", "status"),
+    )
 
 
 class ChapterStepRun(Base, TimestampMixin):
@@ -251,6 +256,76 @@ class ChapterDispatchOutbox(Base, TimestampMixin):
     locked_by: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class WritingSession(Base, TimestampMixin):
+    """v9.4: one time-window autonomous writing session per book (spec §4.1)."""
+    __tablename__ = "writing_sessions"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=False, index=True)
+    mode: Mapped[str] = mapped_column(String(20), nullable=False, default="duration")  # duration|until_time|manual
+    requested_duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="created", index=True)
+    control_requested: Mapped[str] = mapped_column(String(15), nullable=False, default="none")  # none|pause|cancel
+    current_chapter_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    current_chapter_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    current_chapter_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    chapters_started: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    chapters_completed: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    words_generated: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    create_idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    policy_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    policy_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    stop_reason: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    stop_detail: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    reconcile_lease_owner: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    reconcile_lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    __table_args__ = (
+        Index("ix_writing_sessions_book_key", "book_id", "create_idempotency_key"),
+    )
+
+
+class WritingSessionEvent(Base):
+    """Immutable per-session event log with dedupe (spec §4.2)."""
+    __tablename__ = "writing_session_events"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("writing_sessions.id"), nullable=False, index=True
+    )
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    source_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    source_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    dedupe_key: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    __table_args__ = (UniqueConstraint("session_id", "dedupe_key"),)
+
+
+class SessionAdvanceOutbox(Base, TimestampMixin):
+    """Transactional outbox for session advancement (spec §4.3)."""
+    __tablename__ = "session_advance_outbox"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    writing_session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("writing_sessions.id"), nullable=False
+    )
+    completed_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False, default="advance_writing_session")
+    dedupe_key: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    locked_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    __table_args__ = (Index("ix_sao_session_status", "writing_session_id", "status"),)
 
 
 # ---- Scene & paragraph tables ----

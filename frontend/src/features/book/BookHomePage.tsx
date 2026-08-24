@@ -216,7 +216,7 @@ export function BookHomePage({
       <div className="flex flex-col md:flex-row gap-5">
         <div
           className="w-full md:w-40 h-56 rounded-lg shrink-0 border border-border shadow-md overflow-hidden"
-          style={{ background: style?.background || "#1a1a2e" }}
+          style={{ background: style?.background || "rgb(var(--nf-bg-elevated))" }}
         >
           {coverSrc ? (
             <img src={coverSrc} alt={`${book?.title || ""} 封面`} className="h-full w-full object-cover" />

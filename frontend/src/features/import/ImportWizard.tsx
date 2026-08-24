@@ -132,7 +132,7 @@ export function ImportWizard({
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg-canvas/60 p-4" onClick={onClose}>
       <div
         className="bg-bg-elevated border border-border rounded-lg w-full max-w-xl max-h-[90vh] overflow-auto p-5 space-y-4"
         onClick={(e) => e.stopPropagation()}

@@ -31,7 +31,7 @@ const STATUS_META: Record<string, { label: string; cls: string }> = {
   revising: { label: "修改中", cls: "bg-[#c084fc]/10 border-[#c084fc]/30 text-[#c084fc]" },
   awaiting_recheck: { label: "待复检", cls: "bg-cyan-400/10 border-cyan-400/30 text-cyan-300" },
   rejected: { label: "已拒绝", cls: "bg-danger/10 border-danger/30 text-danger" },
-  waived: { label: "免审", cls: "bg-white/5 border-white/15 text-text-tertiary" },
+  waived: { label: "免审", cls: "bg-bg-panel/5 border-border-standard/15 text-text-tertiary" },
 };
 
 const MODE_META: Record<string, { label: string; desc: string }> = {
@@ -49,7 +49,7 @@ const FILTERS: Array<{ key: string; label: string }> = [
 ];
 
 function statusMeta(status: string) {
-  return STATUS_META[status] ?? { label: status, cls: "bg-white/5 border-white/15 text-text-tertiary" };
+  return STATUS_META[status] ?? { label: status, cls: "bg-bg-panel/5 border-border-standard/15 text-text-tertiary" };
 }
 
 function fmtHours(h: number): string {
@@ -213,7 +213,7 @@ export function EditorialPage({ bookId }: { bookId?: string }) {
                     className={`text-left p-3 rounded-lg border transition-all ${
                       policy.mode === mode
                         ? "border-brand-accent/50 bg-brand-accent/10"
-                        : "border-white/8 hover:bg-white/5"
+                        : "border-border-standard/8 hover:bg-bg-hover/5"
                     }`}
                   >
                     <p className="text-xs text-text-primary" style={{ fontWeight: 540 }}>
@@ -342,7 +342,7 @@ export function EditorialPage({ bookId }: { bookId?: string }) {
             className={`px-3 py-1.5 rounded-full text-xs transition-all border flex items-center gap-1.5 ${
               view === key
                 ? "bg-brand-accent/15 border-brand-accent/40 text-brand-accent"
-                : "border-white/10 text-text-tertiary hover:text-text-secondary hover:bg-white/5"
+                : "border-border-standard/10 text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/5"
             }`}
           >
             <Icon size={12} />
@@ -376,7 +376,7 @@ export function EditorialPage({ bookId }: { bookId?: string }) {
             className={`px-3 py-1.5 rounded-full text-xs transition-all border ${
               filter === f.key
                 ? "bg-brand-accent/15 border-brand-accent/40 text-brand-accent"
-                : "border-white/10 text-text-tertiary hover:text-text-secondary hover:bg-white/5"
+                : "border-border-standard/10 text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/5"
             }`}
           >
             {f.label}
@@ -410,7 +410,7 @@ export function EditorialPage({ bookId }: { bookId?: string }) {
             return (
               <div
                 key={card.chapter_id}
-                className="panel rounded-card p-4 space-y-3 hover:border-white/15 transition-colors"
+                className="panel rounded-card p-4 space-y-3 hover:border-border-strong/15 transition-colors"
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">

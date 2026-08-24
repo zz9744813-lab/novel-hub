@@ -94,7 +94,7 @@ export function CreateBookModal({ onClose }: { onClose: () => void }) {
 
   return (
     <div
-      className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-6"
+      className="fixed inset-0 bg-bg-canvas/70 flex items-center justify-center z-50 p-6"
       onClick={onClose}
     >
       <div

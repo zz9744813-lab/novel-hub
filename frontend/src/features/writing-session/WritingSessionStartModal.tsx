@@ -73,7 +73,7 @@ export function WritingSessionStartModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg-canvas/60" onClick={onClose}>
       <div
         className="panel-elevated rounded-xl w-full max-w-md p-5 space-y-4"
         onClick={(e) => e.stopPropagation()}

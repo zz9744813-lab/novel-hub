@@ -38,11 +38,11 @@ const SEVERITY_LABELS: Record<string, string> = {
 };
 
 const SEVERITY_COLORS: Record<string, string> = {
-  critical: "#f87171",
+  critical: "rgb(var(--nf-danger))",
   major: "#fb923c",
-  minor: "#facc15",
-  note: "#94a3b8",
-  praise: "#4ade80",
+  minor: "rgb(var(--nf-warning))",
+  note: "rgb(var(--nf-text-tertiary))",
+  praise: "rgb(var(--nf-success))",
 };
 
 const VERDICT_LABELS: Record<string, string> = {
@@ -287,7 +287,7 @@ export function ReviewWorkbench({
 
   if (error) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-6">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg-canvas/70 backdrop-blur-sm p-6">
         <div className="panel-elevated p-6 max-w-md space-y-3">
           <p className="text-sm text-danger">加载审核失败</p>
           <p className="text-xs text-text-tertiary break-all">{error}</p>
@@ -301,7 +301,7 @@ export function ReviewWorkbench({
 
   if (!detail) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg-canvas/70 backdrop-blur-sm">
         <Loader2 size={24} className="animate-spin text-brand-accent" />
       </div>
     );
@@ -310,9 +310,9 @@ export function ReviewWorkbench({
   const { round, chapter } = detail;
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-black/75 backdrop-blur-md animate-fade-in">
+    <div className="fixed inset-0 z-50 flex flex-col bg-bg-canvas/75 backdrop-blur-md animate-fade-in">
       {/* header */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-white/10 shrink-0">
+      <div className="flex items-center justify-between px-5 py-3 border-b border-border-standard/10 shrink-0">
         <div className="flex items-center gap-3 min-w-0">
           <ClipboardCheck size={18} className="text-brand-accent shrink-0" />
           <div className="min-w-0">
@@ -350,7 +350,7 @@ export function ReviewWorkbench({
                 <div key={i} className="group">
                   <p
                     className={`relative text-sm leading-7 text-text-primary/90 rounded px-2 py-1 -mx-2 transition-colors ${
-                      hasBlocking ? "bg-danger/5" : "hover:bg-white/[0.03]"
+                      hasBlocking ? "bg-danger/5" : "hover:bg-bg-hover/[0.03]"
                     }`}
                     data-para={i}
                   >
@@ -363,7 +363,7 @@ export function ReviewWorkbench({
                     <div
                       key={a.id}
                       className="ml-2 my-1.5 pl-3 py-1.5 rounded-r-md space-y-0.5"
-                      style={{ borderLeft: `2px solid ${SEVERITY_COLORS[a.severity] ?? "#94a3b8"}` }}
+                      style={{ borderLeft: `2px solid ${SEVERITY_COLORS[a.severity] ?? "rgb(var(--nf-text-tertiary))"}` }}
                     >
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-2xs" style={{ color: SEVERITY_COLORS[a.severity] }}>
@@ -410,9 +410,9 @@ export function ReviewWorkbench({
         )}
 
         {/* side panel */}
-        <div className="w-[380px] shrink-0 border-l border-white/10 flex flex-col min-h-0">
+        <div className="w-[380px] shrink-0 border-l border-border-standard/10 flex flex-col min-h-0">
           {/* tabs */}
-          <div className="flex border-b border-white/10 shrink-0">
+          <div className="flex border-b border-border-standard/10 shrink-0">
             {(
               [
                 ["annotations", `批注 (${detail.annotations.length})`],
@@ -542,7 +542,7 @@ export function ReviewWorkbench({
                   <div
                     key={a.id}
                     className="panel rounded-lg p-3 space-y-1.5"
-                    style={{ borderLeft: `2px solid ${SEVERITY_COLORS[a.severity] ?? "#94a3b8"}` }}
+                    style={{ borderLeft: `2px solid ${SEVERITY_COLORS[a.severity] ?? "rgb(var(--nf-text-tertiary))"}` }}
                   >
                     <div className="flex items-center gap-2">
                       <span className="text-2xs" style={{ color: SEVERITY_COLORS[a.severity] }}>
@@ -602,7 +602,7 @@ export function ReviewWorkbench({
                         <AlertTriangle size={12} className={color} />
                         <span className={`text-xs ${color}`}>{iss.issue_type}</span>
                         {mine && (
-                          <span className="badge bg-white/5 border-white/10 text-text-tertiary ml-auto text-2xs">
+                          <span className="badge bg-bg-panel/5 border-border-standard/10 text-text-tertiary ml-auto text-2xs">
                             {mine === "confirmed"
                               ? "已确认"
                               : mine === "dismissed"
@@ -694,7 +694,7 @@ export function ReviewWorkbench({
                       </div>
                     );
                   })}
-                  <div className="flex items-center justify-between pt-1 border-t border-white/10">
+                  <div className="flex items-center justify-between pt-1 border-t border-border-standard/10">
                     <span className="text-xs text-text-tertiary">总分</span>
                     <span className="text-base text-text-primary tabular-nums" style={{ fontWeight: 600 }}>
                       {scoreTotal}
@@ -770,7 +770,7 @@ export function ReviewWorkbench({
                     </div>
                   </div>
                   {round.overall_comment && (
-                    <p className="text-2xs text-text-tertiary leading-5 pt-1 border-t border-white/10 mt-2">
+                    <p className="text-2xs text-text-tertiary leading-5 pt-1 border-t border-border-standard/10 mt-2">
                       {round.overall_comment}
                     </p>
                   )}
@@ -793,7 +793,7 @@ export function ReviewWorkbench({
                             className={`flex items-start gap-2 p-2 rounded-md cursor-pointer border transition-colors ${
                               remediation === lv.level
                                 ? "border-brand-accent/50 bg-brand-accent/10"
-                                : "border-white/8 hover:bg-white/5"
+                                : "border-border-standard/8 hover:bg-bg-hover/5"
                             }`}
                           >
                             <input

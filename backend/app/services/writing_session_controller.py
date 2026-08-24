@@ -317,7 +317,7 @@ async def _prepare_chapter_and_run(
 
 
 async def evaluate_session(db: AsyncSession, session: WritingSession) -> SessionDecision:
-    """Evaluate one session under the fixed eval order (spec §16)."""
+    """Evaluate one session under the fixed eval order (spec §16 + v9.5 preflight §29)."""
     if session.status in TERMINAL_SESSION_STATUSES:
         return SessionDecision(
             "complete" if session.status == "completed" else "cancel",
@@ -327,6 +327,36 @@ async def evaluate_session(db: AsyncSession, session: WritingSession) -> Session
 
     now = datetime.now(timezone.utc)
     policy = session.policy_snapshot or DEFAULT_POLICY
+
+    # ── v9.5 model preflight (spec §29–§30): created → preflight → running ──
+    if session.status == "created" and session.model_preflight_status in (None, "pending"):
+        from app.model_autopilot.preflight import (
+            bootstrap_catalog_and_probes,
+            run_model_preflight,
+        )
+        from app.v74_utils import ModelBindingService
+
+        try:
+            await bootstrap_catalog_and_probes()
+        except Exception as e:  # noqa: BLE001 - never hard-fail the session on bootstrap
+            logger = logging.getLogger("novelforge.session")
+            logger.warning("preflight bootstrap failed: %s", e)
+        svc = ModelBindingService(db)
+        binding = await svc.get_binding("draft_writer", session.book_id)
+        preflight = await run_model_preflight(db, session=session, binding=binding)
+        if preflight.get("status") == "blocked":
+            return SessionDecision(
+                "block", "model preflight failed", {"blockers": preflight.get("blockers", [])}
+            )
+        session.status = "running"
+        await _record_event(
+            db,
+            session.id,
+            "session_started",
+            {"route_plan_id": preflight.get("route_plan_id")},
+            dedupe_key="session_started",
+        )
+        # fall through: same evaluation starts the first chapter
 
     # ── 04 control_requested ──
     if session.control_requested == "pause":

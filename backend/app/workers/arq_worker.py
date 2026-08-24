@@ -586,6 +586,20 @@ async def session_reconciler_cron(ctx):
     return await session_reconciler_tick(ctx)
 
 
+async def model_catalog_sync_cron(ctx):
+    """v9.5: provider /models → catalog (spec §25)."""
+    from app.model_autopilot.jobs import model_catalog_sync_tick
+
+    return await model_catalog_sync_tick(ctx)
+
+
+async def model_health_probe_cron(ctx):
+    """v9.5: periodic health probing (spec §25–§28)."""
+    from app.model_autopilot.jobs import model_health_probe_tick
+
+    return await model_health_probe_tick(ctx)
+
+
 async def run_import_pipeline_job(ctx, session_id: str):
     """v8 multi-agent import analysis (checkpointed). Shares max_jobs=1 with chapter pipeline."""
     logger.info("import_pipeline start session=%s", session_id)
@@ -643,10 +657,13 @@ async def analyze_editorial_review_job(ctx, review_id: str):
 
 class WorkerSettings:
     # arq cron: minute-level outbox drain (B-11) + v9.4 session outbox/reconciler
+    # + v9.5 model autopilot (catalog every 30min, probes every 5min)
     cron_jobs = [
         cron(outbox_tick, second={0, 30}),
         cron(session_outbox_tick, second={10, 40}),
         cron(session_reconciler_cron, second={20, 50}),
+        cron(model_catalog_sync_cron, minute={0}),
+        cron(model_health_probe_cron, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}),
     ]
 
     functions = [
@@ -654,6 +671,8 @@ class WorkerSettings:
         outbox_tick,
         session_outbox_tick,
         session_reconciler_cron,
+        model_catalog_sync_cron,
+        model_health_probe_cron,
         run_import_pipeline_job,
         run_research_task_job,
         run_editorial_revision_job,

@@ -31,8 +31,8 @@ const RULE_LABELS: Record<string, string> = {
 
 const RULE_COLORS: Record<string, string> = {
   preference: "#7c8aff",
-  anti_pattern: "#f87171",
-  positive_pattern: "#4ade80",
+  anti_pattern: "rgb(var(--nf-danger))",
+  positive_pattern: "rgb(var(--nf-success))",
 };
 
 export function ExperienceCardsPanel({ bookId }: { bookId: string }) {
@@ -130,7 +130,7 @@ export function ExperienceCardsPanel({ bookId }: { bookId: string }) {
             className={`px-3 py-1.5 rounded-full text-xs transition-all border ${
               tab === t.key
                 ? "bg-brand-accent/15 border-brand-accent/40 text-brand-accent"
-                : "border-white/10 text-text-tertiary hover:text-text-secondary hover:bg-white/5"
+                : "border-border-standard/10 text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/5"
             }`}
           >
             {t.label}
@@ -194,9 +194,9 @@ export function ExperienceCardsPanel({ bookId }: { bookId: string }) {
                   <span
                     className="badge border text-2xs"
                     style={{
-                      color: RULE_COLORS[card.rule_type] ?? "#94a3b8",
-                      borderColor: `${RULE_COLORS[card.rule_type] ?? "#94a3b8"}55`,
-                      background: `${RULE_COLORS[card.rule_type] ?? "#94a3b8"}14`,
+                      color: RULE_COLORS[card.rule_type] ?? "rgb(var(--nf-text-tertiary))",
+                      borderColor: `${RULE_COLORS[card.rule_type] ?? "rgb(var(--nf-text-tertiary))"}55`,
+                      background: `${RULE_COLORS[card.rule_type] ?? "rgb(var(--nf-text-tertiary))"}14`,
                     }}
                   >
                     {RULE_LABELS[card.rule_type] ?? card.rule_type}
@@ -208,7 +208,7 @@ export function ExperienceCardsPanel({ bookId }: { bookId: string }) {
                     </span>
                   )}
                   {card.is_locked && (
-                    <span className="badge bg-white/5 border-white/15 text-text-tertiary text-2xs">
+                    <span className="badge bg-bg-panel/5 border-border-standard/15 text-text-tertiary text-2xs">
                       <Lock size={9} /> 锁定
                     </span>
                   )}
@@ -224,7 +224,7 @@ export function ExperienceCardsPanel({ bookId }: { bookId: string }) {
                 <p className="text-2xs text-text-tertiary leading-4">{card.rationale}</p>
               )}
 
-              <div className="flex items-center justify-between pt-1 border-t border-white/5">
+              <div className="flex items-center justify-between pt-1 border-t border-border-standard/5">
                 <span className="text-2xs text-text-disabled">
                   作用组件：{card.target_components.join(" / ") || "—"}
                 </span>

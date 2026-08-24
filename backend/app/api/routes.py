@@ -860,6 +860,29 @@ async def run_chapter(
     bid = uuid.UUID(book_id)
     request_id = request.headers.get("Idempotency-Key") or request.headers.get("idempotency-key") or str(gen_uuid())
 
+    # v9.4 (spec §41): while a session owns the book, manual single-chapter
+    # runs are rejected with SESSION_OWNS_BOOK.
+    from app.models import WritingSession
+    from app.services.writing_session_controller import ACTIVE_SESSION_STATUSES
+
+    active_session = (
+        await db.execute(
+            select(WritingSession.id).where(
+                WritingSession.book_id == bid,
+                WritingSession.status.in_(ACTIVE_SESSION_STATUSES),
+            )
+        )
+    ).scalar_one_or_none()
+    if active_session is not None:
+        raise HTTPException(
+            409,
+            detail={
+                "code": "SESSION_OWNS_BOOK",
+                "message": "自动写作会话进行中，请先结束会话再单章运行",
+                "session_id": str(active_session),
+            },
+        )
+
     # Only an approved outline version may enter the writing pipeline.
     ov = (
         await db.execute(
@@ -2893,3 +2916,131 @@ async def run_counterfactual_audit(chapter_id: str, db: AsyncSession = Depends(g
 
     report = await audit_chapter_counterfactual(db, ch.book_id, ch.id)
     return {"chapter_id": str(ch.id), "chapter_no": ch.chapter_no, "report": report}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# v9.4 Autonomous Writing Session API (spec §38–§39)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@router.post("/api/books/{book_id}/writing-sessions")
+async def create_writing_session(book_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Start a time-window autonomous writing session (Idempotency-Key supported)."""
+    from app.schemas.writing_session import WritingSessionCreateRequest
+    from app.services.writing_session_service import create_writing_session as _create
+    from app.services.writing_session_controller import serialize_session
+
+    bid = _parse_uuid(book_id, field="book id")
+    idem = request.headers.get("Idempotency-Key") or request.headers.get("idempotency-key")
+    body = await request.json()
+    req = WritingSessionCreateRequest(**body)
+    session = await _create(db, book_id=bid, req=req, idempotency_key=idem)
+    return serialize_session(session)
+
+
+@router.get("/api/books/{book_id}/writing-sessions/current")
+async def get_current_writing_session(book_id: str, db: AsyncSession = Depends(get_db)):
+    """Active session (or null) for a book, enriched with guard metrics."""
+    from app.models import WritingSession
+    from app.services.writing_session_controller import (
+        ACTIVE_SESSION_STATUSES,
+        serialize_session,
+    )
+    from app.services.writing_session_service import session_current_view
+
+    bid = _parse_uuid(book_id, field="book id")
+    session = (
+        await db.execute(
+            select(WritingSession)
+            .where(
+                WritingSession.book_id == bid,
+                WritingSession.status.in_(ACTIVE_SESSION_STATUSES),
+            )
+            .order_by(WritingSession.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if session is None:
+        return {"session": None}
+    return {"session": await session_current_view(db, session)}
+
+
+@router.get("/api/writing-sessions/{session_id}")
+async def get_writing_session(session_id: str, db: AsyncSession = Depends(get_db)):
+    """Session detail with guard metrics."""
+    from app.models import WritingSession
+    from app.services.writing_session_service import session_current_view
+
+    sid = _parse_uuid(session_id, field="session id")
+    session = (
+        await db.execute(select(WritingSession).where(WritingSession.id == sid))
+    ).scalar_one_or_none()
+    if session is None:
+        raise HTTPException(404, detail={"code": "SESSION_NOT_FOUND", "message": "会话不存在"})
+    return await session_current_view(db, session)
+
+
+@router.post("/api/writing-sessions/{session_id}/pause")
+async def pause_writing_session(session_id: str, db: AsyncSession = Depends(get_db)):
+    """Request pause; current chapter finishes safely (spec §19)."""
+    from app.services.writing_session_service import control_writing_session
+    from app.services.writing_session_controller import serialize_session
+
+    sid = _parse_uuid(session_id, field="session id")
+    session = await control_writing_session(db, session_id=sid, action="pause")
+    return serialize_session(session)
+
+
+@router.post("/api/writing-sessions/{session_id}/resume")
+async def resume_writing_session(session_id: str, db: AsyncSession = Depends(get_db)):
+    """Resume a paused/blocked/waiting_editorial session (spec §19, §46)."""
+    from app.services.writing_session_service import control_writing_session
+    from app.services.writing_session_controller import serialize_session
+
+    sid = _parse_uuid(session_id, field="session id")
+    session = await control_writing_session(db, session_id=sid, action="resume")
+    return serialize_session(session)
+
+
+@router.post("/api/writing-sessions/{session_id}/cancel")
+async def cancel_writing_session(session_id: str, db: AsyncSession = Depends(get_db)):
+    """Cancel session; current chapter finishes safely (spec §20)."""
+    from app.services.writing_session_service import control_writing_session
+    from app.services.writing_session_controller import serialize_session
+
+    sid = _parse_uuid(session_id, field="session id")
+    session = await control_writing_session(db, session_id=sid, action="cancel")
+    return serialize_session(session)
+
+
+@router.post("/api/writing-sessions/{session_id}/extend")
+async def extend_writing_session(session_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Extend the current deadline (spec §38)."""
+    from app.schemas.writing_session import SessionExtendRequest
+    from app.services.writing_session_service import control_writing_session
+    from app.services.writing_session_controller import serialize_session
+
+    sid = _parse_uuid(session_id, field="session id")
+    req = SessionExtendRequest(**await request.json())
+    session = await control_writing_session(
+        db, session_id=sid, action="extend", extend_minutes=req.extend_minutes
+    )
+    return serialize_session(session)
+
+
+@router.get("/api/books/{book_id}/writing-sessions")
+async def list_writing_sessions(book_id: str, db: AsyncSession = Depends(get_db)):
+    """Session history for a book (spec §38)."""
+    from app.models import WritingSession
+    from app.services.writing_session_controller import serialize_session
+
+    bid = _parse_uuid(book_id, field="book id")
+    rows = (
+        await db.execute(
+            select(WritingSession)
+            .where(WritingSession.book_id == bid)
+            .order_by(WritingSession.created_at.desc())
+            .limit(200)
+        )
+    ).scalars().all()
+    return {"items": [serialize_session(s) for s in rows]}

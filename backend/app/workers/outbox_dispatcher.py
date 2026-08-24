@@ -216,6 +216,7 @@ async def create_run_and_outbox(
     resume_from_run_id: uuid.UUID | None = None,
     model_binding_snapshot: dict | None = None,
     budget_snapshot: dict | None = None,
+    writing_session_id: uuid.UUID | None = None,
 ) -> ChapterRun:
     """Create ChapterRun + pending Outbox in the caller's transaction."""
     run = ChapterRun(
@@ -232,6 +233,7 @@ async def create_run_and_outbox(
         model_binding_snapshot=model_binding_snapshot or {},
         budget_snapshot=budget_snapshot or {},
         created_by=created_by,
+        writing_session_id=writing_session_id,
     )
     db.add(run)
     await db.flush()

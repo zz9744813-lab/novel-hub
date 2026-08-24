@@ -71,7 +71,8 @@ async def test_500_outline_nodes_and_zero_chapters_select_chapter_one():
         ScalarResult(b),
         ScalarResult(ov),
         ScalarListResult([]),
-        ScalarResult(None),
+        ScalarResult(500),  # max approved outline chapter_no
+        ScalarResult(None),  # no finalized chapters
         ScalarResult(n1),
     )
 
@@ -80,8 +81,8 @@ async def test_500_outline_nodes_and_zero_chapters_select_chapter_one():
     assert decision.action == "create_chapter"
     assert decision.chapter_no == 1
     assert decision.outline_node_id == n1.id
-    # The selector never asks for max(outline_nodes.chapter_no).
-    assert db.execute.await_count == 5
+    # v9.4: selector now checks max(outline_nodes.chapter_no) for exhaustion.
+    assert db.execute.await_count == 6
 
 
 @pytest.mark.asyncio
@@ -93,7 +94,8 @@ async def test_finalized_one_to_seven_selects_eighth():
         ScalarResult(b),
         ScalarResult(ov),
         ScalarListResult([]),
-        ScalarResult(7),
+        ScalarResult(8),  # max outline chapter_no
+        ScalarResult(7),  # finalized 1..7
         ScalarResult(n8),
     )
 
@@ -154,8 +156,9 @@ async def test_missing_approved_outline_node_is_blocked():
         ScalarResult(b),
         ScalarResult(ov),
         ScalarListResult([]),
-        ScalarResult(None),
-        ScalarResult(None),
+        ScalarResult(1),  # outline has a chapter-1 node…
+        ScalarResult(None),  # …but nothing finalized -> next = 1
+        ScalarResult(None),  # node missing -> OUTLINE_NODE_MISSING
     )
 
     with pytest.raises(NextChapterSelectionError) as exc:
@@ -191,7 +194,8 @@ async def test_high_numbered_test_chapter_without_approved_node_is_ignored():
         ScalarResult(ov),
         # The selector's approved-node subquery excludes the synthetic chapter.
         ScalarListResult([]),
-        ScalarResult(None),
+        ScalarResult(1),  # max approved chapter_no
+        ScalarResult(None),  # nothing finalized -> next = 1
         ScalarResult(n1),
     )
 

@@ -478,6 +478,33 @@ export const api = {
   chapterRuns: {
     get: (runId: string) => fetchJSON<ChapterRunDetail>(`/api/chapter-runs/${runId}`),
   },
+  writingSessions: {
+    current: (bookId: string) =>
+      fetchJSON<{ session: WritingSessionView | null }>(`/api/books/${bookId}/writing-sessions/current`),
+    start: (bookId: string, data: any, idempotencyKey?: string) =>
+      fetchJSON<WritingSessionView>(
+        `/api/books/${bookId}/writing-sessions`,
+        {
+          method: "POST",
+          body: JSON.stringify(data),
+          headers: idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined,
+        }
+      ),
+    get: (sessionId: string) => fetchJSON<WritingSessionView>(`/api/writing-sessions/${sessionId}`),
+    pause: (sessionId: string) =>
+      fetchJSON<WritingSessionView>(`/api/writing-sessions/${sessionId}/pause`, { method: "POST" }),
+    resume: (sessionId: string) =>
+      fetchJSON<WritingSessionView>(`/api/writing-sessions/${sessionId}/resume`, { method: "POST" }),
+    cancel: (sessionId: string) =>
+      fetchJSON<WritingSessionView>(`/api/writing-sessions/${sessionId}/cancel`, { method: "POST" }),
+    extend: (sessionId: string, extendMinutes: number) =>
+      fetchJSON<WritingSessionView>(`/api/writing-sessions/${sessionId}/extend`, {
+        method: "POST",
+        body: JSON.stringify({ extend_minutes: extendMinutes }),
+      }),
+    history: (bookId: string) =>
+      fetchJSON<{ items: WritingSessionView[] }>(`/api/books/${bookId}/writing-sessions`),
+  },
   context: {
     get: (id: string) => fetchJSON<ContextPackageDetail>(`/api/context-packages/${id}`),
     promptPreview: (id: string) => fetchJSON<any>(`/api/context-packages/${id}/prompt-preview`),
@@ -1012,6 +1039,32 @@ export interface ChapterListItem {
 export interface ChapterRunSummary { run_id: string; status: string; current_step?: string | null; chapter_no?: number; }
 export interface NeedsHumanDetail { chapter_id: string; status: string; issues?: any[]; detail?: any; run?: any; active_run_id?: string | null; }
 export interface ChapterRunDetail extends ChapterRunSummary { book_id?: string; error_code?: string | null; error_detail?: any; }
+export interface WritingSessionView {
+  id: string;
+  book_id: string;
+  status: string; // created|running|pausing|paused|waiting_editorial|blocked|completed|cancelled|failed
+  control_requested: string;
+  mode: string;
+  requested_duration_minutes?: number | null;
+  started_at?: string | null;
+  deadline_at?: string | null;
+  current_chapter_id?: string | null;
+  current_chapter_no?: number | null;
+  current_chapter_run_id?: string | null;
+  chapters_started: number;
+  chapters_completed: number;
+  words_generated: number;
+  stop_reason?: string | null;
+  stop_detail?: any;
+  policy_snapshot?: any;
+  editorial_backlog?: number | null;
+  editorial_backlog_limit?: number | null;
+  recent_first_pass?: { reviewed: number; good: number; rate: number } | null;
+  paused_at?: string | null;
+  completed_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
 export interface L4Snapshot {
   id: string; entity_type: string; entity_id: string;
   as_of_chapter: number; state: any; version: number; is_locked: boolean;

@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import { api, fetchAuthenticatedAsset } from "../../api";
 import { Play, Loader2, BookOpen, Users, Map, GitBranch, MapPin, ScrollText, Sparkles, Check } from "lucide-react";
+import { WritingSessionStartModal, StartOptions } from "../writing-session/WritingSessionStartModal";
+import { WritingSessionStatusCard } from "../writing-session/WritingSessionStatusCard";
+import { WritingSessionHistory } from "../writing-session/WritingSessionHistory";
 
 export function BookHomePage({
   bookId,
@@ -25,6 +28,25 @@ export function BookHomePage({
   const [planningTone, setPlanningTone] = useState("");
   const [planningThemes, setPlanningThemes] = useState("");
   const [targetChapterCount, setTargetChapterCount] = useState(12);
+  const [session, setSession] = useState<any>(null);
+  const [showStartModal, setShowStartModal] = useState(false);
+  const [sessionBusy, setSessionBusy] = useState(false);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+
+  const refreshSession = async () => {
+    try {
+      const r = await api.writingSessions.current(bookId);
+      setSession(r.session);
+    } catch {
+      setSession(null);
+    }
+  };
+
+  useEffect(() => {
+    refreshSession();
+    const timer = setInterval(refreshSession, 10000);
+    return () => clearInterval(timer);
+  }, [bookId]);
 
   useEffect(() => {
     let active = true;
@@ -143,6 +165,39 @@ export function BookHomePage({
     }
   };
 
+  const handleStartSession = async (options: StartOptions) => {
+    setSessionBusy(true);
+    setSessionError(null);
+    try {
+      const created = await api.writingSessions.start(bookId, options, crypto.randomUUID());
+      setSession(created);
+      setShowStartModal(false);
+    } catch (e: any) {
+      setSessionError(e?.message || String(e));
+      throw e;
+    } finally {
+      setSessionBusy(false);
+    }
+  };
+
+  const runSessionAction = async (action: (sessionId: string) => Promise<any>) => {
+    if (!session?.id) return;
+    setSessionBusy(true);
+    setSessionError(null);
+    try {
+      await action(session.id);
+      await refreshSession();
+    } catch (e: any) {
+      setSessionError(e?.message || String(e));
+    } finally {
+      setSessionBusy(false);
+    }
+  };
+
+  const handleOpenEditorial = () => {
+    onOpenChapters();
+  };
+
   if (err && !data) {
     return <div className="p-6 text-xs text-red-400">{err}</div>;
   }
@@ -193,14 +248,27 @@ export function BookHomePage({
             <Stat label="状态" value={book?.lifecycle_status || "—"} />
           </div>
           <div className="mt-5 pt-4 border-t border-border/50 flex flex-wrap gap-2">
-            <button
-              onClick={handleContinue}
-              disabled={busy}
-              className="btn-primary text-xs py-2 px-4 flex items-center gap-1.5"
-            >
-              {busy ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
-              继续写下一章
-            </button>
+            {!session && (
+              <button
+                onClick={() => setShowStartModal(true)}
+                disabled={sessionBusy}
+                className="btn-primary text-xs py-2 px-4 flex items-center gap-1.5"
+              >
+                {sessionBusy ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
+                开始自动写作
+              </button>
+            )}
+            {!session && (
+              <button
+                onClick={handleContinue}
+                disabled={busy}
+                className="btn text-xs py-2 px-3"
+                title="高级操作：人工单章运行下一章（自动写作会话进行中不可用）"
+              >
+                {busy ? <Loader2 size={13} className="animate-spin" /> : null}
+                单章运行
+              </button>
+            )}
             <button onClick={onOpenChapters} className="btn text-xs py-2 px-3">
               打开章节
             </button>
@@ -214,12 +282,37 @@ export function BookHomePage({
             </button>
           </div>
           {err && <p className="text-xs text-red-400 mt-2">{err}</p>}
+          {sessionError && <p className="text-xs text-red-400 mt-2">{sessionError}</p>}
           {book?.active_task && (
             <p className="text-xs text-brand-accent mt-3">{book.active_task.label}</p>
+          )}
+          {session && (
+            <div className="mt-3">
+              <WritingSessionStatusCard
+                session={session}
+                busy={sessionBusy}
+                onPause={() => runSessionAction((id) => api.writingSessions.pause(id))}
+                onResume={() => runSessionAction((id) => api.writingSessions.resume(id))}
+                onCancel={() => {
+                  if (window.confirm("结束本次自动写作？当前章节会先安全完成。")) {
+                    runSessionAction((id) => api.writingSessions.cancel(id));
+                  }
+                }}
+                onExtend={() => runSessionAction((id) => api.writingSessions.extend(id, 120))}
+                onOpenEditorial={handleOpenEditorial}
+              />
+            </div>
           )}
         </div>
       </div>
       </div>
+
+      {showStartModal && (
+        <WritingSessionStartModal
+          onStart={handleStartSession}
+          onClose={() => setShowStartModal(false)}
+        />
+      )}
 
       {isBlankBook && (planning?.status === "approved" ? (
         <div className="panel p-4 flex items-center gap-2 text-xs text-emerald-300">
@@ -370,6 +463,8 @@ export function BookHomePage({
       )}
 
       <div className="text-2xs text-text-disabled">下一动作：{data.next_action || "—"}</div>
+
+      <WritingSessionHistory bookId={bookId} />
     </div>
   );
 }

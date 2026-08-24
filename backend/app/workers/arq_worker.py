@@ -30,6 +30,7 @@ from app.models import Chapter, ChapterTask, ChapterRun
 from app.engine.pipeline import execute_pipeline
 from app.engine.outcomes import PipelineOutcome, PipelineResult
 from app.engine.step_runner import acquire_run_lease, release_run_lease
+from app.workers.writing_session_jobs import advance_writing_session_job
 from sqlalchemy import select, update, text
 
 logger = logging.getLogger("novelforge.worker")
@@ -111,6 +112,28 @@ async def _heartbeat_loop(task_id: uuid.UUID, stop: asyncio.Event, run_id: uuid.
             await asyncio.wait_for(stop.wait(), timeout=30)
         except asyncio.TimeoutError:
             pass
+
+
+async def _insert_session_advance_outbox(db, session_id: uuid.UUID, run_id: uuid.UUID) -> None:
+    """Idempotent, same-txn session advance record (v9.4 spec §12/§13)."""
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    from app.models import SessionAdvanceOutbox
+
+    await db.execute(
+        pg_insert(SessionAdvanceOutbox)
+        .values(
+            id=uuid.uuid4(),
+            writing_session_id=session_id,
+            completed_run_id=run_id,
+            event_type="advance_writing_session",
+            dedupe_key=f"session-advance:{session_id}:{run_id}",
+            payload={"session_id": str(session_id), "completed_run_id": str(run_id)},
+            status="pending",
+            available_at=datetime.now(timezone.utc),
+        )
+        .on_conflict_do_nothing(index_elements=["dedupe_key"])
+    )
 
 
 async def run_chapter_pipeline(ctx, chapter_id: str, book_id: str, chapter_no: int):
@@ -355,18 +378,27 @@ async def run_chapter_pipeline(ctx, chapter_id: str, book_id: str, chapter_no: i
                 )
             )
             if chapter_run_id:
-                await db.execute(
-                    update(ChapterRun)
-                    .where(ChapterRun.id == chapter_run_id)
-                    .values(
-                        status=run_status,
-                        lease_owner=None,
-                        lease_expires_at=None,
-                        finished_at=now if run_status in ("succeeded", "failed", "needs_human", "cancelled") else None,
-                        error_code=result.error_code,
-                        error_detail=result.detail or None,
+                # v9.4: lock the run row and, in the SAME txn as status=succeeded,
+                # insert the session advance outbox (spec §12). No finalizer-side
+                # enqueue; the outbox is the only path that advances the session.
+                run_row = (
+                    await db.execute(
+                        select(ChapterRun).where(ChapterRun.id == chapter_run_id).with_for_update()
                     )
-                )
+                ).scalar_one_or_none()
+                if run_row is not None:
+                    run_row.status = run_status
+                    run_row.lease_owner = None
+                    run_row.lease_expires_at = None
+                    run_row.finished_at = (
+                        now if run_status in ("succeeded", "failed", "needs_human", "cancelled") else None
+                    )
+                    run_row.error_code = result.error_code
+                    run_row.error_detail = result.detail or None
+                    if run_status == "succeeded" and run_row.writing_session_id:
+                        await _insert_session_advance_outbox(
+                            db, run_row.writing_session_id, run_row.id
+                        )
             pass  # advisory no longer held across LLM (B-03)
             await db.commit()
         logger.info(
@@ -535,6 +567,25 @@ async def outbox_tick(ctx):
         logger.warning(f"outbox_tick failed: {e}")
 
 
+async def session_outbox_tick(ctx):
+    """v9.4: drain session-advance outbox (spec §13)."""
+    try:
+        from app.workers.session_outbox_dispatcher import dispatch_session_outbox_once
+
+        report = await dispatch_session_outbox_once()
+        if report.get("dispatched") or report.get("failed"):
+            logger.info(f"session_outbox_tick: {report}")
+    except Exception as e:
+        logger.warning(f"session_outbox_tick failed: {e}")
+
+
+async def session_reconciler_cron(ctx):
+    """v9.4: session reconciler (spec §32)."""
+    from app.workers.writing_session_jobs import session_reconciler_tick
+
+    return await session_reconciler_tick(ctx)
+
+
 async def run_import_pipeline_job(ctx, session_id: str):
     """v8 multi-agent import analysis (checkpointed). Shares max_jobs=1 with chapter pipeline."""
     logger.info("import_pipeline start session=%s", session_id)
@@ -591,16 +642,23 @@ async def analyze_editorial_review_job(ctx, review_id: str):
 
 
 class WorkerSettings:
-    # arq cron: minute-level outbox drain (B-11)
-    cron_jobs = [cron(outbox_tick, second={0, 30})]
+    # arq cron: minute-level outbox drain (B-11) + v9.4 session outbox/reconciler
+    cron_jobs = [
+        cron(outbox_tick, second={0, 30}),
+        cron(session_outbox_tick, second={10, 40}),
+        cron(session_reconciler_cron, second={20, 50}),
+    ]
 
     functions = [
         run_chapter_pipeline,
         outbox_tick,
+        session_outbox_tick,
+        session_reconciler_cron,
         run_import_pipeline_job,
         run_research_task_job,
         run_editorial_revision_job,
         analyze_editorial_review_job,
+        advance_writing_session_job,
     ]
     on_startup = on_startup
     on_shutdown = on_shutdown

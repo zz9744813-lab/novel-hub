@@ -10,7 +10,7 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Book, Chapter, ChapterRun, OutlineNode, OutlineVersion
@@ -185,6 +185,19 @@ async def select_next_chapter(
             outline_version_id=outline_version.id,
         )
 
+    # v9.4: OUTLINE_EXHAUSTED vs OUTLINE_NODE_MISSING (spec §31). Only the
+    # "new chapter" path can be exhausted; unfinished-chapter reuse is checked
+    # above and raises OUTLINE_NODE_MISSING on a real gap.
+    max_outline_no = (
+        await db.execute(
+            select(func.max(OutlineNode.chapter_no)).where(
+                OutlineNode.book_id == book_id,
+                OutlineNode.outline_version_id == outline_version.id,
+            )
+        )
+    ).scalar_one_or_none()
+    max_outline_no = int(max_outline_no or 0)
+
     finalized_no = (
         await db.execute(
             select(Chapter.chapter_no)
@@ -197,6 +210,13 @@ async def select_next_chapter(
         )
     ).scalar_one_or_none()
     chapter_no = int(finalized_no or 0) + 1
+
+    if chapter_no > max_outline_no:
+        raise NextChapterSelectionError(
+            "OUTLINE_EXHAUSTED",
+            chapter_no,
+            f"已批准大纲仅覆盖到第{max_outline_no}章",
+        )
 
     node = (
         await db.execute(

@@ -136,8 +136,8 @@ export function WritingSessionStatusCard({
                 延长2小时
               </button>
             )}
-            <button onClick={onCancel} disabled={busy} className="btn text-xs py-1.5 px-3 text-red-400 hover:border-red-400/40 flex items-center gap-1">
-              <Square size={11} /> 结束本次写作
+            <button onClick={onCancel} disabled={busy} className="btn text-xs py-1.5 px-3 text-red-400 hover:border-red-400/40 flex items-center gap-1" title="手动停止：当前章节安全完成后结束本次写作">
+              <Square size={11} /> 手动停止
             </button>
           </div>
         </>
@@ -148,7 +148,12 @@ export function WritingSessionStatusCard({
           <p className="text-2xs text-text-tertiary">
             未完成审核闭环：{s.editorial_backlog ?? 0} / {s.editorial_backlog_limit ?? 0}
           </p>
-          <button onClick={onOpenEditorial} className="btn text-xs py-1.5 px-3">去人工审核</button>
+          <div className="flex gap-2 flex-wrap">
+            <button onClick={onOpenEditorial} className="btn text-xs py-1.5 px-3">去人工审核</button>
+            <button onClick={onCancel} disabled={busy} className="btn text-xs py-1.5 px-3 text-red-400 hover:border-red-400/40 flex items-center gap-1" title="手动停止：结束本次写作">
+              <Square size={11} /> 手动停止
+            </button>
+          </div>
         </div>
       )}
 
@@ -165,6 +170,9 @@ export function WritingSessionStatusCard({
             ) : null}
             <button onClick={onResume} disabled={busy} className="btn text-xs py-1.5 px-3 flex items-center gap-1">
               {busy ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />} 处理后恢复
+            </button>
+            <button onClick={onCancel} disabled={busy} className="btn text-xs py-1.5 px-3 text-red-400 hover:border-red-400/40 flex items-center gap-1" title="手动停止：结束本次写作">
+              <Square size={11} /> 手动停止
             </button>
           </div>
         </div>

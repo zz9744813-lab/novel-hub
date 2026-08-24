@@ -504,6 +504,8 @@ export const api = {
       }),
     history: (bookId: string) =>
       fetchJSON<{ items: WritingSessionView[] }>(`/api/books/${bookId}/writing-sessions`),
+    chapters: (sessionId: string) =>
+      fetchJSON<{ items: SessionChapterRun[] }>(`/api/writing-sessions/${sessionId}/chapters`),
   },
   modelCenter: {
     overview: () => fetchJSON<any>("/api/model-center/health"),
@@ -1078,6 +1080,10 @@ export interface WritingSessionView {
   stop_reason?: string | null;
   stop_detail?: any;
   policy_snapshot?: any;
+  model_route_plan_id?: string | null;
+  model_routing_policy_version?: number | null;
+  model_preflight_status?: string | null;
+  model_preflight_detail?: any;
   editorial_backlog?: number | null;
   editorial_backlog_limit?: number | null;
   recent_first_pass?: { reviewed: number; good: number; rate: number } | null;
@@ -1085,6 +1091,18 @@ export interface WritingSessionView {
   completed_at?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
+}
+export interface SessionChapterRun {
+  run_id: string;
+  chapter_id: string;
+  chapter_no: number;
+  status: string;
+  current_step?: string | null;
+  error_code?: string | null;
+  words?: number | null;
+  editorial_status?: string | null;
+  created_at?: string | null;
+  finished_at?: string | null;
 }
 export interface L4Snapshot {
   id: string; entity_type: string; entity_id: string;

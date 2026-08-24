@@ -3044,3 +3044,77 @@ async def list_writing_sessions(book_id: str, db: AsyncSession = Depends(get_db)
         )
     ).scalars().all()
     return {"items": [serialize_session(s) for s in rows]}
+
+
+@router.get("/api/writing-sessions/{session_id}/chapters")
+async def list_session_chapters(session_id: str, db: AsyncSession = Depends(get_db)):
+    """v9.5 monitor: chapter runs belonging to one writing session (spec §86)."""
+    from app.models import Chapter, ChapterRun, ChapterVersion, WritingSession
+
+    sid = _parse_uuid(session_id, field="session id")
+    session = (
+        await db.execute(select(WritingSession).where(WritingSession.id == sid))
+    ).scalar_one_or_none()
+    if session is None:
+        raise HTTPException(404, detail={"code": "SESSION_NOT_FOUND", "message": "会话不存在"})
+
+    runs = (
+        await db.execute(
+            select(ChapterRun)
+            .where(ChapterRun.writing_session_id == sid)
+            .order_by(ChapterRun.chapter_no.asc())
+        )
+    ).scalars().all()
+
+    chapter_info = {}
+    if runs:
+        ch_rows = (
+            await db.execute(
+                select(Chapter.chapter_no, Chapter.editorial_status, Chapter.finalized_version).where(
+                    Chapter.id.in_({r.chapter_id for r in runs})
+                )
+            )
+        ).all()
+        for cid, row in zip({r.chapter_id for r in runs}, ch_rows):
+            chapter_info[cid] = {
+                "no": row[0],
+                "editorial_status": row[1],
+                "finalized_version": row[2],
+            }
+
+    words_by_chapter = {}
+    if chapter_info:
+        pairs = [
+            (cid, info["finalized_version"])
+            for cid, info in chapter_info.items()
+            if info.get("finalized_version") is not None
+        ]
+        if pairs:
+            from sqlalchemy import tuple_
+            word_rows = (
+                await db.execute(
+                    select(ChapterVersion.chapter_id, ChapterVersion.word_count).where(
+                        tuple_(ChapterVersion.chapter_id, ChapterVersion.version).in_(pairs)
+                    )
+                )
+            ).all()
+            words_by_chapter = {cid: wc for cid, wc in word_rows}
+
+    items = []
+    for r in runs:
+        info = chapter_info.get(r.chapter_id) or {}
+        items.append(
+            {
+                "run_id": str(r.id),
+                "chapter_id": str(r.chapter_id),
+                "chapter_no": r.chapter_no,
+                "status": r.status,
+                "current_step": r.current_step,
+                "error_code": r.error_code,
+                "words": words_by_chapter.get(r.chapter_id),
+                "editorial_status": info.get("editorial_status"),
+                "created_at": r.created_at.isoformat() if getattr(r, "created_at", None) else None,
+                "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+            }
+        )
+    return {"items": items}

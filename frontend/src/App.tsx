@@ -20,6 +20,7 @@ import { WritingTasksPage } from "./features/tasks/WritingTasksPage";
 import { ReferencesLibraryPage } from "./features/references/ReferencesLibraryPage";
 import { SystemSettingsPage } from "./features/settings/SystemSettingsPage";
 import { ModelCenterPage } from "./features/model-center/ModelCenterPage";
+import { WritingDeskPage } from "./features/writing-session/WritingDeskPage";
 import { ResearchPage } from "./features/research/ResearchPage";
 import { EditorialPage } from "./features/editorial/EditorialPage";
 import {
@@ -405,8 +406,9 @@ export default function App() {
       case "outline":
         return <OutlinePage bookId={selectedBookId} onNavigate={handleTabChange} />;
       case "chapters":
-      case "writing":
         return <ChapterList bookId={selectedBookId} />;
+      case "writing":
+        return <WritingDeskPage bookId={selectedBookId} />;
       case "memory":
         return <MemoryPanel bookId={selectedBookId} />;
       case "audit":

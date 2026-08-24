@@ -19,6 +19,7 @@ import { PromptStudioPage } from "./features/prompt-studio/PromptStudioPage";
 import { WritingTasksPage } from "./features/tasks/WritingTasksPage";
 import { ReferencesLibraryPage } from "./features/references/ReferencesLibraryPage";
 import { SystemSettingsPage } from "./features/settings/SystemSettingsPage";
+import { ModelCenterPage } from "./features/model-center/ModelCenterPage";
 import { ResearchPage } from "./features/research/ResearchPage";
 import { EditorialPage } from "./features/editorial/EditorialPage";
 import {
@@ -32,7 +33,7 @@ import {
   api,
 } from "./api";
 import { ArrowLeft, Download, Eye, EyeOff, KeyRound, Loader2, LogOut, Moon, Plus, ShieldCheck, Sun } from "lucide-react";
-import { applyTheme, getStoredTheme, type ThemeMode } from "./theme";
+import { applyTheme, getStoredTheme, initSystemThemeListener, type ThemeMode } from "./theme";
 
 type Tab =
   | "library"
@@ -49,6 +50,7 @@ type Tab =
   | "audit"
   | "context"
   | "models"
+  | "model-center"
   | "genre"
   | "research"
   | "diagnostics";
@@ -74,6 +76,12 @@ export default function App() {
   useEffect(() => {
     applyTheme(theme);
   }, [theme]);
+
+  // v9.5: follow OS theme changes while mode === "system" (spec §91)
+  useEffect(() => {
+    const stop = initSystemThemeListener();
+    return stop;
+  }, []);
 
   // Dynamic version label (spec v9.2 §19) — replaces the hardcoded "v8.0".
   useEffect(() => {
@@ -365,6 +373,7 @@ export default function App() {
     }
     if (tab === "prompts") return <PromptStudioPage />;
     if (tab === "models") return <SystemSettingsPage initialTab="models" />;
+    if (tab === "model-center") return <ModelCenterPage />;
     // System-level tabs: always mount (no book gate) — pick book inside panel if needed
     if (tab === "context") return <SystemSettingsPage initialTab="context" />;
     if (tab === "genre") return <SystemSettingsPage initialTab="genre" />;
@@ -490,12 +499,16 @@ export default function App() {
             <button
               type="button"
               className="theme-toggle"
-              title={theme === "dark" ? "切换到日间模式" : "切换到夜间模式"}
-              aria-label={theme === "dark" ? "切换到日间模式" : "切换到夜间模式"}
-              onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
+              title={theme === "dark" ? "切换到日间模式" : theme === "light" ? "切换跟随系统" : "切换到夜间模式"}
+              aria-label="切换主题"
+              onClick={() =>
+                setTheme((current) =>
+                  current === "dark" ? "light" : current === "light" ? "system" : "dark"
+                )
+              }
             >
-              {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
-              <span>{theme === "dark" ? "日间" : "夜间"}</span>
+              {theme === "dark" ? <Sun size={14} /> : theme === "light" ? <Moon size={14} /> : <Sun size={14} />}
+              <span>{theme === "dark" ? "日间" : theme === "light" ? "夜间" : "跟随系统"}</span>
             </button>
             <button
               onClick={handleLogout}

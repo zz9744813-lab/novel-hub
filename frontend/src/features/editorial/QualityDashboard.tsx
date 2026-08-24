@@ -26,10 +26,10 @@ function MiniTrend({ points }: { points: Array<{ chapter_no: number | null; scor
   const path = xs.map((x, i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${ys[i].toFixed(1)}`).join(" ");
   return (
     <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-16">
-      <line x1="4" y1={h - 4 - 85 * (h - 10) / 100} x2={w - 4} y2={h - 4 - 85 * (h - 10) / 100} stroke="#4ade8055" strokeDasharray="3 3" strokeWidth="1" />
+      <line x1="4" y1={h - 4 - 85 * (h - 10) / 100} x2={w - 4} y2={h - 4 - 85 * (h - 10) / 100} stroke="rgb(var(--nf-success))55" strokeDasharray="3 3" strokeWidth="1" />
       <path d={path} fill="none" stroke="#7c8aff" strokeWidth="1.6" strokeLinejoin="round" />
       {xs.map((x, i) => (
-        <circle key={i} cx={x} cy={ys[i]} r="2.4" fill={data[i].score! >= 85 ? "#4ade80" : data[i].score! >= 70 ? "#facc15" : "#f87171"} />
+        <circle key={i} cx={x} cy={ys[i]} r="2.4" fill={data[i].score! >= 85 ? "rgb(var(--nf-success))" : data[i].score! >= 70 ? "rgb(var(--nf-warning))" : "rgb(var(--nf-danger))"} />
       ))}
     </svg>
   );
@@ -49,7 +49,7 @@ function BarList({ items, labels }: { items: Record<string, number>; labels?: Re
             <span className="text-text-secondary">{labels?.[key] ?? key}</span>
             <span className="text-text-tertiary tabular-nums">{count}</span>
           </div>
-          <div className="h-1.5 rounded-full bg-white/5 overflow-hidden">
+          <div className="h-1.5 rounded-full bg-bg-panel/5 overflow-hidden">
             <div
               className="h-full rounded-full bg-gradient-to-r from-brand-accent/70 to-brand-accent transition-all duration-500"
               style={{ width: `${(count / max) * 100}%` }}
@@ -128,7 +128,7 @@ export function QualityDashboard({ bookId }: { bookId: string }) {
           <div className="stat-label">
             <Target size={11} /> 首轮良品率
           </div>
-          <div className="stat-value" style={{ color: metrics.first_pass_yield == null ? undefined : metrics.first_pass_yield >= 60 ? "#4ade80" : "#facc15" }}>
+          <div className="stat-value" style={{ color: metrics.first_pass_yield == null ? undefined : metrics.first_pass_yield >= 60 ? "rgb(var(--nf-success))" : "rgb(var(--nf-warning))" }}>
             {metrics.first_pass_yield == null ? "—" : `${metrics.first_pass_yield}%`}
           </div>
           <div className="text-2xs text-text-disabled mt-1">
@@ -148,7 +148,7 @@ export function QualityDashboard({ bookId }: { bookId: string }) {
           <div className="stat-label">
             <ShieldCheck size={11} /> AI 审校一致率
           </div>
-          <div className="stat-value" style={{ color: cal.agreement == null ? undefined : cal.agreement >= 70 ? "#4ade80" : "#facc15" }}>
+          <div className="stat-value" style={{ color: cal.agreement == null ? undefined : cal.agreement >= 70 ? "rgb(var(--nf-success))" : "rgb(var(--nf-warning))" }}>
             {cal.agreement == null ? "—" : `${cal.agreement}%`}
           </div>
           <div className="text-2xs text-text-disabled mt-1">
@@ -159,7 +159,7 @@ export function QualityDashboard({ bookId }: { bookId: string }) {
           <div className="stat-label">
             <AlertTriangle size={11} /> AI 漏报率
           </div>
-          <div className="stat-value" style={{ color: cal.escape_rate == null ? undefined : cal.escape_rate <= 20 ? "#4ade80" : "#f87171" }}>
+          <div className="stat-value" style={{ color: cal.escape_rate == null ? undefined : cal.escape_rate <= 20 ? "rgb(var(--nf-success))" : "rgb(var(--nf-danger))" }}>
             {cal.escape_rate == null ? "—" : `${cal.escape_rate}%`}
           </div>
           <div className="text-2xs text-text-disabled mt-1">

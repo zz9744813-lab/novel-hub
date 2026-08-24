@@ -489,7 +489,7 @@ export function ChapterList({ bookId }: { bookId: string }) {
       )}
 
       {(humanDetail || runDetail) && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => { setHumanDetail(null); setRunDetail(null); }}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg-canvas/60 backdrop-blur-sm p-4" onClick={() => { setHumanDetail(null); setRunDetail(null); }}>
           <div className="bg-bg-elevated border border-border rounded-xl max-w-lg w-full max-h-[80vh] overflow-auto p-4 space-y-3 animate-modal-in" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
               <h3 className="text-sm text-text-primary" style={{ fontWeight: 510 }}>Run / 待人工</h3>
@@ -534,7 +534,7 @@ export function ChapterList({ bookId }: { bookId: string }) {
 
       {content && (
         <div
-          className="fixed inset-0 bg-black/75 backdrop-blur-[2px] flex items-center justify-center z-50 p-4 sm:p-8"
+          className="fixed inset-0 bg-bg-canvas/75 backdrop-blur-[2px] flex items-center justify-center z-50 p-4 sm:p-8"
           onClick={() => setContent(null)}
         >
           <div

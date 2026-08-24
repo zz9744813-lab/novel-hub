@@ -266,7 +266,7 @@ export function LibraryPage({
 
       {deletingBook && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-bg-canvas/60 backdrop-blur-sm p-4"
           onClick={() => !deleteBusy && setDeletingBook(null)}
         >
           <div

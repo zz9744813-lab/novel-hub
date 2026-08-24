@@ -63,18 +63,48 @@ class ModelBindingMissingError(RuntimeError):
     """Raised when a required agent has no DB model binding."""
 
 
+async def _record_health_signals(attempts: list) -> None:
+    """Best-effort production health feedback (v9.5 spec §52)."""
+    try:
+        from app.database import async_session_factory
+        from app.model_autopilot.probe import record_production_signal
+
+        async with async_session_factory() as db:
+            for att in attempts:
+                await record_production_signal(
+                    db,
+                    provider=att.provider or "primary",
+                    model_id=att.model,
+                    success=bool(att.success),
+                    latency_ms=att.latency_ms,
+                    error_code=att.error_code,
+                )
+            await db.commit()
+    except Exception as e:  # noqa: BLE001 - never block the caller on health writes
+        logger.debug("health signal write skipped: %s", e)
+
+
 async def _resolve_model(
     agent_role: str,
     book_id: uuid.UUID,
     overrides: dict | None,
-) -> tuple[str, str, str | None]:
-    # Model/provider selection is audit-controlled by DB bindings. Overrides may
-    # tune generation parameters, but cannot bypass the lock or its fallback.
+) -> tuple[str, str, str | None, list[dict]]:
+    """v9.5: ModelRoutingResolver (spec §48) with legacy binding fallback.
+
+    Returns (provider, model, fallback_model, fallbacks[]).
+    """
+    from app.model_autopilot.resolver import resolve_route
+
     async with async_session_factory() as db:
+        try:
+            resolution = await resolve_route(db, agent_role=agent_role, book_id=book_id)
+            return resolution.provider, resolution.model, None, list(resolution.fallbacks)
+        except LookupError:
+            pass
         svc = ModelBindingService(db)
         binding = await svc.get_binding(agent_role, book_id)
         if binding:
-            return binding.provider, binding.primary_model, binding.fallback_model
+            return binding.provider, binding.primary_model, binding.fallback_model, []
 
     raise ModelBindingMissingError(
         f"No model binding for agent_role={agent_role} book_id={book_id}. "
@@ -186,7 +216,7 @@ async def call_agent(
                 }
 
     try:
-        provider, model, fallback_model = await _resolve_model(agent_role, book_id, overrides)
+        provider, model, fallback_model, fallbacks = await _resolve_model(agent_role, book_id, overrides)
     except ModelBindingMissingError as e:
         logger.error(str(e))
         run_id = uuid.uuid4()
@@ -276,6 +306,7 @@ async def call_agent(
         temperature=temperature,
         provider=provider,
         fallback_model=fallback_model,
+        fallbacks=fallbacks,
         response_format=response_format,
     )
 
@@ -407,6 +438,7 @@ async def call_agent(
             temperature=min(float(temperature), 0.2),
             provider=provider,
             fallback_model=fallback_model,
+            fallbacks=fallbacks,
             response_format=response_format,
         )
         # Keep repair attempts globally ordered so route/context rows are unique.
@@ -523,6 +555,9 @@ async def call_agent(
         )
     raw_response_summary["usage_status"] = "unknown" if usage_unknown else "known"
     raw_response_summary["usage_unknown"] = usage_unknown
+
+    # v9.5 §52: every real production attempt feeds model health snapshots.
+    await _record_health_signals(attempts)
 
     # Repair attempts were not known during the initial audit transaction.
     # Persist their route/context rows before closing the run.

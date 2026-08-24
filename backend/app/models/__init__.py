@@ -35,6 +35,9 @@ from app.models.tables import (
     EditorialRegressionCase, EditorialExperiment,
     # v9.4 autonomous writing session
     WritingSession, WritingSessionEvent, SessionAdvanceOutbox,
+    # v9.5 model autopilot
+    ModelCatalog, ModelCapabilityProfile, ModelHealthProbe, ModelHealthSnapshot,
+    ModelRoleScore, ModelRoutingPolicy, ModelRoutePlan,
 )
 
 __all__ = [
@@ -65,4 +68,7 @@ __all__ = [
     "EditorialPreferencePair", "EditorialImprovementProposal",
     "EditorialRegressionCase", "EditorialExperiment",
     "WritingSession", "WritingSessionEvent", "SessionAdvanceOutbox",
+    "ModelCatalog", "ModelCapabilityProfile", "ModelHealthProbe",
+    "ModelHealthSnapshot", "ModelRoleScore", "ModelRoutingPolicy",
+    "ModelRoutePlan",
 ]

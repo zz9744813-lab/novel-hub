@@ -286,6 +286,11 @@ class WritingSession(Base, TimestampMixin):
     paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # v9.5 model autopilot (spec §45)
+    model_route_plan_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    model_routing_policy_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    model_preflight_status: Mapped[str | None] = mapped_column(String(20), nullable=True)  # pending|pass|blocked
+    model_preflight_detail: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     __table_args__ = (
         Index("ix_writing_sessions_book_key", "book_id", "create_idempotency_key"),
     )
@@ -835,6 +840,158 @@ class AgentModelBinding(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     updated_by: Mapped[str] = mapped_column(String(200), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    # v9.5 autopilot routing fields (spec §3)
+    routing_mode: Mapped[str] = mapped_column(String(12), nullable=False, default="hybrid")  # manual|auto|hybrid
+    routing_policy_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    manual_primary_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    manual_fallback_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    allowed_model_ids: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    blocked_model_ids: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+
+
+class ModelCatalog(Base, TimestampMixin):
+    """v9.5: provider/model registry (spec §6)."""
+    __tablename__ = "model_catalog"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    provider: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    model_id: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    display_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    family: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    vendor: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    auto_route_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    availability_status: Mapped[str] = mapped_column(String(20), nullable=False, default="unknown")  # available|missing|disabled
+    discovery_source: Mapped[str] = mapped_column(String(30), nullable=False, default="seed")  # provider_api|manual|seed
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    __table_args__ = (UniqueConstraint("provider", "model_id"),)
+
+
+class ModelCapabilityProfile(Base, TimestampMixin):
+    """v9.5: per-model capability facts (spec §7)."""
+    __tablename__ = "model_capability_profiles"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    model_catalog_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("model_catalog.id"), nullable=False, index=True
+    )
+    context_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    supports_stream: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    supports_json_schema: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    supports_tools: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    supports_reasoning: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    supports_system_prompt: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    reasoning_mode: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    capability_source: Mapped[str] = mapped_column(String(30), nullable=False, default="unknown")  # manual|provider_metadata|benchmark|inferred
+    capability_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    quality_tier: Mapped[str] = mapped_column(String(12), nullable=False, default="unknown")  # S|A|B|C|unknown
+    static_quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+
+
+class ModelHealthProbe(Base, TimestampMixin):
+    """v9.5: one probe attempt (spec §22)."""
+    __tablename__ = "model_health_probes"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    model_catalog_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("model_catalog.id"), nullable=False, index=True
+    )
+    probe_type: Mapped[str] = mapped_column(String(12), nullable=False)  # l0_provider|l1_ping|l2_capability
+    status: Mapped[str] = mapped_column(String(30), nullable=False, index=True)  # ok|failed
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    first_token_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    output_valid: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    detail_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+
+
+class ModelHealthSnapshot(Base, TimestampMixin):
+    """v9.5: one row per model health (spec §23)."""
+    __tablename__ = "model_health_snapshots"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    model_catalog_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("model_catalog.id"), nullable=False, unique=True
+    )
+    health_status: Mapped[str] = mapped_column(String(16), nullable=False, default="unknown", index=True)
+    success_rate_15m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    success_rate_1h: Mapped[float | None] = mapped_column(Float, nullable=True)
+    success_rate_24h: Mapped[float | None] = mapped_column(Float, nullable=True)
+    p50_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    p95_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_failure_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_probe_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_mix_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    health_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class ModelRoleScore(Base, TimestampMixin):
+    """v9.5: role-wise model quality score (spec §11–§18)."""
+    __tablename__ = "model_role_scores"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    model_catalog_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("model_catalog.id"), nullable=False, index=True
+    )
+    agent_role: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    static_prior_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    benchmark_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    production_quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    human_quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reliability_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    composite_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    score_version: Mapped[str] = mapped_column(String(30), nullable=False, default="v1")
+    detail_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    __table_args__ = (UniqueConstraint("model_catalog_id", "agent_role"),)
+
+
+class ModelRoutingPolicy(Base, TimestampMixin):
+    """v9.5: routing policy (spec §34)."""
+    __tablename__ = "model_routing_policies"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    scope_type: Mapped[str] = mapped_column(String(20), nullable=False, default="global")  # global|book
+    scope_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    mode: Mapped[str] = mapped_column(String(12), nullable=False, default="hybrid")  # manual|auto|hybrid
+    min_quality_score: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    min_health_score: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    require_provider_diversity: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    fallback_count: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
+    allow_degraded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    quality_weight: Mapped[float] = mapped_column(Float, nullable=False, default=0.45)
+    reliability_weight: Mapped[float] = mapped_column(Float, nullable=False, default=0.25)
+    context_weight: Mapped[float] = mapped_column(Float, nullable=False, default=0.20)
+    health_weight: Mapped[float] = mapped_column(Float, nullable=False, default=0.10)
+    latency_weight: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    cost_weight: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    role_overrides_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+
+
+class ModelRoutePlan(Base, TimestampMixin):
+    """v9.5: frozen per-session route assignment (spec §43)."""
+    __tablename__ = "model_route_plans"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("books.id"), nullable=False, index=True)
+    writing_session_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("writing_sessions.id"), nullable=True, index=True
+    )
+    plan_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    policy_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    policy_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    assignments_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    health_snapshot_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reason_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")  # active|superseded|failed
 
 
 class ModelChangeLog(Base):

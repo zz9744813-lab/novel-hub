@@ -67,7 +67,7 @@ export function CommandPalette({ items, onClose }: CommandPaletteProps) {
 
   return (
     <div className="fixed inset-0 z-[9999] flex items-start justify-center pt-24">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 bg-bg-canvas/60 backdrop-blur-sm" onClick={onClose} />
       <div className="relative w-full max-w-xl bg-bg-panel border border-border rounded-card shadow-2xl overflow-hidden animate-modal-in">
         <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
           <kbd className="text-2xs text-text-disabled font-mono bg-bg-surface px-1.5 py-0.5 rounded border border-border-subtle hidden sm:inline">

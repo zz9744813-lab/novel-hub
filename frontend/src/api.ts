@@ -505,6 +505,27 @@ export const api = {
     history: (bookId: string) =>
       fetchJSON<{ items: WritingSessionView[] }>(`/api/books/${bookId}/writing-sessions`),
   },
+  modelCenter: {
+    overview: () => fetchJSON<any>("/api/model-center/health"),
+    models: () => fetchJSON<{ items: any[] }>("/api/model-center/models"),
+    modelDetail: (catalogId: string) => fetchJSON<any>(`/api/model-center/models/${catalogId}`),
+    probes: (catalogId: string) => fetchJSON<any>(`/api/model-center/models/${catalogId}/probes`),
+    probeNow: (catalogId: string) => fetchJSON<any>(`/api/model-center/models/${catalogId}/probe`, { method: "POST" }),
+    probeAll: () => fetchJSON<any>("/api/model-center/probe-all", { method: "POST" }),
+    sync: () => fetchJSON<any>("/api/model-center/sync", { method: "POST" }),
+    roleRanking: (role: string) => fetchJSON<any>(`/api/model-center/role-ranking/${role}`),
+    routing: () => fetchJSON<{ items: any[] }>("/api/model-center/routing"),
+    routesCurrent: () => fetchJSON<{ items: any[] }>("/api/model-center/routes/current"),
+    timeline: () => fetchJSON<any>("/api/model-center/routes/timeline"),
+    recalculate: () => fetchJSON<any>("/api/model-center/routes/recalculate", { method: "POST" }),
+    enableAutoRoute: (catalogId: string) =>
+      fetchJSON<any>(`/api/model-center/models/${catalogId}/enable`, { method: "POST" }),
+    patchCapabilities: (catalogId: string, data: any) =>
+      fetchJSON<any>(`/api/model-center/models/${catalogId}/capabilities`, { method: "PATCH", body: JSON.stringify(data) }),
+    policies: () => fetchJSON<any>("/api/model-center/policies"),
+    createPolicy: (data: any) =>
+      fetchJSON<any>("/api/model-center/policies", { method: "POST", body: JSON.stringify(data) }),
+  },
   context: {
     get: (id: string) => fetchJSON<ContextPackageDetail>(`/api/context-packages/${id}`),
     promptPreview: (id: string) => fetchJSON<any>(`/api/context-packages/${id}/prompt-preview`),

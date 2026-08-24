@@ -22,7 +22,7 @@ const PROPOSAL_STATUS: Record<string, { label: string; cls: string }> = {
   approved: { label: "已批准", cls: "bg-brand-accent/10 border-brand-accent/30 text-brand-accent" },
   experimenting: { label: "实验中", cls: "bg-cyan-400/10 border-cyan-400/30 text-cyan-300" },
   promoted: { label: "已上线", cls: "bg-success/10 border-success/30 text-success" },
-  rolled_back: { label: "已回滚", cls: "bg-white/5 border-white/15 text-text-tertiary" },
+  rolled_back: { label: "已回滚", cls: "bg-bg-panel/5 border-border-standard/15 text-text-tertiary" },
   rejected: { label: "已否决", cls: "bg-danger/10 border-danger/30 text-danger" },
 };
 
@@ -153,7 +153,7 @@ export function ImprovementPanel({ bookId }: { bookId: string }) {
           {proposals.map((p) => {
             const meta = PROPOSAL_STATUS[p.status] ?? {
               label: p.status,
-              cls: "bg-white/5 border-white/15 text-text-tertiary",
+              cls: "bg-bg-panel/5 border-border-standard/15 text-text-tertiary",
             };
             const patch = p.candidate_patch || {};
             const count = typeof patch.instruction_count === "number" ? patch.instruction_count : null;
@@ -175,7 +175,7 @@ export function ImprovementPanel({ bookId }: { bookId: string }) {
                   <p className="text-2xs text-text-disabled">生效章节：第 {p.effective_from_chapter} 章起</p>
                 )}
 
-                <div className="flex flex-wrap gap-1.5 pt-1 border-t border-white/5">
+                <div className="flex flex-wrap gap-1.5 pt-1 border-t border-border-standard/5">
                   {p.status === "proposed" && (
                     <>
                       <button
@@ -309,7 +309,7 @@ export function ImprovementPanel({ bookId }: { bookId: string }) {
                   className={`badge border ${
                     c.pareto_rank === 0
                       ? "bg-success/10 border-success/30 text-success"
-                      : "bg-white/5 border-white/15 text-text-tertiary"
+                      : "bg-bg-panel/5 border-border-standard/15 text-text-tertiary"
                   }`}
                 >
                   {c.pareto_rank === 0 ? "前沿" : "被支配"}

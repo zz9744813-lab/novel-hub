@@ -5,6 +5,19 @@ import { WritingSessionStartModal, StartOptions } from "../writing-session/Writi
 import { WritingSessionStatusCard } from "../writing-session/WritingSessionStatusCard";
 import { WritingSessionHistory } from "../writing-session/WritingSessionHistory";
 
+/** RFC4122 v4-ish key; crypto.randomUUID needs a secure context (https/localhost).
+ *  The VPS is served over plain HTTP, so fall back to Math.random-based UUID. */
+function genIdempotencyKey(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
 export function BookHomePage({
   bookId,
   onContinueWrite,
@@ -169,7 +182,7 @@ export function BookHomePage({
     setSessionBusy(true);
     setSessionError(null);
     try {
-      const created = await api.writingSessions.start(bookId, options, crypto.randomUUID());
+      const created = await api.writingSessions.start(bookId, options, genIdempotencyKey());
       setSession(created);
       setShowStartModal(false);
     } catch (e: any) {

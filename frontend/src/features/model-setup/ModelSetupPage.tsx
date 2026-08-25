@@ -87,9 +87,7 @@ export function ModelSetupPage() {
   const last = current?.last_run;
   const rec = current?.recommendation || {};
   const perfRows = perf?.models || [];
-  const healthCounts = perfRows.filter((m: any) => m.health_status === "healthy" || m.health_status === "degraded").length;
-  const tpsValues = perfRows.map((m: any) => m.tokens_per_second_p50).filter((v: any) => v != null);
-
+    
   return (
     <div className="space-y-4">
       {/* ① 操作区 */}
@@ -187,14 +185,14 @@ export function ModelSetupPage() {
           <span className="text-2xs text-text-tertiary">24h 窗口</span>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-          <Kpi label="模型可用" value={`${healthCounts} / ${perfRows.length}`} />
+          <Kpi label="可用模型" value={perf?.global ? `${perf.global.available_models} / ${perf.global.total_models}` : "—"} />
           <Kpi
             label="24h成功率"
-            value={perfRows.length ? `${((perfRows.filter((m: any) => (m.success_rate ?? 0) > 0.95).length / perfRows.length) * 100).toFixed(0)}%` : "—"}
+            value={perf?.global?.overall_success_rate != null ? `${(perf.global.overall_success_rate * 100).toFixed(1)}%` : "—"}
           />
-          <Kpi label="TTFT P50" value={perfRows[0]?.ttft_p50_ms ? `${(perfRows[0].ttft_p50_ms / 1000).toFixed(1)}s` : "—"} />
-          <Kpi label="TTFT P95" value={perfRows[0]?.ttft_p95_ms ? `${(perfRows[0].ttft_p95_ms / 1000).toFixed(1)}s` : "—"} />
-          <Kpi label="输出速度 P50" value={tpsValues.length ? `${Math.max(...tpsValues)} tok/s` : "—"} />
+          <Kpi label="TTFT P50" value={perf?.global?.ttft_p50_global_ms ? `${(perf.global.ttft_p50_global_ms / 1000).toFixed(1)}s` : "—"} />
+          <Kpi label="TTFT P95" value={perf?.global?.ttft_p95_global_ms ? `${(perf.global.ttft_p95_global_ms / 1000).toFixed(1)}s` : "—"} />
+          <Kpi label="输出速度 P50" value={perf?.global?.tokens_per_second_p50_global != null ? `${perf.global.tokens_per_second_p50_global} tok/s` : "—"} />
         </div>
         <div className="overflow-auto max-h-80 rounded-md border border-border">
           <table className="w-full text-xs">

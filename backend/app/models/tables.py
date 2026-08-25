@@ -178,6 +178,11 @@ class ChapterVersion(Base, TimestampMixin):
     parent_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     editorial_review_round_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     revision_origin: Mapped[str | None] = mapped_column(String(40), nullable=True)  # editorial_revision|editorial_replan|human_direct_edit
+    # v9.7 §7.5 prompt evolution lineage
+    proposal_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    experiment_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    canary_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    rolled_back_from_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     __table_args__ = (UniqueConstraint("chapter_id", "version"),)
 
 
@@ -751,6 +756,9 @@ class AgentRunOutput(Base, TimestampMixin):
     run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("agent_runs.id"), primary_key=True)
     book_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     agent_role: Mapped[str] = mapped_column(String(100), nullable=False)
+    # v9.7 §5/§23: experience & technique references actually injected
+    experience_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    technique_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     provider: Mapped[str] = mapped_column(String(200), nullable=False)
     model_name: Mapped[str] = mapped_column(String(200), nullable=False)
     raw_provider_response: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
@@ -811,6 +819,7 @@ class PromptTemplate(Base, TimestampMixin):
 
 # ---- Technique cards ----
 class TechniqueCard(Base, TimestampMixin):
+    """v9.7 §23 DeepStudy technique knowledge — abstract mechanism, no source copies."""
     __tablename__ = "technique_cards"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -821,6 +830,19 @@ class TechniqueCard(Base, TimestampMixin):
     approved_by_human: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     source_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # v9.7 §23 DeepStudy fields
+    technique_type: Mapped[str] = mapped_column(String(40), nullable=False, default="dialogue")
+    mechanism: Mapped[str | None] = mapped_column(Text, nullable=True)
+    trigger_conditions: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    applicable_scene_types: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    avoid_when: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    planning_instruction: Mapped[str | None] = mapped_column(Text, nullable=True)
+    draft_instruction: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expected_effect: Mapped[str | None] = mapped_column(Text, nullable=True)
+    support_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    contradiction_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="candidate")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -865,6 +887,19 @@ class ModelCatalog(Base, TimestampMixin):
     auto_route_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     availability_status: Mapped[str] = mapped_column(String(20), nullable=False, default="unknown")  # available|missing|disabled
     discovery_source: Mapped[str] = mapped_column(String(30), nullable=False, default="seed")  # provider_api|manual|seed
+    # v9.7 §13.47 model classification & certification
+    model_kind: Mapped[str] = mapped_column(String(40), nullable=False, default="unknown")
+    input_modalities: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    output_modalities: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    text_generation_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    classification_source: Mapped[str] = mapped_column(String(30), nullable=False, default="unknown")
+    classification_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    evaluation_status: Mapped[str] = mapped_column(String(30), nullable=False, default="unclassified")
+    certification_level: Mapped[str] = mapped_column(String(30), nullable=False, default="none")
+    certification_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    benchmark_revision: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    last_certified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    evaluation_exclusion_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
@@ -879,6 +914,11 @@ class ModelCapabilityProfile(Base, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("model_catalog.id"), nullable=False, index=True
     )
     context_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # v9.7 §13.22: three measured context lengths
+    declared_context_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    accepted_context_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    effective_context_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    context_measurement_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     max_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     supports_stream: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     supports_json_schema: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -1065,6 +1105,9 @@ class AgentContextPackage(Base):
     chapter_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("chapters.id"), nullable=True)
     scene_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("scenes.id"), nullable=True)
     agent_role: Mapped[str] = mapped_column(String(100), nullable=False)
+    # v9.7 §5/§23: experience & technique references actually injected
+    experience_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    technique_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     provider: Mapped[str] = mapped_column(String(100), nullable=False)
     model: Mapped[str] = mapped_column(String(200), nullable=False)
     prompt_version: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -1104,6 +1147,13 @@ class ReferenceSample(Base):
     status: Mapped[str] = mapped_column(String(50), nullable=False)
     created_by: Mapped[str] = mapped_column(String(200), nullable=False)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    # v9.7 §24 research provenance
+    source_kind: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    source_ref_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    research_task_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    research_document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    imported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class GenreProfile(Base):
@@ -1122,6 +1172,13 @@ class GenreProfile(Base):
     sanitizer_report: Mapped[dict] = mapped_column(JSONB, nullable=False)
     approved_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # v9.7 §24 research provenance
+    source_kind: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    source_ref_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    research_task_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    research_document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    imported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 # ---- v9.2 Style Intelligence Engine tables (spec §41, §52) ----
@@ -1441,7 +1498,15 @@ class PromptTemplateVersion(Base, TimestampMixin):
     activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     supersedes_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     last_test_passed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    __table_args__ = (UniqueConstraint("template_key", "scope_type", "scope_id", "version"),)
+    # v9.7 §7.5 prompt evolution lineage
+    proposal_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    experiment_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    canary_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    rolled_back_from_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    __table_args__ = (
+        UniqueConstraint("template_key", "scope_type", "scope_id", "version"),
+        Index("ix_prompt_version_role_scope_status", "agent_role", "scope_type", "scope_id", "status"),
+    )
 
 
 class PromptTestRun(Base, TimestampMixin):

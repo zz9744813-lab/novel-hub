@@ -149,7 +149,10 @@ class TestCallAgentSessionPattern:
                 uuid.UUID("00000000-0000-0000-0000-000000000001"),
                 {"provider": "unbound-provider", "model": "unbound-model"},
             )
-        assert resolved == ("bound-provider", "bound-model", "bound-fallback")
+        # v9.7: resolution now returns (provider, model, fallback_model, fallbacks[])
+        assert resolved[0] == "bound-provider"
+        assert resolved[1] == "bound-model"
+        assert resolved[3] == [{"model": "bound-fallback", "provider": "bound-provider"}]
 
     @pytest.mark.asyncio
     async def test_usage_event_is_recorded_for_each_gateway_attempt(self):
@@ -174,7 +177,7 @@ class TestCallAgentSessionPattern:
              patch("app.agents.caller.stream_with_retry", new_callable=AsyncMock) as mock_stream, \
              patch("app.agents.caller.full_pipeline_async", new_callable=AsyncMock) as mock_pipeline, \
              patch("app.agents.caller._resolve_model", new_callable=AsyncMock) as mock_resolve:
-            mock_resolve.return_value = ("new-api", "deepseek-v4-flash", None)
+            mock_resolve.return_value = ("new-api", "deepseek-v4-flash", None, [])
             mock_stream.return_value = mock_result
             mock_pipeline.return_value = ({"test": "output"}, MagicMock(value="publishable"), {})
             await call_agent(
@@ -212,7 +215,7 @@ class TestCallAgentSessionPattern:
              patch("app.agents.caller.full_pipeline_async", new_callable=AsyncMock) as mock_pipeline, \
              patch("app.agents.caller._resolve_model", new_callable=AsyncMock) as mock_resolve:
 
-            mock_resolve.return_value = ("new-api", "deepseek-v4-flash", None)
+            mock_resolve.return_value = ("new-api", "deepseek-v4-flash", None, [])
             mock_stream.return_value = mock_result
             mock_pipeline.return_value = ({"test": "output"}, MagicMock(value="publishable"), {})
 
@@ -254,7 +257,7 @@ class TestCallAgentSessionPattern:
              patch("app.agents.caller.full_pipeline_async", new_callable=AsyncMock) as mock_pipeline, \
              patch("app.agents.caller._resolve_model", new_callable=AsyncMock) as mock_resolve:
 
-            mock_resolve.return_value = ("new-api", "deepseek-v4-flash", None)
+            mock_resolve.return_value = ("new-api", "deepseek-v4-flash", None, [])
             mock_stream.return_value = mock_result
             mock_pipeline.return_value = (None, MagicMock(value="blocked"), {"block_reason": "HTTP_500"})
 
@@ -298,7 +301,7 @@ class TestCallAgentSessionPattern:
              patch("app.agents.caller._resolve_model", new_callable=AsyncMock) as mock_resolve, \
              patch("app.agents.caller.record_model_route", new_callable=AsyncMock), \
              patch("app.agents.caller.save_context_package", new_callable=AsyncMock) as mock_context:
-            mock_resolve.return_value = ("new-api", "deepseek-v4-flash", None)
+            mock_resolve.return_value = ("new-api", "deepseek-v4-flash", None, [])
             mock_stream.side_effect = [invalid, valid]
             mock_pipeline.side_effect = [
                 (None, MagicMock(value="blocked"), {"block_reason": "json_parse_failed"}),
@@ -348,7 +351,7 @@ class TestCallAgentSessionPattern:
              patch("app.agents.caller.stream_with_retry", new_callable=AsyncMock) as mock_stream, \
              patch("app.agents.caller.full_pipeline_async", new_callable=AsyncMock) as mock_pipeline, \
              patch("app.agents.caller._resolve_model", new_callable=AsyncMock) as mock_resolve:
-            mock_resolve.return_value = ("new-api", "deepseek-v4-flash", None)
+            mock_resolve.return_value = ("new-api", "deepseek-v4-flash", None, [])
             mock_stream.return_value = mock_result
             mock_pipeline.return_value = ({"test": "output"}, MagicMock(value="publishable"), {})
 

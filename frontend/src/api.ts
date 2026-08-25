@@ -478,6 +478,16 @@ export const api = {
   chapterRuns: {
     get: (runId: string) => fetchJSON<ChapterRunDetail>(`/api/chapter-runs/${runId}`),
   },
+  quality: {
+    overview: (bookId: string) => fetchJSON<any>(`/api/books/${bookId}/quality/overview`),
+    trends: (bookId: string) => fetchJSON<any>(`/api/books/${bookId}/quality/trends`),
+    rootCauses: (bookId: string) => fetchJSON<any>(`/api/books/${bookId}/quality/root-causes`),
+    agentPerformance: (bookId: string) => fetchJSON<any>(`/api/books/${bookId}/quality/agent-performance`),
+    modelPerformance: (bookId: string) => fetchJSON<any>(`/api/books/${bookId}/quality/model-performance`),
+    aiToneSummary: (bookId: string) => fetchJSON<any>(`/api/books/${bookId}/ai-tone/summary`),
+    techniques: (bookId: string) => fetchJSON<any>(`/api/books/${bookId}/techniques`),
+    techniqueEffectiveness: (bookId: string) => fetchJSON<any>(`/api/books/${bookId}/techniques/effectiveness`),
+  },
   writingSessions: {
     current: (bookId: string) =>
       fetchJSON<{ session: WritingSessionView | null }>(`/api/books/${bookId}/writing-sessions/current`),
@@ -534,6 +544,11 @@ export const api = {
     autoConfigure: () => fetchJSON<any>("/api/model-setup/auto-configure", { method: "POST" }),
     run: (runId: string) => fetchJSON<any>(`/api/model-setup/runs/${runId}`),
     current: () => fetchJSON<any>("/api/model-setup/current"),
+    evalSuites: () => fetchJSON<any>("/api/model-setup/evaluation/suites"),
+    qualify: (catalogId: string) => fetchJSON<any>(`/api/model-setup/evaluation/models/${catalogId}/qualify`, { method: "POST" }),
+    contextCertify: (catalogId: string) => fetchJSON<any>(`/api/model-setup/evaluation/models/${catalogId}/context-certify`, { method: "POST" }),
+    certification: (catalogId: string) => fetchJSON<any>(`/api/model-setup/evaluation/models/${catalogId}/certification`),
+    contextProfile: (catalogId: string) => fetchJSON<any>(`/api/model-setup/evaluation/models/${catalogId}/context-profile`),
     recommendation: () => fetchJSON<any>("/api/model-setup/recommendation"),
     performance: (window = "24h") => fetchJSON<any>(`/api/model-setup/performance?window=${window}`),
     rollback: (runId: string) => fetchJSON<any>(`/api/model-setup/rollback/${runId}`, { method: "POST" }),

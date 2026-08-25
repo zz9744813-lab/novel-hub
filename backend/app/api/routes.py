@@ -199,7 +199,58 @@ async def health_ready():
 
 @router.get("/metrics")
 async def metrics():
-    return {"app": "novelforge", "status": "running"}
+    """v9.7 §30: real Prometheus-style metrics (no more placeholder status)."""
+    from app.database import async_session_factory
+    from sqlalchemy import func, select
+    from app.models import AgentRun, ChapterRun, LlmUsageEvent, WritingSession
+
+    counts = {}
+    async with async_session_factory() as db:
+        counts["novelforge_sessions_running"] = (
+            (
+                await db.execute(
+                    select(func.count()).select_from(WritingSession).where(
+                        WritingSession.status.in_(("running", "paused", "waiting_editorial", "blocked", "created"))
+                    )
+                )
+            ).scalar()
+            or 0
+        )
+        counts["novelforge_chapter_runs_running"] = (
+            (
+                await db.execute(
+                    select(func.count()).select_from(ChapterRun).where(
+                        ChapterRun.status.in_(("queued", "running", "retryable"))
+                    )
+                )
+            ).scalar()
+            or 0
+        )
+        counts["novelforge_chapter_runs_failed_total"] = (
+            (
+                await db.execute(
+                    select(func.count()).select_from(ChapterRun).where(
+                        ChapterRun.status.in_(("failed", "needs_human"))
+                    )
+                )
+            ).scalar()
+            or 0
+        )
+        counts["novelforge_agent_calls_total"] = (
+            await db.execute(select(func.count()).select_from(AgentRun))
+        ).scalar() or 0
+        counts["novelforge_agent_call_failures_total"] = (
+            (
+                await db.execute(
+                    select(func.count()).select_from(AgentRun).where(AgentRun.status == "failed")
+                )
+            ).scalar()
+            or 0
+        )
+        counts["novelforge_llm_calls_total"] = (
+            await db.execute(select(func.count()).select_from(LlmUsageEvent))
+        ).scalar() or 0
+    return "\n".join(f"{name} {value}" for name, value in counts.items())
 
 
 # ---- Books CRUD ----
@@ -1908,7 +1959,7 @@ async def analyze_reference_sample(
     import gzip
     from pathlib import Path
     from app.models.tables import ReferenceSample, GenreProfile, AgentRun
-    from app.agents.reference_analyzer import run_reference_analyzer_with_system
+    from app.agents.reference_analyzer import run_style_reference_analysis
     from app.engine.style_sanitizer import sanitize_genre_profile
 
     sample = (
@@ -1930,7 +1981,7 @@ async def analyze_reference_sample(
     sample.status = "analyzing"
     await db.commit()
 
-    profile = await run_reference_analyzer_with_system(
+    profile = await run_style_reference_analysis(
         book_id=uuid.UUID(book_id),
         reference_text=text,
         genre_hint=sample.genre_hint,

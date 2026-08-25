@@ -50,69 +50,10 @@ async def run_reference_analyzer(
     genre_hint: str | None = None,
     **_deprecated,
 ) -> dict:
-    """Analyze reference text and produce GenreProfile candidate JSON."""
-    # Cap input size for VPS memory / token budget
-    sample = reference_text[:40000]
-    user_content = f"""{wrap_untrusted(sample)}
-
-体裁提示：{genre_hint or '无'}
-
-请分析上述参考文本的风格特征，输出 JSON。"""
-
-    try:
-        run, publishable, meta = await call_agent(
-            book_id=book_id,
-            agent_role="query_planner",  # bound JSON agent; Genre analyze role
-            user_content=user_content,
-            assembly_manifest={
-                "entries": [{"type": "untrusted_reference", "chars": len(sample)}],
-                "excluded_entries": [{"type": "full_reference_original"}],
-                "budget": {
-                    "max_context": 128000,
-                    "reserved_output": 2048,
-                    "used": len(user_content) // 4,
-                },
-            },
-            overrides={
-                # keep system from PROMPTS; inject task via user_content
-            },
-        )
-        # Prefer PROMPTS system for query_planner; also pass custom via content.
-        # If call_agent only uses PROMPTS[role], prepend task instructions in user.
-        # Re-call with explicit system by overriding user to include SYSTEM_PROMPT note
-        if meta.get("error") and False:
-            pass
-
-        # Actually re-run with a better user payload that includes analyzer rules
-        # (call_agent always uses PROMPTS[agent_role] system — so put rules in user)
-        if publishable is None or meta.get("error"):
-            # second try with richer instructions already in user_content
-            pass
-
-        profile: dict
-        if isinstance(publishable, dict):
-            profile = publishable
-        elif isinstance(publishable, str) and publishable:
-            from app.gateway.normalizer import normalize_json
-            profile = normalize_json(publishable) or {"raw": publishable}
-        else:
-            return {
-                "error": meta.get("error") or "empty",
-                "warnings": ["analyzer_failed"],
-                "run_id": str(run.id) if run else None,
-            }
-
-        snippet = profile.get("prompt_injection_snippet", "") or ""
-        if len(snippet) < 200 or len(snippet) > 500:
-            profile.setdefault("warnings", [])
-            profile["warnings"].append(f"snippet_length_invalid:{len(snippet)}")
-
-        profile["_analyzer_run_id"] = str(run.id) if run else None
-        return profile
-
-    except Exception as e:
-        logger.error("ReferenceAnalyzer error: %s", e)
-        return {"error": str(e), "warnings": ["analyzer_failed"]}
+    """DEPRECATED (v9.7 §36): legacy alias of run_style_reference_analysis."""
+    import warnings
+    warnings.warn("run_reference_analyzer is deprecated; use run_style_reference_analysis", DeprecationWarning, stacklevel=2)
+    return await run_style_reference_analysis(book_id, reference_text, genre_hint)
 
 
 async def run_reference_analyzer_with_system(
@@ -167,3 +108,11 @@ async def run_reference_analyzer_with_system(
     except Exception as e:
         logger.error("ReferenceAnalyzer error: %s", e)
         return {"error": str(e), "warnings": ["analyzer_failed"]}
+
+async def run_style_reference_analysis(
+    book_id: uuid.UUID,
+    reference_text: str,
+    genre_hint: str | None = None,
+) -> dict:
+    """v9.7 §21: the ONE reference-analyzer implementation (style_analyzer role)."""
+    return await run_reference_analyzer_with_system(book_id, reference_text, genre_hint)

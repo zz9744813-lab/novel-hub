@@ -11,13 +11,12 @@ from app.model_autopilot.router import DEFAULT_WEIGHTS
 
 
 def test_autoconfig_required_roles_complete():
-    assert set(REQUIRED_ROLES) == {
-        "chapter_planner",
-        "draft_writer",
-        "review_agent",
-        "state_extractor",
-        "style_analyzer",
-    }
+    # v9.7 §11: REQUIRED_ROLES comes from RoleRegistry (production + model_required)
+    assert "chapter_planner" in REQUIRED_ROLES
+    assert "draft_writer" in REQUIRED_ROLES
+    assert "review_agent" in REQUIRED_ROLES
+    assert "state_extractor" in REQUIRED_ROLES
+    assert len(REQUIRED_ROLES) >= 5
     assert ROLE_DISPLAY["draft_writer"] == "DraftWriter"
     assert VALID_MINUTES == 30
 

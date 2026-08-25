@@ -63,6 +63,24 @@ class ModelBindingMissingError(RuntimeError):
     """Raised when a required agent has no DB model binding."""
 
 
+async def _run_ai_tone_lint(*, book_id, agent_role, text, chapter_id, run_id) -> None:
+    """Best-effort AI-Tone diagnosis; findings wait for human confirmation (v9.7 §26)."""
+    try:
+        from app.database import async_session_factory
+        from app.style.ai_tone.lint import lint_text, persist_findings
+
+        findings = lint_text(
+            text, book_id=book_id, chapter_id=chapter_id, chapter_run_id=run_id
+        )
+        if not findings:
+            return
+        async with async_session_factory() as db:
+            await persist_findings(db, findings)
+            await db.commit()
+    except Exception as e:  # noqa: BLE001 - lint must never break production
+        logger.debug("ai-tone lint skipped: %s", e)
+
+
 async def _record_health_signals(attempts: list) -> None:
     """Best-effort production health feedback (v9.5 spec §52)."""
     try:
@@ -88,6 +106,7 @@ async def _resolve_model(
     agent_role: str,
     book_id: uuid.UUID,
     overrides: dict | None,
+    chapter_run_id: uuid.UUID | None = None,
 ) -> tuple[str, str, str | None, list[dict]]:
     """v9.5: ModelRoutingResolver (spec §48) with legacy binding fallback.
 
@@ -97,7 +116,10 @@ async def _resolve_model(
 
     async with async_session_factory() as db:
         try:
-            resolution = await resolve_route(db, agent_role=agent_role, book_id=book_id)
+            resolution = await resolve_route(
+                db, agent_role=agent_role, book_id=book_id,
+                chapter_run_id=chapter_run_id or None,
+            )
             return resolution.provider, resolution.model, None, list(resolution.fallbacks)
         except LookupError:
             pass
@@ -119,6 +141,7 @@ async def call_agent(
     user_content: str,
     chapter_id: uuid.UUID | None = None,
     scene_id: uuid.UUID | None = None,
+    chapter_run_id: uuid.UUID | None = None,  # v9.7 frozen-route chain
     parent_run_id: uuid.UUID | None = None,
     overrides: dict | None = None,
     assembly_manifest: dict | None = None,
@@ -132,33 +155,34 @@ async def call_agent(
 
     Returns (run, publishable, metadata). Run is detached ORM after final query.
     """
-    # v8 Prompt Studio: try active template first
+    # v9.7 PromptResolver: Book > Genre > Global > builtin (spec §6)
     prompt_config = None
-    template_obj = None
-    from app.models.tables import PromptTemplateVersion
     from sqlalchemy import select
     try:
         async with async_session_factory() as db_tpl:
-            template_obj = (await db_tpl.execute(
-                select(PromptTemplateVersion)
-                .where(PromptTemplateVersion.agent_role == agent_role)
-                .where(PromptTemplateVersion.status == "active")
-                .where(PromptTemplateVersion.activated_at.isnot(None))
-                .order_by(PromptTemplateVersion.version.desc())
-                .limit(1)
-            )).scalar_one_or_none()
-            if template_obj:
+            from app.services.prompt_resolver import resolve_prompt_with_builtin
+
+            resolved = await resolve_prompt_with_builtin(
+                db_tpl,
+                agent_role=agent_role,
+                book_id=book_id or None,
+                builtin=PROMPTS.get(agent_role),
+            )
+            if resolved is not None and resolved.scope_type != "builtin":
                 prompt_config = {
-                    "version": f"v{template_obj.version}",
-                    "system_prompt": template_obj.system_prompt or "",
-                    "user_prompt_template": template_obj.user_prompt_template or "",
-                    "template_id": template_obj.id,
-                    "template_version": template_obj.version,
-                    "output_schema": getattr(template_obj, "output_schema", None) or getattr(template_obj, "compiled_schema", None),
+                    "version": f"v{resolved.version}",
+                    "system_prompt": resolved.system_prompt,
+                    "user_prompt_template": resolved.user_prompt_template,
+                    "template_id": resolved.template_id,
+                    "template_version": resolved.version,
+                    "output_schema": resolved.output_schema,
                 }
-                logger.info("using PromptStudio template %s v%s for %s", template_obj.template_key, template_obj.version, agent_role)
+                logger.info(
+                    "using prompt %s v%s (%s scope) for %s",
+                    resolved.template_key, resolved.version, resolved.scope_type, agent_role,
+                )
     except Exception as e:
-        logger.warning("PromptStudio lookup failed, fallback to PROMPTS: %s", e)
+        logger.warning("PromptResolver failed, fallback to PROMPTS: %s", e)
 
     if prompt_config is None:
         if agent_role not in PROMPTS:
@@ -216,7 +240,9 @@ async def call_agent(
                 }
 
     try:
-        provider, model, fallback_model, fallbacks = await _resolve_model(agent_role, book_id, overrides)
+        provider, model, fallback_model, fallbacks = await _resolve_model(
+            agent_role, book_id, overrides, chapter_run_id=chapter_run_id
+        )
     except ModelBindingMissingError as e:
         logger.error(str(e))
         run_id = uuid.uuid4()
@@ -558,6 +584,16 @@ async def call_agent(
 
     # v9.5 §52: every real production attempt feeds model health snapshots.
     await _record_health_signals(attempts)
+
+    # v9.7 §25: AI-Tone lint on draft output — diagnosis only, never a rewrite.
+    if agent_role in ("draft_writer", "local_rewrite") and publishable:
+        await _run_ai_tone_lint(
+            book_id=book_id,
+            agent_role=agent_role,
+            text=publishable if isinstance(publishable, str) else str(publishable),
+            chapter_id=chapter_id,
+            run_id=run_id,
+        )
 
     # Repair attempts were not known during the initial audit transaction.
     # Persist their route/context rows before closing the run.

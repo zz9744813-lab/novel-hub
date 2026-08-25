@@ -922,6 +922,114 @@ async def assemble_context(
             )
         )
 
+
+    # ── v9.7 §5/§23: Experience & Technique cards really inject into production ──
+    experience_refs: list = []
+    technique_refs: list = []
+    try:
+        from app.editorial.runtime_experience import build_experience_context
+        scene_type = (scene_plan or {}).get("scene_type")
+        character_ids = []
+        if isinstance(scene_plan, dict):
+            character_ids = list(scene_plan.get("character_ids") or [])
+        cards = await build_experience_context(
+            db,
+            book_id=book_id,
+            agent_role=agent_role,
+            chapter_no=current_chapter,
+            scene_type=scene_type,
+            character_ids=character_ids or None,
+            limit=6,
+        )
+        for i, card in enumerate(cards):
+            experience_refs.append(
+                {
+                    "card_id": card["card_id"],
+                    "rule_type": card["rule_type"],
+                    "scope_type": card["scope_type"],
+                    "score": card["score"],
+                }
+            )
+            items.append(
+                _item(
+                    kind="experience_cards",
+                    content=card,
+                    priority=460 - i,
+                    required=False,
+                    reason="experience_injection",
+                    source_id=card["card_id"],
+                    agent_role=agent_role,
+                )
+            )
+    except Exception as e:  # noqa: BLE001 - injection must never break assembly
+        logger.warning("experience injection failed: %s", e)
+
+    if agent_role in ("chapter_planner", "draft_writer", "review_agent"):
+        try:
+            from app.models import TechniqueCard, TechniqueCardUsage
+            tech_limit = 3 if agent_role == "draft_writer" else 4 if agent_role == "chapter_planner" else 2
+            tech_cards = (
+                (
+                    await db.execute(
+                        select(TechniqueCard)
+                        .where(
+                            TechniqueCard.status == "active",
+                            (TechniqueCard.book_id == book_id) | (TechniqueCard.book_id.is_(None)),
+                        )
+                        .order_by(TechniqueCard.confidence.desc().nulls_last())
+                        .limit(tech_limit)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            scene_type = (scene_plan or {}).get("scene_type") if isinstance(scene_plan, dict) else None
+            for i, t in enumerate(tech_cards):
+                if scene_type and t.applicable_scene_types and scene_type not in (t.applicable_scene_types or []):
+                    continue
+                technique_refs.append(
+                    {"technique_card_id": str(t.id), "name": t.name, "type": t.technique_type}
+                )
+                items.append(
+                    _item(
+                        kind="technique_cards",
+                        content={
+                            "name": t.name,
+                            "mechanism": t.mechanism,
+                            "planning_instruction": t.planning_instruction if agent_role == "chapter_planner" else None,
+                            "draft_instruction": t.draft_instruction if agent_role == "draft_writer" else None,
+                            "expected_effect": t.expected_effect,
+                        },
+                        priority=430 - i,
+                        required=False,
+                        reason="technique_injection",
+                        source_id=str(t.id),
+                        agent_role=agent_role,
+                    )
+                )
+                db.add(
+                    TechniqueCardUsage(
+                        id=uuid.uuid4(),
+                        technique_card_id=t.id,
+                        book_id=book_id,
+                        chapter_id=None,
+                        scene_id=None,
+                        used=True,
+                    )
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("technique injection failed: %s", e)
+
+    context["experience_cards"] = [
+        {"rule_type": c["rule_type"], "instruction": c["instruction"], "avoid_when": c.get("avoid_when") or []}
+        for c in cards if "cards" in dir() and cards
+    ] if experience_refs else []
+    context["technique_cards"] = [t for t in technique_refs]
+    context["experience_refs"] = experience_refs
+    context["technique_refs"] = technique_refs
+    manifest["experience_refs"] = experience_refs
+    manifest["technique_refs"] = technique_refs
+
     budget = advisory_input_budget(context_window, max_output_tokens)
     manifest = build_manifest(items, input_budget=budget, agent_role=agent_role)
 

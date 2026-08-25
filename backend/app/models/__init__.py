@@ -1,5 +1,10 @@
 """Export all models for Alembic auto-detection."""
 from app.models.base import Base
+from app.models.v97_tables import (
+    QualitySignal, PromptEvolutionRun, PromptEvolutionCandidate,
+    TechniqueCardUsage, AIToneFinding, AIToneRuleCalibration,
+    ModelEvalSuite, ModelEvalCase, ModelEvalRun, ModelEvalCaseResult, ModelContextProfile,
+)
 from app.models.tables import (
     Book, BookSetting, OutlineVersion, OutlineNode, OutlineDependency,
     ChapterTask, Chapter, ChapterVersion, Scene, Paragraph, ChapterStateEvent,

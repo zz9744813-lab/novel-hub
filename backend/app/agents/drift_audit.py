@@ -211,10 +211,14 @@ async def run_drift_audit(
     db.add(report)
     await db.flush()
 
-    # Per §9.5: red -> NEEDS_HUMAN, pause affected chapters
+    # v9.7 §19: RED is enforced deterministically — future writing is blocked
+    # until a human fixes canon/outline; the session controller reads this row.
     if report.status == "red":
-        logger.warning(f"DriftAudit RED for chapters {chapter_range_start}-{chapter_range_end}")
-        # TODO: pause affected dependent chapters
+        logger.warning(
+            "DriftAudit RED for chapters %s-%s; affected=%s — session will block",
+            chapter_range_start, chapter_range_end,
+            (report.affected_future_nodes or [])[:5],
+        )
     elif report.status == "yellow":
         logger.info(f"DriftAudit YELLOW for chapters {chapter_range_start}-{chapter_range_end}")
     else:

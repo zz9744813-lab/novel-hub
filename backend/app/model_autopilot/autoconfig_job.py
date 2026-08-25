@@ -25,6 +25,7 @@ from app.model_autopilot.health import upsert_health_snapshot
 from app.model_autopilot.probe import probe_model_ping, probe_model_performance
 from app.model_autopilot.router import build_role_route, default_policy_for
 from app.model_autopilot.scoring import compute_role_score
+from app.model_autopilot.classification import TEXT_KINDS, eligible_text_candidates, classify_catalog_model
 from app.model_autopilot.seed import seed_for_model
 from app.models import (
     AgentModelBinding,
@@ -38,13 +39,11 @@ from app.models import (
 
 logger = logging.getLogger("novelforge.model_autopilot.autoconfig")
 
-REQUIRED_ROLES = [
-    "chapter_planner",
-    "draft_writer",
-    "review_agent",
-    "state_extractor",
-    "style_analyzer",
-]
+from app.agents.registry import ROLE_REGISTRY
+
+REQUIRED_ROLES = sorted(
+    role for role, spec in ROLE_REGISTRY.items() if spec.production and spec.model_required
+)
 
 ROLE_DISPLAY = {
     "chapter_planner": "ChapterPlanner",
@@ -164,8 +163,9 @@ async def run_model_detection(db: AsyncSession, run: ModelAutoConfigRun) -> dict
             logger.warning("catalog sync failed %s: %s", provider, e)
             await db.rollback()
 
-    models = await _get_models(db)
+    models = eligible_text_candidates(await _get_models(db))
     run.detected_models = len(models)
+    run.total = len(models)
     run.total = len(models)
 
     # phases: health + performance per model (isolated per model, §99)
@@ -267,15 +267,18 @@ async def run_model_detection(db: AsyncSession, run: ModelAutoConfigRun) -> dict
 
 
 async def build_recommendation(db: AsyncSession, models: list[ModelCatalog]) -> tuple[dict, int]:
-    """Per-role primary/fallback recommendation from current signals (spec §59)."""
+    """Per-role primary/fallback recommendation from current signals (spec §59, §12)."""
+    from app.agents.registry import ROLE_REGISTRY
+
     recommendation = {}
     eligible = 0
     for role in REQUIRED_ROLES:
-        floor = DEFAULT_ROLE_QUALITY_FLOOR.get(role, 70)
+        spec = ROLE_REGISTRY[role]
+        floor = spec.default_quality_floor or DEFAULT_ROLE_QUALITY_FLOOR.get(role, 70)
         result = await build_role_route(
             db,
             agent_role=role,
-            required_context=200000,  # recommendation is context-agnostic core
+            required_context=spec.expected_context_tokens,
             policy=POLICY,
             locked_primary=None,
         )

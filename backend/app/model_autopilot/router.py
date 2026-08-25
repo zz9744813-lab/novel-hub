@@ -137,12 +137,19 @@ async def build_role_route(
                 )
             )
         ).scalar_one_or_none()
+        # v9.7: effective context (measured) beats declared; unknown => reject for key roles
+        ctx = None
+        if cap is not None:
+            if cap.effective_context_window:
+                ctx = cap.effective_context_window
+            elif cap.declared_context_window:
+                ctx = cap.declared_context_window
+            elif cap.context_window:
+                ctx = cap.context_window
 
         context_fit = None
         if requires_context or required_context:
-            context_fit = context_fit_score(
-                cap.context_window if cap else None, required_context
-            )
+            context_fit = context_fit_score(ctx, required_context)
             if context_fit is None:
                 blockers.append(
                     {
@@ -179,6 +186,11 @@ async def build_role_route(
         if min_health and (health_status == "unavailable" or (snap and snap.health_score is None)):
             continue
         if health_status in ("unavailable", "missing", "disabled"):
+            continue
+        # v9.7 §13.39: certified text models only
+        if not catalog.text_generation_eligible:
+            continue
+        if catalog.certification_level not in ("role_qualified", "production_qualified") and requires_context:
             continue
         reliability = (snap.success_rate_15m or 0) * 100 if snap and snap.success_rate_15m is not None else None
         health_score = snap.health_score if snap and snap.health_score is not None else (100 if health_status == "healthy" else 70)

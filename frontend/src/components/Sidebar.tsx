@@ -5,8 +5,6 @@ import {
   AlertTriangle,
   Plus,
   PenTool,
-  Cpu,
-  Gauge,
   Package,
   Palette,
   Globe,
@@ -56,8 +54,6 @@ const bookTabs = [
 
 const diagTabs = [
   { id: "context", label: "Context 检视", icon: Package, desc: "CTX", needsBook: false },
-  { id: "models", label: "模型绑定", icon: Cpu, desc: "MODEL", needsBook: false },
-  { id: "model-center", label: "模型中心", icon: Gauge, desc: "AUTOPILOT", needsBook: false },
   { id: "audit", label: "漂移审计", icon: AlertTriangle, desc: "DRIFT", needsBook: true },
 ];
 
@@ -163,10 +159,10 @@ export function Sidebar({
           renderBtn(
             t,
             t.id === "settings" &&
-              ["settings", "models", "model-center", "context", "genre", "research"].includes(tab) &&
+              ["settings", "context", "genre", "research"].includes(tab) &&
               !["home", "outline", "chapters", "writing", "memory", "prompts", "diagnostics", "audit"].includes(tab)
                 ? tab === "settings" ||
-                  ["models", "model-center", "context", "genre", "research"].includes(tab)
+                  ["context", "genre", "research"].includes(tab)
                 : undefined
           )
         )}

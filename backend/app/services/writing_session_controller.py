@@ -328,37 +328,7 @@ async def evaluate_session(db: AsyncSession, session: WritingSession) -> Session
     now = datetime.now(timezone.utc)
     policy = session.policy_snapshot or DEFAULT_POLICY
 
-    # ── v9.5 model preflight (spec §29–§30): created → preflight → running ──
-    if session.status == "created" and session.model_preflight_status in (None, "pending"):
-        from app.model_autopilot.preflight import (
-            bootstrap_catalog_and_probes,
-            run_model_preflight,
-        )
-        from app.v74_utils import ModelBindingService
-
-        try:
-            await bootstrap_catalog_and_probes()
-        except Exception as e:  # noqa: BLE001 - never hard-fail the session on bootstrap
-            logger = logging.getLogger("novelforge.session")
-            logger.warning("preflight bootstrap failed: %s", e)
-        svc = ModelBindingService(db)
-        binding = await svc.get_binding("draft_writer", session.book_id)
-        preflight = await run_model_preflight(db, session=session, binding=binding)
-        if preflight.get("status") == "blocked":
-            return SessionDecision(
-                "block", "model preflight failed", {"blockers": preflight.get("blockers", [])}
-            )
-        session.status = "running"
-        await _record_event(
-            db,
-            session.id,
-            "session_started",
-            {"route_plan_id": preflight.get("route_plan_id")},
-            dedupe_key="session_started",
-        )
-        # fall through: same evaluation starts the first chapter
-
-    # ── 04 control_requested ──
+    # ── 04 control_requested (v9.6 §11: STOP has priority over preflight) ──
     if session.control_requested == "pause":
         if session.current_chapter_run_id:
             run = (
@@ -392,6 +362,18 @@ async def evaluate_session(db: AsyncSession, session: WritingSession) -> Session
         session.completed_at = now
         await _record_event(db, session.id, "cancelled", {}, dedupe_key="cancel_applied")
         return SessionDecision("cancel", "session cancelled")
+
+    # ── v9.6 preflight marker (spec §12): controller never runs network IO.
+    # The session_preflight_job owns detection; it flips the status and
+    # pokes the advance outbox when done. ──
+    if session.status == "created" and session.model_preflight_status is None:
+        session.model_preflight_status = "running"
+        await _record_event(
+            db, session.id, "model_preflight_started", {}, dedupe_key="model_preflight_started"
+        )
+        return SessionDecision("wait_current", "model preflight running")
+    if session.status == "created" and session.model_preflight_status == "running":
+        return SessionDecision("wait_current", "model preflight running (job)")
 
     # ── 05 deadline ──
     if session.deadline_at is not None and session.deadline_at <= now:

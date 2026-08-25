@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ModelBindingPanel } from "../../components/ModelBindingPanel";
+import { ModelSetupPage } from "../model-setup/ModelSetupPage";
 import { ContextInspector } from "../../components/ContextInspector";
 import { GenreProfilePanel } from "../../components/GenreProfilePanel";
 import { ResearchPanel } from "../../components/ResearchPanel";
@@ -12,7 +12,7 @@ import clsx from "clsx";
 type SysTab = "models" | "context" | "genre" | "research" | "prompts" | "resources";
 
 const TABS: { id: SysTab; label: string; icon: typeof Cpu; tip: string }[] = [
-  { id: "models", label: "模型绑定", icon: Cpu, tip: "从 New-API 拉列表，下拉选择主/备模型" },
+  { id: "models", label: "模型配置", icon: Cpu, tip: "自动检测 / 一键智能配置 / 性能与高级手动" },
   { id: "context", label: "Context", icon: Package, tip: "无书可进；有书时检视上下文包" },
   { id: "genre", label: "文风 Genre", icon: Palette, tip: "无书可进；有书时上传参考样本" },
   { id: "research", label: "调研", icon: Globe, tip: "无书可进；有书时管理调研会话" },
@@ -92,7 +92,7 @@ export function SystemSettingsPage({ initialTab = "models" }: { initialTab?: Sys
       )}
 
       <div className="min-h-[320px]">
-        {sub === "models" && <ModelBindingPanel />}
+        {sub === "models" && <ModelSetupPage />}
         {sub === "context" && <ContextInspector bookId={selectedBookId || ""} />}
         {sub === "genre" && <GenreProfilePanel bookId={selectedBookId || ""} />}
         {sub === "research" && <ResearchPanel bookId={selectedBookId || ""} />}

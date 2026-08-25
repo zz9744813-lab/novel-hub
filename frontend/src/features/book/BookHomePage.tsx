@@ -2,8 +2,6 @@ import { useEffect, useState } from "react";
 import { api, fetchAuthenticatedAsset } from "../../api";
 import { Play, Loader2, BookOpen, Users, Map, GitBranch, MapPin, ScrollText, Sparkles, Check } from "lucide-react";
 import { WritingSessionStartModal, StartOptions } from "../writing-session/WritingSessionStartModal";
-import { WritingSessionStatusCard } from "../writing-session/WritingSessionStatusCard";
-import { WritingSessionHistory } from "../writing-session/WritingSessionHistory";
 
 /** RFC4122 v4-ish key; crypto.randomUUID needs a secure context (https/localhost).
  *  The VPS is served over plain HTTP, so fall back to Math.random-based UUID. */
@@ -22,10 +20,12 @@ export function BookHomePage({
   bookId,
   onContinueWrite,
   onOpenChapters,
+  onOpenWritingDesk,
 }: {
   bookId: string;
   onContinueWrite: () => void;
   onOpenChapters: () => void;
+  onOpenWritingDesk: () => void;
 }) {
   const [data, setData] = useState<any>(null);
   const [ctx, setCtx] = useState<any>(null);
@@ -207,9 +207,7 @@ export function BookHomePage({
     }
   };
 
-  const handleOpenEditorial = () => {
-    onOpenChapters();
-  };
+
 
   if (err && !data) {
     return <div className="p-6 text-xs text-red-400">{err}</div>;
@@ -300,20 +298,34 @@ export function BookHomePage({
             <p className="text-xs text-brand-accent mt-3">{book.active_task.label}</p>
           )}
           {session && (
-            <div className="mt-3">
-              <WritingSessionStatusCard
-                session={session}
-                busy={sessionBusy}
-                onPause={() => runSessionAction((id) => api.writingSessions.pause(id))}
-                onResume={() => runSessionAction((id) => api.writingSessions.resume(id))}
-                onCancel={() => {
-                  if (window.confirm("结束本次自动写作？当前章节会先安全完成。")) {
-                    runSessionAction((id) => api.writingSessions.cancel(id));
-                  }
-                }}
-                onExtend={() => runSessionAction((id) => api.writingSessions.extend(id, 120))}
-                onOpenEditorial={handleOpenEditorial}
-              />
+            <div className="mt-3 panel-elevated rounded-xl px-4 py-3 space-y-2">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-text-primary">
+                  {session.status === "created" ? "◐ 正在检测并配置模型" : "● 自动写作进行中"}
+                </span>
+                {session.current_chapter_no && (
+                  <span className="text-text-secondary">
+                    第{session.current_chapter_no}章{session.current_step ? ` · ${session.current_step}` : ""}
+                  </span>
+                )}
+              </div>
+              <div className="text-2xs text-text-tertiary">
+                本次 {session.chapters_completed ?? 0} 章 / {(session.words_generated || 0).toLocaleString()} 字
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button onClick={onOpenWritingDesk} className="btn text-xs py-1.5 px-3">进入写作台</button>
+                <button
+                  onClick={() => {
+                    if (window.confirm("手动停止本次自动写作？")) {
+                      runSessionAction((id) => api.writingSessions.cancel(id));
+                    }
+                  }}
+                  disabled={sessionBusy}
+                  className="btn text-xs py-1.5 px-3 text-red-400 hover:border-red-400/40"
+                >
+                  手动停止
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -477,7 +489,7 @@ export function BookHomePage({
 
       <div className="text-2xs text-text-disabled">下一动作：{data.next_action || "—"}</div>
 
-      <WritingSessionHistory bookId={bookId} />
+      <RecentAutoWriting bookId={bookId} />
     </div>
   );
 }
@@ -541,6 +553,28 @@ function EntityList({ title, items }: { title: string; items: string[] }) {
           <li key={`${i}-${x}`}>{x}</li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+
+function RecentAutoWriting({ bookId }: { bookId: string }) {
+  const [last, setLast] = useState<any>(null);
+  useEffect(() => {
+    api.writingSessions.history(bookId)
+      .then((r: any) => setLast((r.items || [])[0]))
+      .catch(() => undefined);
+  }, [bookId]);
+  if (!last) return null;
+  return (
+    <div className="panel p-3 text-2xs text-text-tertiary">
+      最近一次自动写作：
+      {last.started_at
+        ? new Date(last.started_at).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })
+        : "—"}
+      {" · "}
+      {last.chapters_completed ?? 0} 章 · {(last.words_generated || 0).toLocaleString()} 字
+      {last.stop_reason ? ` · ${last.stop_reason}` : ""}
     </div>
   );
 }

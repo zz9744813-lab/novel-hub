@@ -37,7 +37,7 @@ from app.models.tables import (
     WritingSession, WritingSessionEvent, SessionAdvanceOutbox,
     # v9.5 model autopilot
     ModelCatalog, ModelCapabilityProfile, ModelHealthProbe, ModelHealthSnapshot,
-    ModelRoleScore, ModelRoutingPolicy, ModelRoutePlan,
+    ModelRoleScore, ModelRoutingPolicy, ModelRoutePlan, ModelAutoConfigRun,
 )
 
 __all__ = [

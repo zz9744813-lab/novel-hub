@@ -1,0 +1,265 @@
+"""v9.6 Model Setup Center API (spec §32–§34, §70–§71, §100)."""
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timezone, timedelta
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database import async_session_factory, get_db
+from app.model_autopilot.autoconfig_job import (
+    REQUIRED_ROLES,
+    ROLE_DISPLAY,
+    rollback_auto_config,
+)
+from app.model_autopilot.health import upsert_health_snapshot
+from app.model_autopilot.probe import probe_model_ping
+from app.model_autopilot import service as model_service
+from app.models import ModelAutoConfigRun
+
+router = APIRouter(prefix="/api/model-setup", tags=["model-setup"])
+
+
+async def _enqueue_run(run_id: uuid.UUID, job_name: str) -> None:
+    """Best-effort ARQ kick; the run row survives for the UI either way."""
+    from arq import create_pool
+    from arq.connections import RedisSettings
+    import redis.asyncio.connection as _rc
+    import os
+
+    _rc.AbstractConnection.lib_name = None
+    _rc.AbstractConnection.lib_version = None
+    redis_url = os.environ.get("REDIS_URL", "redis://redis:6379/0")
+    parts = redis_url.replace("redis://", "").split(":")
+    pool = await create_pool(
+        RedisSettings(host=parts[0], port=int(parts[1].split("/")[0]) if len(parts) > 1 else 6379)
+    )
+    try:
+        await pool.enqueue_job(job_name, str(run_id), _job_id=f"{job_name}:{run_id}")
+    finally:
+        await pool.close()
+
+
+def _serialize_run(run: ModelAutoConfigRun) -> dict:
+    return {
+        "id": str(run.id),
+        "action": run.action,
+        "scan_mode": run.scan_mode,
+        "status": run.status,
+        "phase": run.phase,
+        "progress": run.progress,
+        "current_model": run.current_model,
+        "finished": run.finished,
+        "total": run.total,
+        "detected_models": run.detected_models,
+        "healthy_models": run.healthy_models,
+        "eligible_models": run.eligible_models,
+        "recommendation_json": run.recommendation_json,
+        "before_snapshot": run.before_snapshot,
+        "after_snapshot": run.after_snapshot,
+        "error_json": run.error_json,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+    }
+
+
+@router.post("/detect")
+async def detect_now(request: Request, db: AsyncSession = Depends(get_db)):
+    """Queued model detection (spec §32/§35). Never mutates current config."""
+    idem = request.headers.get("Idempotency-Key") or request.headers.get("idempotency-key")
+    if idem:
+        existing = (
+            await db.execute(
+                select(ModelAutoConfigRun).where(ModelAutoConfigRun.idempotency_key == idem)
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            return _serialize_run(existing)
+    run = ModelAutoConfigRun(
+        id=uuid.uuid4(),
+        action="detect",
+        scan_mode="quick",
+        status="queued",
+        phase="queued",
+        idempotency_key=idem,
+    )
+    db.add(run)
+    await db.commit()
+    try:
+        await _enqueue_run(run.id, "run_model_detection_job")
+    except Exception:  # noqa: BLE001 - UI can still poll; cron/retry not needed
+        pass
+    return _serialize_run(run)
+
+
+@router.post("/auto-configure")
+async def auto_configure(request: Request, db: AsyncSession = Depends(get_db)):
+    """One-click smart configure (spec §33/§96)."""
+    idem = request.headers.get("Idempotency-Key") or request.headers.get("idempotency-key")
+    run = ModelAutoConfigRun(
+        id=uuid.uuid4(),
+        action="detect_and_configure",
+        scan_mode="quick",
+        status="queued",
+        phase="queued",
+        idempotency_key=idem,
+    )
+    db.add(run)
+    await db.commit()
+    try:
+        await _enqueue_run(run.id, "run_model_autoconfigure_job")
+    except Exception:  # noqa: BLE001
+        pass
+    return _serialize_run(run)
+
+
+@router.post("/runs/{run_id}/cancel")
+async def cancel_run(run_id: str, db: AsyncSession = Depends(get_db)):
+    run = (
+        await db.execute(
+            select(ModelAutoConfigRun).where(ModelAutoConfigRun.id == uuid.UUID(run_id))
+        )
+    ).scalar_one_or_none()
+    if run is None:
+        raise HTTPException(404, "run not found")
+    if run.status in ("queued", "running"):
+        run.status = "cancelled"
+        run.finished_at = datetime.now(timezone.utc)
+        await db.commit()
+    return _serialize_run(run)
+
+
+@router.get("/runs/{run_id}")
+async def get_run(run_id: str, db: AsyncSession = Depends(get_db)):
+    run = (
+        await db.execute(
+            select(ModelAutoConfigRun).where(ModelAutoConfigRun.id == uuid.UUID(run_id))
+        )
+    ).scalar_one_or_none()
+    if run is None:
+        raise HTTPException(404, "run not found")
+    return _serialize_run(run)
+
+
+@router.get("/current")
+async def current_setup(db: AsyncSession = Depends(get_db)):
+    """Last run + latest recommendation (spec §25 header info)."""
+    last = (
+        await db.execute(
+            select(ModelAutoConfigRun)
+            .order_by(ModelAutoConfigRun.created_at.desc())
+            .limit(5)
+        )
+    ).scalars().all()
+    latest_detect = next((r for r in last if r.status == "succeeded"), None)
+    return {
+        "last_run": _serialize_run(last[0]) if last else None,
+        "recent_runs": [_serialize_run(r) for r in last],
+        "recommendation": latest_detect.recommendation_json if latest_detect else None,
+        "roles": [{"role": r, "label": ROLE_DISPLAY.get(r, r)} for r in REQUIRED_ROLES],
+    }
+
+
+@router.get("/recommendation")
+async def recommendation(db: AsyncSession = Depends(get_db)):
+    latest = (
+        await db.execute(
+            select(ModelAutoConfigRun)
+            .where(ModelAutoConfigRun.status == "succeeded")
+            .order_by(ModelAutoConfigRun.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return {
+        "recommendation": latest.recommendation_json if latest else None,
+        "run_id": str(latest.id) if latest else None,
+    }
+
+
+@router.post("/rollback/{run_id}")
+async def rollback(run_id: str, db: AsyncSession = Depends(get_db)):
+    """Spec §29: undo the last auto-configuration."""
+    run = (
+        await db.execute(
+            select(ModelAutoConfigRun).where(ModelAutoConfigRun.id == uuid.UUID(run_id))
+        )
+    ).scalar_one_or_none()
+    if run is None:
+        raise HTTPException(404, "run not found")
+    result = await rollback_auto_config(db, run)
+    await db.commit()
+    return result
+
+
+@router.get("/performance")
+async def performance(window: str = "24h", db: AsyncSession = Depends(get_db)):
+    """Spec §70: per-model performance aggregates (probe + production merged)."""
+    items = await model_service.list_models(db)
+    perf = []
+    for row in items:
+        snap = row.get("health") or {}
+        perf.append(
+            {
+                "id": row["id"],
+                "provider": row["provider"],
+                "model_id": row["model_id"],
+                "health_status": snap.get("status"),
+                "success_rate": snap.get("success_rate_24h") if window == "24h" else snap.get("success_rate_1h"),
+                "ttft_p50_ms": snap.get("p50_latency_ms"),
+                "ttft_p95_ms": snap.get("p95_latency_ms"),
+                "latency_p50_ms": snap.get("p50_latency_ms"),
+                "tokens_per_second_p50": None,
+                "context_window": (row.get("capability") or {}).get("context_window"),
+                "role_scores": row.get("role_scores") or {},
+            }
+        )
+    return {"window": window, "models": perf}
+
+
+@router.get("/models/{catalog_id}")
+async def model_detail(catalog_id: str, db: AsyncSession = Depends(get_db)):
+    return await model_service.model_row(db, catalog_id) or {}
+
+
+@router.get("/models/{catalog_id}/timeseries")
+async def model_timeseries(catalog_id: str, metric: str = "ttft", window: str = "24h", db: AsyncSession = Depends(get_db)):
+    """Spec §71: coarse per-hour performance series from probe rows."""
+    from app.models import ModelHealthProbe
+
+    hours = 24 if window == "24h" else (7 * 24 if window == "7d" else 1)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    rows = (
+        (
+            await db.execute(
+                select(ModelHealthProbe)
+                .where(
+                    ModelHealthProbe.model_catalog_id == uuid.UUID(catalog_id),
+                    ModelHealthProbe.started_at >= cutoff,
+                    ModelHealthProbe.probe_type.in_(("performance", "production", "l1_ping")),
+                )
+                .order_by(ModelHealthProbe.started_at.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    series = []
+    for r in rows:
+        value = None
+        if metric == "ttft" and r.first_token_ms is not None:
+            value = r.first_token_ms
+        elif metric == "tokens_per_second" and r.tokens_per_second is not None:
+            value = r.tokens_per_second
+        elif metric == "latency" and r.latency_ms is not None:
+            value = r.latency_ms
+        series.append(
+            {
+                "t": r.started_at.isoformat() if r.started_at else None,
+                "value": value,
+                "status": r.status,
+            }
+        )
+    return {"metric": metric, "window": window, "series": series}

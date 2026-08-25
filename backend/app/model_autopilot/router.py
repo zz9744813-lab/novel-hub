@@ -27,7 +27,45 @@ from app.models import (
 
 logger = logging.getLogger("novelforge.model_autopilot.router")
 
-DEFAULT_WEIGHTS = {"quality": 0.45, "reliability": 0.25, "context": 0.20, "health": 0.10}
+DEFAULT_WEIGHTS = {
+    "quality": 0.45,
+    "reliability": 0.20,
+    "context": 0.15,
+    "health": 0.10,
+    "performance": 0.10,
+}
+
+
+def compute_performance_score(db: AsyncSession, catalog_id: UUID) -> float | None:
+    """v9.6 §57: TTFT 40% + tokens/s 40% + latency 20%. None when no data."""
+    from app.models import ModelHealthProbe
+
+    perf = (
+        db.execute(
+            select(ModelHealthProbe)
+            .where(
+                ModelHealthProbe.model_catalog_id == catalog_id,
+                ModelHealthProbe.probe_type == "performance",
+            )
+            .order_by(ModelHealthProbe.started_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if perf is None or perf.tokens_per_second is None:
+        return None
+    ttft_ms = perf.first_token_ms or 2000
+    tps = perf.tokens_per_second or 0
+
+    def _band(value: float, bands: list[tuple[float, float]]) -> float:
+        for threshold, score in bands:
+            if value <= threshold:
+                return score
+        return bands[-1][1]
+
+    ttft_score = _band(ttft_ms, [(1000, 100), (3000, 70), (6000, 40), (10**9, 20)])
+    tps_score = _band(tps, [(0, 20), (10, 40), (20, 70), (10**9, 100)])
+    latency_score = _band((perf.latency_ms or 10000), [(4000, 100), (10000, 70), (25000, 40), (10**9, 20)])
+    return round(0.4 * ttft_score + 0.4 * tps_score + 0.2 * latency_score, 1)
 
 
 @dataclass(frozen=True)
@@ -70,6 +108,7 @@ async def build_role_route(
         "reliability": float(policy.get("reliability_weight", DEFAULT_WEIGHTS["reliability"])),
         "context": float(policy.get("context_weight", DEFAULT_WEIGHTS["context"])),
         "health": float(policy.get("health_weight", DEFAULT_WEIGHTS["health"])),
+        "performance": float(policy.get("performance_weight", 0.10)),
     }
     floor = float(
         (policy.get("role_overrides") or {}).get(agent_role, {}).get("minimum_quality_score")
@@ -143,13 +182,15 @@ async def build_role_route(
             continue
         reliability = (snap.success_rate_15m or 0) * 100 if snap and snap.success_rate_15m is not None else None
         health_score = snap.health_score if snap and snap.health_score is not None else (100 if health_status == "healthy" else 70)
+        performance_score = compute_performance_score(db, catalog.id)
 
-        # spec §36 route score
+        # spec §36 + v9.6 §56 FinalScore
         route_score = (
             weights["quality"] * (role_quality or 0)
-            + weights["reliability"] * (reliability or 0)
+            + weights["reliability"] * (reliability or 50)
             + weights["context"] * (context_fit or 0)
             + weights["health"] * health_score
+            + weights["performance"] * (performance_score or 50)
         )
         scored.append(
             (
@@ -253,6 +294,7 @@ def default_policy_for(mode: str = "hybrid", **overrides) -> dict:
         "reliability_weight": DEFAULT_WEIGHTS["reliability"],
         "context_weight": DEFAULT_WEIGHTS["context"],
         "health_weight": DEFAULT_WEIGHTS["health"],
+        "performance_weight": DEFAULT_WEIGHTS["performance"],
         "latency_weight": 0.0,
         "cost_weight": 0.0,
         "role_overrides": {},

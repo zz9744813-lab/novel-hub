@@ -93,12 +93,15 @@ async def upsert_health_snapshot(db: AsyncSession, catalog_id: uuid.UUID) -> Mod
         db.add(snap)
         await db.flush()
 
-    # per-window success rates (production signals first, probes supplement)
+    # per-window success rates (production signals first; probes supplement).
+    # v9.6 §52: a real 0% production rate must NOT fall back to probes.
     snap.success_rate_15m = _window_rate(prod_rows, now - timedelta(minutes=15))
     if snap.success_rate_15m is None:
         snap.success_rate_15m = _window_rate(l1_ok, now - timedelta(minutes=15))
-    snap.success_rate_1h = _window_rate(prod_rows, now - timedelta(hours=1)) or _window_rate(l1_ok, now - timedelta(hours=1))
-    snap.success_rate_24h = _window_rate(prod_rows, now - timedelta(hours=24)) or _window_rate(l1_ok, now - timedelta(hours=24))
+    prod_1h = _window_rate(prod_rows, now - timedelta(hours=1))
+    snap.success_rate_1h = prod_1h if prod_1h is not None else _window_rate(l1_ok, now - timedelta(hours=1))
+    prod_24h = _window_rate(prod_rows, now - timedelta(hours=24))
+    snap.success_rate_24h = prod_24h if prod_24h is not None else _window_rate(l1_ok, now - timedelta(hours=24))
 
     snap.p50_latency_ms = _percentile([r.latency_ms for r in ping_rows], 0.5)
     snap.p95_latency_ms = _percentile([r.latency_ms for r in ping_rows], 0.95)

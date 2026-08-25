@@ -529,6 +529,15 @@ export const api = {
     createPolicy: (data: any) =>
       fetchJSON<any>("/api/model-center/policies", { method: "POST", body: JSON.stringify(data) }),
   },
+  modelSetup: {
+    detect: () => fetchJSON<any>("/api/model-setup/detect", { method: "POST" }),
+    autoConfigure: () => fetchJSON<any>("/api/model-setup/auto-configure", { method: "POST" }),
+    run: (runId: string) => fetchJSON<any>(`/api/model-setup/runs/${runId}`),
+    current: () => fetchJSON<any>("/api/model-setup/current"),
+    recommendation: () => fetchJSON<any>("/api/model-setup/recommendation"),
+    performance: (window = "24h") => fetchJSON<any>(`/api/model-setup/performance?window=${window}`),
+    rollback: (runId: string) => fetchJSON<any>(`/api/model-setup/rollback/${runId}`, { method: "POST" }),
+  },
   context: {
     get: (id: string) => fetchJSON<ContextPackageDetail>(`/api/context-packages/${id}`),
     promptPreview: (id: string) => fetchJSON<any>(`/api/context-packages/${id}/prompt-preview`),
@@ -1075,6 +1084,8 @@ export interface WritingSessionView {
   current_chapter_id?: string | null;
   current_chapter_no?: number | null;
   current_chapter_run_id?: string | null;
+  current_step?: string | null;
+  current_run_status?: string | null;
   chapters_started: number;
   chapters_completed: number;
   words_generated: number;

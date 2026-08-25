@@ -32,6 +32,7 @@ class AttemptRecord:
     latency_ms: int
     success: bool
     error_code: str | None
+    first_token_ms: int | None = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
 
@@ -52,6 +53,7 @@ class StreamResult:
     actual_provider: str = ""
     actual_model: str = ""
     successful_attempt_no: int | None = None
+    first_token_ms: int | None = None  # v9.6: measured TTFT, never latency/2
     attempts: list[AttemptRecord] = field(default_factory=list)
 
 
@@ -194,11 +196,15 @@ async def stream_completion_and_collect(
                     for field_name in REASONING_FIELDS:
                         val = delta.get(field_name)
                         if val:
+                            if result.first_token_ms is None:
+                                result.first_token_ms = int((time.time() - start_time) * 1000)
                             result.reasoning_detected = True
                             result.reasoning_text += val
 
                     content_val = delta.get("content")
                     if content_val:
+                        if result.first_token_ms is None:
+                            result.first_token_ms = int((time.time() - start_time) * 1000)
                         events = inline_parser.feed(content_val)
                         for evt_type, evt_text in events:
                             if evt_type == CanonicalEventType.REASONING:
@@ -346,6 +352,7 @@ async def stream_with_retry(
             latency_ms=result.latency_ms,
             success=success,
             error_code=result.error,
+            first_token_ms=result.first_token_ms,
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,
         )

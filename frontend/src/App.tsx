@@ -374,7 +374,7 @@ export default function App() {
     }
     if (tab === "prompts") return <PromptStudioPage />;
     if (tab === "models") return <SystemSettingsPage initialTab="models" />;
-    if (tab === "model-center") return <ModelCenterPage />;
+    if (tab === "model-center") return <SystemSettingsPage initialTab="models" />;  // redirect (v9.6 §73)
     // System-level tabs: always mount (no book gate) — pick book inside panel if needed
     if (tab === "context") return <SystemSettingsPage initialTab="context" />;
     if (tab === "genre") return <SystemSettingsPage initialTab="genre" />;
@@ -401,6 +401,10 @@ export default function App() {
               setTab("chapters");
               setTabKey((k) => k + 1);
             }}
+            onOpenWritingDesk={() => {
+              setTab("writing");
+              setTabKey((k) => k + 1);
+            }}
           />
         );
       case "outline":
@@ -408,7 +412,23 @@ export default function App() {
       case "chapters":
         return <ChapterList bookId={selectedBookId} />;
       case "writing":
-        return <WritingDeskPage bookId={selectedBookId} />;
+        return (
+          <WritingDeskPage
+            bookId={selectedBookId}
+            onStartWriting={() => {
+              setTab("home");
+              setTabKey((k) => k + 1);
+            }}
+            onOpenEditorial={() => {
+              setTab("editorial");
+              setTabKey((k) => k + 1);
+            }}
+            onOpenModelSetup={() => {
+              setTab("settings");
+              setTabKey((k) => k + 1);
+            }}
+          />
+        );
       case "memory":
         return <MemoryPanel bookId={selectedBookId} />;
       case "audit":

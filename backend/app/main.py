@@ -25,6 +25,7 @@ from app.routers import tasks as tasks_router
 from app.routers import system as system_router
 from app.routers import style as style_router
 from app.routers import model_center as model_center_router
+from app.routers import model_setup as model_setup_router
 from app.api import research as research_router
 from app.api import editorial as editorial_router
 
@@ -184,6 +185,7 @@ app.include_router(tasks_router.router)
 app.include_router(system_router.router)
 app.include_router(style_router.router)
 app.include_router(model_center_router.router)
+app.include_router(model_setup_router.router)
 app.include_router(research_router.router)
 app.include_router(editorial_router.router)
 

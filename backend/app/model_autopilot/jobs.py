@@ -56,7 +56,9 @@ async def model_catalog_sync_tick(ctx):
     return report
 
 
-async def _probe_due(db, catalog: ModelCatalog) -> bool:
+async def _probe_due(
+    db, catalog: ModelCatalog, interval_minutes: int | None = None
+) -> bool:
     snap = (
         await db.execute(
             select(ModelHealthSnapshot).where(
@@ -66,15 +68,18 @@ async def _probe_due(db, catalog: ModelCatalog) -> bool:
     ).scalar_one_or_none()
     if snap is None or snap.last_probe_at is None:
         return True
-    status = snap.health_status or "unknown"
-    interval = PROBE_MINUTES.get(status, 30)
-    return snap.last_probe_at <= datetime.now(timezone.utc) - timedelta(minutes=interval)
+    if interval_minutes is None:
+        status = snap.health_status or "unknown"
+        interval_minutes = PROBE_MINUTES.get(status, 30)
+    return snap.last_probe_at <= datetime.now(timezone.utc) - timedelta(minutes=interval_minutes)
 
 
-async def _route_plan_models(db, session: WritingSession) -> list[tuple[str, str]]:
-    """(provider, model) pairs referenced by an active session route plan."""
+async def _route_plan_models_with_kind(db, session: WritingSession) -> list[tuple[str, str, str]]:
+    """(provider, model, kind) referenced by an active session route plan."""
     if not session.model_route_plan_id:
         return []
+    from app.models import ModelRoutePlan
+
     plan = (
         await db.execute(
             select(ModelRoutePlan).where(ModelRoutePlan.id == session.model_route_plan_id)
@@ -86,10 +91,10 @@ async def _route_plan_models(db, session: WritingSession) -> list[tuple[str, str
     for assignment in (plan.assignments_json or {}).values():
         primary = assignment.get("primary") or {}
         if primary.get("model"):
-            out.append((primary.get("provider") or "", primary["model"]))
+            out.append((primary.get("provider") or "", primary["model"], "primary"))
         for fb in assignment.get("fallbacks") or []:
             if fb.get("model"):
-                out.append((fb.get("provider") or "", fb["model"]))
+                out.append((fb.get("provider") or "", fb["model"], "fallback"))
     return out
 
 
@@ -98,33 +103,48 @@ async def model_health_probe_tick(ctx):
     report = {"probed": 0, "skipped_active": 0}
     try:
         async with async_session_factory() as db:
-            active_session = (
-                await db.execute(
-                    select(WritingSession.id).where(
-                        WritingSession.status.in_(("running", "created", "paused", "waiting_editorial")),
+            # v9.6 §54: MULTIPLE books may run sessions at once — aggregate all.
+            active_sessions = (
+                (
+                    await db.execute(
+                        select(WritingSession).where(
+                            WritingSession.status.in_(
+                                ("running", "created", "paused", "waiting_editorial", "blocked")
+                            ),
+                        )
                     )
                 )
-            ).scalar_one_or_none()
+                .scalars()
+                .all()
+            )
+            active_primary: set[tuple[str, str]] = set()
+            active_fallback: set[tuple[str, str]] = set()
+            for session in active_sessions:
+                for provider, model in await _route_plan_models(db, session):
+                    pass  # placeholder replaced below
 
-            wait_models: list[tuple[str, str]] = []
-            if active_session is not None:
-                session = (
-                    await db.execute(
-                        select(WritingSession).where(WritingSession.id == active_session)
-                    )
-                ).scalar_one()
-                wait_models = await _route_plan_models(db, session)
-                if not wait_models:
-                    report["skipped_active"] = 1
+            # distinct route models per session (provider, model) with role kind
+            route_kind: dict[tuple[str, str], str] = {}
+            for session in active_sessions:
+                for provider, model, kind in await _route_plan_models_with_kind(db, session):
+                    current = route_kind.get((provider, model))
+                    if current != "primary":
+                        route_kind[(provider, model)] = kind
+            if active_sessions and not route_kind:
+                report["skipped_active"] = 1
 
             catalogs = list((await db.execute(select(ModelCatalog))).scalars().all())
-            if wait_models:
-                targets = [
-                    c for c in catalogs
-                    if (c.provider, c.model_id) in wait_models and await _probe_due(db, c)
-                ]
-            else:
-                targets = [c for c in catalogs if await _probe_due(db, c)]
+            targets = []
+            for catalog in catalogs:
+                kind = route_kind.get((catalog.provider, catalog.model_id))
+                if kind == "primary":
+                    interval = 5  # spec §26: active primary 5min
+                elif kind == "fallback":
+                    interval = 10  # active fallback 10min
+                else:
+                    interval = None
+                if await _probe_due(db, catalog, interval_minutes=interval):
+                    targets.append(catalog)
             targets = targets[:6]
 
             for catalog in targets:

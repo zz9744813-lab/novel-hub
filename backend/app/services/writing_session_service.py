@@ -210,6 +210,19 @@ async def control_writing_session(
         return session
 
     if action == "cancel":
+        # v9.6 §10: without a current run the session stops IMMEDIATELY
+        # (no waiting for preflight / no next chapter).
+        if session.current_chapter_run_id is None:
+            session.status = "cancelled"
+            session.control_requested = "none"
+            session.completed_at = datetime.now(timezone.utc)
+            session.stop_reason = "manual_stop"
+            await _record_event(
+                db, session.id, "cancelled",
+                {"stop_reason": "manual_stop"},
+                dedupe_key="cancel_manual_stop",
+            )
+            return session
         session.control_requested = "cancel"
         await _record_event(db, session.id, "cancel_requested", {}, dedupe_key="cancel_requested")
         _touch_advance(db, session.id, dedupe_hint=f"session-touch-cancel:{session.id}")
@@ -274,7 +287,7 @@ async def session_current_view(db: AsyncSession, session: WritingSession) -> dic
     quality = await recent_first_pass_yield(
         db, book_id=session.book_id, window_size=int(policy.get("quality_window_size", 10))
     )
-    return serialize_session(
+    view = serialize_session(
         session,
         backlog=backlog,
         quality={
@@ -283,3 +296,20 @@ async def session_current_view(db: AsyncSession, session: WritingSession) -> dic
             "rate": round(quality["rate"], 2),
         },
     )
+    # v9.6 §84: live run step + status for the desk stepper / mini bar
+    current_step = None
+    current_run_status = None
+    if session.current_chapter_run_id:
+        from app.models import ChapterRun
+
+        run = (
+            await db.execute(
+                select(ChapterRun).where(ChapterRun.id == session.current_chapter_run_id)
+            )
+        ).scalar_one_or_none()
+        if run is not None:
+            current_step = run.current_step
+            current_run_status = run.status
+    view["current_step"] = current_step
+    view["current_run_status"] = current_run_status
+    return view

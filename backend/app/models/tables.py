@@ -847,6 +847,9 @@ class AgentModelBinding(Base):
     manual_fallback_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     allowed_model_ids: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     blocked_model_ids: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    # v9.6 §61 auto-assignment snapshot for rollback/verify
+    auto_assignment_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True, server_default="{}")
+    last_auto_config_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 
 
 class ModelCatalog(Base, TimestampMixin):
@@ -906,6 +909,10 @@ class ModelHealthProbe(Base, TimestampMixin):
     http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(60), nullable=True)
     output_valid: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # v9.6 performance fields (spec §48)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tokens_per_second: Mapped[float | None] = mapped_column(Float, nullable=True)
     detail_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
 
 
@@ -992,6 +999,31 @@ class ModelRoutePlan(Base, TimestampMixin):
     health_snapshot_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reason_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")  # active|superseded|failed
+
+
+class ModelAutoConfigRun(Base, TimestampMixin):
+    """v9.6: persistent detect/auto-configure run (spec §30–§31)."""
+    __tablename__ = "model_autoconfig_runs"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    action: Mapped[str] = mapped_column(String(30), nullable=False)  # detect|detect_and_configure
+    scan_mode: Mapped[str] = mapped_column(String(12), nullable=False, default="quick")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued", index=True)
+    phase: Mapped[str] = mapped_column(String(30), nullable=False, default="queued")
+    progress: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    current_model: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    finished: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    total: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    idempotency_key: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    catalog_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    detected_models: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    healthy_models: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    eligible_models: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    recommendation_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    before_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    after_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    error_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ModelChangeLog(Base):

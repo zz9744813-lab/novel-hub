@@ -77,7 +77,7 @@ async def probe_model_ping(db: AsyncSession, catalog: ModelCatalog) -> ModelHeal
             provider=catalog.provider,
         )
         probe.latency_ms = result.latency_ms
-        probe.first_token_ms = _first_token_from_result(result, started)
+        probe.first_token_ms = result.first_token_ms  # measured TTFT (v9.6 §44)
         probe.output_valid = bool(result.final_content.strip())
         probe.status = "ok" if (result.final_content.strip() and not result.error) else "failed"
         probe.error_code = result.error
@@ -88,10 +88,53 @@ async def probe_model_ping(db: AsyncSession, catalog: ModelCatalog) -> ModelHeal
     return probe
 
 
-def _first_token_from_result(result, started: datetime) -> int | None:
-    if result.latency_ms:
-        return min(result.latency_ms, result.latency_ms // 2)
-    return None
+# v9.6 §43: performance probe — ~128 token generation, stream, temperature 0.
+PERFORMANCE_PROMPT = (
+    "请写一段约128字的短文：描述一座晚霞中的湖，语言平实、带一点细节。只输出正文。"
+)
+
+
+async def probe_model_performance(db: AsyncSession, catalog: ModelCatalog) -> ModelHealthProbe:
+    """Real throughput probe: TTFT, latency, tokens/sec (spec §43, §47)."""
+    config = _provider_config(catalog.provider)
+    started = datetime.now(timezone.utc)
+    probe = ModelHealthProbe(
+        id=uuid.uuid4(),
+        model_catalog_id=catalog.id,
+        probe_type="performance",
+        status="failed",
+        started_at=started,
+    )
+    try:
+        result = await stream_completion_and_collect(
+            system_prompt=PERFORMANCE_PROMPT,
+            user_content="写吧。",
+            model=catalog.model_id,
+            temperature=0,
+            max_tokens=180,
+            provider_role="primary",
+            provider=catalog.provider,
+        )
+        probe.latency_ms = result.latency_ms
+        probe.first_token_ms = result.first_token_ms
+        probe.prompt_tokens = result.prompt_tokens or 0
+        probe.completion_tokens = result.completion_tokens or 0
+        generation_ms = max(
+            0,
+            (result.latency_ms or 0) - (result.first_token_ms or 0),
+        )
+        if result.completion_tokens and generation_ms > 0:
+            probe.tokens_per_second = round(
+                result.completion_tokens / (generation_ms / 1000.0), 2
+            )
+        probe.output_valid = len(result.final_content.strip()) >= 20
+        probe.status = "ok" if probe.output_valid and not result.error else "failed"
+        probe.error_code = result.error
+    except Exception as e:  # noqa: BLE001
+        probe.error_code = str(e)[:60]
+        probe.status = "failed"
+    probe.completed_at = datetime.now(timezone.utc)
+    return probe
 
 
 async def record_production_signal(

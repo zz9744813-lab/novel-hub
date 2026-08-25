@@ -108,9 +108,10 @@ def test_health_classification():
 def test_default_policy_weights():
     p = default_policy_for()
     assert p["quality_weight"] == 0.45
-    assert p["reliability_weight"] == 0.25
-    assert p["context_weight"] == 0.20
+    assert p["reliability_weight"] == 0.20
+    assert p["context_weight"] == 0.15
     assert p["health_weight"] == 0.10
+    assert "performance_weight" in p
     assert p["latency_weight"] == 0
     assert p["cost_weight"] == 0
     assert p["fallback_count"] == 2

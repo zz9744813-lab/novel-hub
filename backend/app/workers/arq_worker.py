@@ -31,6 +31,7 @@ from app.engine.pipeline import execute_pipeline
 from app.engine.outcomes import PipelineOutcome, PipelineResult
 from app.engine.step_runner import acquire_run_lease, release_run_lease
 from app.workers.writing_session_jobs import advance_writing_session_job
+from app.model_autopilot.autoconfig_job import run_model_autoconfigure_job, run_model_detection_job
 from sqlalchemy import select, update, text
 
 logger = logging.getLogger("novelforge.worker")
@@ -678,6 +679,8 @@ class WorkerSettings:
         run_editorial_revision_job,
         analyze_editorial_review_job,
         advance_writing_session_job,
+        run_model_detection_job,
+        run_model_autoconfigure_job,
     ]
     on_startup = on_startup
     on_shutdown = on_shutdown

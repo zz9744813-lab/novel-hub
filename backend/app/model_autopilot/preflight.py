@@ -148,7 +148,12 @@ async def run_model_preflight(
 
     catalog_rows = list(
         (
-            await db.execute(select(ModelCatalog).where(ModelCatalog.auto_route_enabled.is_(True)))
+            await db.execute(
+                select(ModelCatalog).where(
+                    ModelCatalog.enabled.is_(True),
+                    ModelCatalog.availability_status == "available",
+                )
+            )
         )
         .scalars()
         .all()
@@ -157,6 +162,10 @@ async def run_model_preflight(
     # 4-7. per-role scoring + context + routing
     for catalog in catalog_rows:
         await ensure_capability_for_catalog(db, catalog)
+        # role scores MUST exist before routing, otherwise every candidate is
+        # filtered out as "no score" (spec §30 step 6; second deadlock)
+        for role in PREFLIGHT_ROLES:
+            await compute_role_score(db, catalog, role)
 
     roles_result = {}
     blockers = []

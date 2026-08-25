@@ -88,6 +88,11 @@ async def sync_catalog_from_provider(
                 result["reappeared"] += 1
             else:
                 result["unchanged"] += 1
+            # pre-existing catalog rows (synced before the seed-enable change)
+            # get promoted too when the seed knows the model — spec §58 only
+            # protects unknown models from auto-route.
+            if not existing.auto_route_enabled and seed_for_model(model_id) is not None:
+                existing.auto_route_enabled = True
             existing.last_seen_at = now
 
     for catalog in catalog_rows:

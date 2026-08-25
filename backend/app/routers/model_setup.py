@@ -196,27 +196,10 @@ async def rollback(run_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.get("/performance")
 async def performance(window: str = "24h", db: AsyncSession = Depends(get_db)):
-    """Spec §70: per-model performance aggregates (probe + production merged)."""
-    items = await model_service.list_models(db)
-    perf = []
-    for row in items:
-        snap = row.get("health") or {}
-        perf.append(
-            {
-                "id": row["id"],
-                "provider": row["provider"],
-                "model_id": row["model_id"],
-                "health_status": snap.get("status"),
-                "success_rate": snap.get("success_rate_24h") if window == "24h" else snap.get("success_rate_1h"),
-                "ttft_p50_ms": snap.get("p50_latency_ms"),
-                "ttft_p95_ms": snap.get("p95_latency_ms"),
-                "latency_p50_ms": snap.get("p50_latency_ms"),
-                "tokens_per_second_p50": None,
-                "context_window": (row.get("capability") or {}).get("context_window"),
-                "role_scores": row.get("role_scores") or {},
-            }
-        )
-    return {"window": window, "models": perf}
+    """v9.7 §17/§70: REAL aggregator (per-model P50/P95/TPS) — never first-row."""
+    from app.model_autopilot.performance import aggregate
+
+    return await aggregate(db, window)
 
 
 @router.get("/models/{catalog_id}")

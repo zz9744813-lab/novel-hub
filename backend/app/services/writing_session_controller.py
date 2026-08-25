@@ -483,6 +483,35 @@ async def evaluate_session(db: AsyncSession, session: WritingSession) -> Session
             )
             return SessionDecision("block", "resource hard block", {"error_code": latest_run.error_code})
 
+    # ── v9.7 §19: DriftAudit RED blocks future writing ──
+    from app.models import DriftAuditReport
+
+    red_report = (
+        await db.execute(
+            select(DriftAuditReport)
+            .where(
+                DriftAuditReport.book_id == session.book_id,
+                DriftAuditReport.status == "red",
+            )
+            .order_by(DriftAuditReport.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if red_report is not None:
+        session.status = "blocked"
+        session.stop_reason = "drift_audit_red"
+        session.stop_detail = {
+            "report_id": str(red_report.id),
+            "chapter_range": [red_report.chapter_range_start, red_report.chapter_range_end],
+            "affected_future_nodes": (red_report.affected_future_nodes or [])[:10],
+        }
+        await _record_event(
+            db, session.id, "causal_blocked",
+            {"kind": "drift_audit_red", "report_id": str(red_report.id)},
+            dedupe_key=f"drift_red_block:{red_report.id}",
+        )
+        return SessionDecision("block", "drift audit RED", {"report_id": str(red_report.id)})
+
     # ── 12 Editorial backlog ──
     backlog_limit = int(policy.get("max_unreviewed_ahead", 5))
     backlog = await count_editorial_backlog(db, session.book_id)

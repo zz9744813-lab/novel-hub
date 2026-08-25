@@ -137,33 +137,34 @@ async def call_agent(
 
     Returns (run, publishable, metadata). Run is detached ORM after final query.
     """
-    # v8 Prompt Studio: try active template first
+    # v9.7 PromptResolver: Book > Genre > Global > builtin (spec §6)
     prompt_config = None
-    template_obj = None
-    from app.models.tables import PromptTemplateVersion
     from sqlalchemy import select
     try:
         async with async_session_factory() as db_tpl:
-            template_obj = (await db_tpl.execute(
-                select(PromptTemplateVersion)
-                .where(PromptTemplateVersion.agent_role == agent_role)
-                .where(PromptTemplateVersion.status == "active")
-                .where(PromptTemplateVersion.activated_at.isnot(None))
-                .order_by(PromptTemplateVersion.version.desc())
-                .limit(1)
-            )).scalar_one_or_none()
-            if template_obj:
+            from app.services.prompt_resolver import resolve_prompt_with_builtin
+
+            resolved = await resolve_prompt_with_builtin(
+                db_tpl,
+                agent_role=agent_role,
+                book_id=book_id or None,
+                builtin=PROMPTS.get(agent_role),
+            )
+            if resolved is not None and resolved.scope_type != "builtin":
                 prompt_config = {
-                    "version": f"v{template_obj.version}",
-                    "system_prompt": template_obj.system_prompt or "",
-                    "user_prompt_template": template_obj.user_prompt_template or "",
-                    "template_id": template_obj.id,
-                    "template_version": template_obj.version,
-                    "output_schema": getattr(template_obj, "output_schema", None) or getattr(template_obj, "compiled_schema", None),
+                    "version": f"v{resolved.version}",
+                    "system_prompt": resolved.system_prompt,
+                    "user_prompt_template": resolved.user_prompt_template,
+                    "template_id": resolved.template_id,
+                    "template_version": resolved.version,
+                    "output_schema": resolved.output_schema,
                 }
-                logger.info("using PromptStudio template %s v%s for %s", template_obj.template_key, template_obj.version, agent_role)
+                logger.info(
+                    "using prompt %s v%s (%s scope) for %s",
+                    resolved.template_key, resolved.version, resolved.scope_type, agent_role,
+                )
     except Exception as e:
-        logger.warning("PromptStudio lookup failed, fallback to PROMPTS: %s", e)
+        logger.warning("PromptResolver failed, fallback to PROMPTS: %s", e)
 
     if prompt_config is None:
         if agent_role not in PROMPTS:

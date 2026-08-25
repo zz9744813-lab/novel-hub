@@ -20,6 +20,7 @@ import { WritingTasksPage } from "./features/tasks/WritingTasksPage";
 import { ReferencesLibraryPage } from "./features/references/ReferencesLibraryPage";
 import { SystemSettingsPage } from "./features/settings/SystemSettingsPage";
 import { WritingDeskPage } from "./features/writing-session/WritingDeskPage";
+import { QualityDashboardPage } from "./features/quality/QualityDashboardPage";
 import { ResearchPage } from "./features/research/ResearchPage";
 import { EditorialPage } from "./features/editorial/EditorialPage";
 import {
@@ -44,6 +45,7 @@ type Tab =
   | "outline"
   | "chapters"
   | "writing"
+  | "quality"
   | "editorial"
   | "memory"
   | "prompts"
@@ -410,6 +412,8 @@ export default function App() {
         return <OutlinePage bookId={selectedBookId} onNavigate={handleTabChange} />;
       case "chapters":
         return <ChapterList bookId={selectedBookId} />;
+      case "quality":
+        return <QualityDashboardPage bookId={selectedBookId} />;
       case "writing":
         return (
           <WritingDeskPage

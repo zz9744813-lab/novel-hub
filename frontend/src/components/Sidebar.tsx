@@ -1,5 +1,6 @@
 import {
   GitGraph,
+  Gauge,
   FileText,
   Brain,
   AlertTriangle,
@@ -44,6 +45,7 @@ const bookTabs = [
   { id: "outline", label: "大纲", icon: GitGraph, desc: "OUT", needsBook: true },
   { id: "chapters", label: "章节", icon: FileText, desc: "CH", needsBook: true },
   { id: "writing", label: "写作台", icon: PenTool, desc: "WRITE", needsBook: true },
+  { id: "quality", label: "质量", icon: Gauge, desc: "QUALITY", needsBook: true },
   { id: "editorial", label: "人工审核", icon: ClipboardCheck, desc: "EDIT", needsBook: false },
   { id: "memory", label: "记忆", icon: Brain, desc: "MEM", needsBook: true },
   { id: "prompts", label: "提示词工坊", icon: Sparkles, desc: "PROMPT", needsBook: false },

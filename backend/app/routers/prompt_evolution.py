@@ -150,3 +150,17 @@ async def pe_rollback(run_id: str, prompt_version_id: str, db: AsyncSession = De
     result = await evo.rollback_canary(db, version)
     await db.commit()
     return result
+
+@router.post("/proposals/{run_id}/evaluate-canary")
+async def pe_evaluate_canary(run_id: str, db: AsyncSession = Depends(get_db)):
+    """§7.6: decide a running canary automatically (promote or roll back)."""
+    run = (
+        await db.execute(
+            select(PromptEvolutionRun).where(PromptEvolutionRun.id == uuid.UUID(run_id))
+        )
+    ).scalar_one_or_none()
+    if run is None:
+        raise HTTPException(404, "proposal not found")
+    result = await evo.evaluate_canary(db, run)
+    await db.commit()
+    return result

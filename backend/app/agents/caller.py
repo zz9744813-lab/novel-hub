@@ -63,6 +63,24 @@ class ModelBindingMissingError(RuntimeError):
     """Raised when a required agent has no DB model binding."""
 
 
+async def _run_ai_tone_lint(*, book_id, agent_role, text, chapter_id, run_id) -> None:
+    """Best-effort AI-Tone diagnosis; findings wait for human confirmation (v9.7 §26)."""
+    try:
+        from app.database import async_session_factory
+        from app.style.ai_tone.lint import lint_text, persist_findings
+
+        findings = lint_text(
+            text, book_id=book_id, chapter_id=chapter_id, chapter_run_id=run_id
+        )
+        if not findings:
+            return
+        async with async_session_factory() as db:
+            await persist_findings(db, findings)
+            await db.commit()
+    except Exception as e:  # noqa: BLE001 - lint must never break production
+        logger.debug("ai-tone lint skipped: %s", e)
+
+
 async def _record_health_signals(attempts: list) -> None:
     """Best-effort production health feedback (v9.5 spec §52)."""
     try:
@@ -566,6 +584,16 @@ async def call_agent(
 
     # v9.5 §52: every real production attempt feeds model health snapshots.
     await _record_health_signals(attempts)
+
+    # v9.7 §25: AI-Tone lint on draft output — diagnosis only, never a rewrite.
+    if agent_role in ("draft_writer", "local_rewrite") and publishable:
+        await _run_ai_tone_lint(
+            book_id=book_id,
+            agent_role=agent_role,
+            text=publishable if isinstance(publishable, str) else str(publishable),
+            chapter_id=chapter_id,
+            run_id=run_id,
+        )
 
     # Repair attempts were not known during the initial audit transaction.
     # Persist their route/context rows before closing the run.

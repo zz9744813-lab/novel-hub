@@ -478,6 +478,16 @@ export const api = {
   chapterRuns: {
     get: (runId: string) => fetchJSON<ChapterRunDetail>(`/api/chapter-runs/${runId}`),
   },
+  quality: {
+    overview: (bookId: string) => fetchJSON<any>(`/api/books/${bookId}/quality/overview`),
+    trends: (bookId: string) => fetchJSON<any>(`/api/books/${bookId}/quality/trends`),
+    rootCauses: (bookId: string) => fetchJSON<any>(`/api/books/${bookId}/quality/root-causes`),
+    agentPerformance: (bookId: string) => fetchJSON<any>(`/api/books/${bookId}/quality/agent-performance`),
+    modelPerformance: (bookId: string) => fetchJSON<any>(`/api/books/${bookId}/quality/model-performance`),
+    aiToneSummary: (bookId: string) => fetchJSON<any>(`/api/books/${bookId}/ai-tone/summary`),
+    techniques: (bookId: string) => fetchJSON<any>(`/api/books/${bookId}/techniques`),
+    techniqueEffectiveness: (bookId: string) => fetchJSON<any>(`/api/books/${bookId}/techniques/effectiveness`),
+  },
   writingSessions: {
     current: (bookId: string) =>
       fetchJSON<{ session: WritingSessionView | null }>(`/api/books/${bookId}/writing-sessions/current`),

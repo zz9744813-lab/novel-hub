@@ -93,6 +93,10 @@ async def build_experience_context(
             "rule_type": card.rule_type,
             "scope_type": card.scope_type or "book",
             "score": round(score, 2),
+            # prompt-safe content: instruction + guard rails only (no ids/links)
+            "instruction": card.instruction,
+            "avoid_when": (card.avoid_when or [])[:4],
+            "rationale": card.rationale,
         }
         for score, card in selected
     ]

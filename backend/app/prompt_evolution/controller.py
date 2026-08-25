@@ -290,3 +290,56 @@ async def rollback_canary(db: AsyncSession, version: PromptTemplateVersion) -> d
         previous.status = "active"
         previous.activated_at = datetime.now(timezone.utc)
     return {"rolled_back_to": str(previous.id) if previous else None}
+
+
+async def evaluate_canary(db: AsyncSession, run: PromptEvolutionRun) -> dict:
+    """§7.6: decide a running canary after >= CANARY_CHAPTERS signals.
+
+    Reads first-pass-yield signals since the canary version appeared; a hard
+    regression auto-rolls back, otherwise the version is promoted.
+    """
+    from app.models import QualitySignal
+
+    signals = (
+        (
+            await db.execute(
+                select(QualitySignal).where(
+                    QualitySignal.book_id == run.book_id,
+                    QualitySignal.agent_role == run.target_role,
+                    QualitySignal.metric_name == "first_pass_yield",
+                    QualitySignal.source == "prompt_experiment",
+                ).order_by(QualitySignal.created_at.desc()).limit(20)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if len(signals) < CANARY_CHAPTERS:
+        return {"status": "waiting", "have": len(signals), "need": CANARY_CHAPTERS}
+
+    yields = [s.numeric_value for s in signals if s.numeric_value is not None]
+    mean_yield = sum(yields) / len(yields) if yields else 1.0
+
+    version = (
+        await db.execute(
+            select(PromptTemplateVersion)
+            .where(
+                PromptTemplateVersion.proposal_id == run.id,
+                PromptTemplateVersion.canary_status == "running",
+            )
+            .order_by(PromptTemplateVersion.version.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if version is None:
+        return {"status": "no_canary_version"}
+
+    if mean_yield < CANARY_FLOOR_YIELD:
+        result = await rollback_canary(db, version)
+        run.status = "rolled_back"
+        run.result_json = {"canary_yield": mean_yield, "action": "rollback"}
+    else:
+        result = await promote_canary(db, version)
+        run.status = "promoted"
+        run.result_json = {"canary_yield": mean_yield, "action": "promote"}
+    return {"status": run.status, "canary_yield": round(mean_yield, 3), **result}

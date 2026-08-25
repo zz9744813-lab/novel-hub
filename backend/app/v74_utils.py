@@ -446,6 +446,10 @@ async def save_context_package(
 
     token_estimate = safe_token_estimate(rendered_prompt, agent_role=agent_role)
     
+    # v9.7 §5/§23: experience/technique refs travel inside the assembly manifest
+    exp_refs = (assembly_manifest or {}).get("experience_refs") or []
+    tech_refs = (assembly_manifest or {}).get("technique_refs") or []
+
     pkg = AgentContextPackage(
         id=uuid.uuid4(),
         run_id=run_id,
@@ -468,6 +472,8 @@ async def save_context_package(
         l2_summary_refs=l2_refs,
         l3_summary_refs=l3_refs,
         genre_profile_ref=genre_profile_id,
+        experience_refs=exp_refs,
+        technique_refs=tech_refs,
         story_evidence_refs=story_evidence_refs or [],
         external_evidence_refs=external_evidence_refs or [],
         assembled_token_estimate=token_estimate,

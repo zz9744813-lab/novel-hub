@@ -1959,7 +1959,7 @@ async def analyze_reference_sample(
     import gzip
     from pathlib import Path
     from app.models.tables import ReferenceSample, GenreProfile, AgentRun
-    from app.agents.reference_analyzer import run_reference_analyzer_with_system
+    from app.agents.reference_analyzer import run_style_reference_analysis
     from app.engine.style_sanitizer import sanitize_genre_profile
 
     sample = (
@@ -1981,7 +1981,7 @@ async def analyze_reference_sample(
     sample.status = "analyzing"
     await db.commit()
 
-    profile = await run_reference_analyzer_with_system(
+    profile = await run_style_reference_analysis(
         book_id=uuid.UUID(book_id),
         reference_text=text,
         genre_hint=sample.genre_hint,

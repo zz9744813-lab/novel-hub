@@ -101,25 +101,33 @@ async def bootstrap_catalog_and_probes() -> dict:
         except Exception as e:  # noqa: BLE001
             logger.warning("catalog sync skipped for %s: %s", provider, e)
             await db.rollback()
-    # probe eligible-but-new candidates (first-run; later refreshes are cron-driven)
-    try:
-        async with async_session_factory() as db:
-            catalogs = list(
-                (await db.execute(select(ModelCatalog).where(ModelCatalog.auto_route_enabled.is_(True))))
-                .scalars()
-                .all()
+    # probe eligible candidates (L1 ping, limited). Deadlock fix: probe
+    # auto-route models AND seed-known ones — otherwise a fresh catalog has
+    # zero candidates and zero probes forever (spec §30 step 3).
+    catalogs = list(
+        (
+            await db.execute(
+                select(ModelCatalog).where(ModelCatalog.enabled.is_(True), ModelCatalog.availability_status == "available")
             )
-            for catalog in catalogs[:6]:
-                try:
-                    probe = await probe_model_ping(db, catalog)
-                    db.add(probe)
-                    await upsert_health_snapshot(db, catalog.id)
-                    report["probed"] += 1
-                except Exception as e:  # noqa: BLE001
-                    logger.debug("probe skipped %s/%s: %s", catalog.provider, catalog.model_id, e)
-            await db.commit()
-    except Exception as e:  # noqa: BLE001
-        logger.warning("bootstrap probe failed: %s", e)
+        )
+        .scalars()
+        .all()
+    )
+    from app.model_autopilot.seed import seed_for_model
+
+    probe_targets = [
+        c for c in catalogs
+        if c.auto_route_enabled or seed_for_model(c.model_id) is not None
+    ][:6]
+    for catalog in probe_targets:
+        try:
+            probe = await probe_model_ping(db, catalog)
+            db.add(probe)
+            await upsert_health_snapshot(db, catalog.id)
+            report["probed"] += 1
+        except Exception as e:  # noqa: BLE001
+            logger.debug("probe skipped %s/%s: %s", catalog.provider, catalog.model_id, e)
+    await db.commit()
     return report
 
 

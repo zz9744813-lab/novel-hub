@@ -515,6 +515,7 @@ export const api = {
     probeNow: (catalogId: string) => fetchJSON<any>(`/api/model-center/models/${catalogId}/probe`, { method: "POST" }),
     probeAll: () => fetchJSON<any>("/api/model-center/probe-all", { method: "POST" }),
     sync: () => fetchJSON<any>("/api/model-center/sync", { method: "POST" }),
+    enableHealthy: () => fetchJSON<any>("/api/model-center/enable-healthy", { method: "POST" }),
     roleRanking: (role: string) => fetchJSON<any>(`/api/model-center/role-ranking/${role}`),
     routing: () => fetchJSON<{ items: any[] }>("/api/model-center/routing"),
     routesCurrent: () => fetchJSON<{ items: any[] }>("/api/model-center/routes/current"),

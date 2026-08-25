@@ -288,6 +288,43 @@ async def patch_binding(binding_id: str, req: BindingPatch, db: AsyncSession = D
     }
 
 
+@router.post("/enable-healthy")
+async def enable_healthy_auto_route(db: AsyncSession = Depends(get_db)):
+    """Bulk-promote currently healthy catalog models to auto-route eligible."""
+    rows = (
+        (
+            await db.execute(
+                select(ModelCatalog)
+                .where(
+                    ModelCatalog.enabled.is_(True),
+                    ModelCatalog.availability_status != "missing",
+                    ModelCatalog.auto_route_enabled.is_(False),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    enabled = 0
+    for catalog in rows:
+        from app.models import ModelHealthSnapshot
+
+        snap = (
+            await db.execute(
+                select(ModelHealthSnapshot).where(
+                    ModelHealthSnapshot.model_catalog_id == catalog.id
+                )
+            )
+        ).scalar_one_or_none()
+        # only promote models that are NOT unavailable / missing
+        if snap is not None and snap.health_status in ("unavailable", "unknown") and snap.consecutive_failures:
+            continue
+        catalog.auto_route_enabled = True
+        enabled += 1
+    await db.commit()
+    return {"enabled": enabled}
+
+
 @router.post("/models/{catalog_id}/enable")
 async def enable_auto_route(catalog_id: str, db: AsyncSession = Depends(get_db)):
     """Promote a model to auto-route eligible (after probe/benchmark, spec §58)."""

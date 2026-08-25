@@ -64,6 +64,10 @@ async def sync_catalog_from_provider(
             continue
         existing = by_model.get(model_id)
         if existing is None:
+            # spec §58: brand-new models must NOT enter auto-route… except
+            # models the capability seed already knows (static quality tier
+            # exists — reviewed knowledge, not a blind name guess).
+            seeded = seed_for_model(model_id) is not None
             catalog = ModelCatalog(
                 id=uuid4(),
                 provider=provider,
@@ -71,7 +75,7 @@ async def sync_catalog_from_provider(
                 display_name=item.get("display_name"),
                 availability_status="available",
                 discovery_source="provider_api",
-                auto_route_enabled=False,  # spec §58: never auto-enter production
+                auto_route_enabled=seeded,
                 metadata_json=item,
             )
             db.add(catalog)

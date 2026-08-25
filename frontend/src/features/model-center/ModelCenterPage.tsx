@@ -80,6 +80,19 @@ export function ModelCenterPage() {
     }
   };
 
+  const handleEnableHealthy = async () => {
+    setBusy(true);
+    try {
+      const r = await api.modelCenter.enableHealthy();
+      await refresh();
+      window.alert(`已启用 ${r.enabled} 个健康模型参与自动路由`);
+    } catch (e: any) {
+      setErr(e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="h-full overflow-auto p-4 md:p-6 space-y-4">
       <div className="flex items-center justify-between">
@@ -95,6 +108,9 @@ export function ModelCenterPage() {
           </button>
           <button onClick={handleProbeAll} className="btn text-xs py-1.5 px-3 flex items-center gap-1">
             <Activity size={12} /> 全部探活
+          </button>
+          <button onClick={handleEnableHealthy} className="btn text-xs py-1.5 px-3 flex items-center gap-1">
+            <ShieldCheck size={12} /> 启用健康模型
           </button>
         </div>
       </div>

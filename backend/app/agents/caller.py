@@ -88,6 +88,7 @@ async def _resolve_model(
     agent_role: str,
     book_id: uuid.UUID,
     overrides: dict | None,
+    chapter_run_id: uuid.UUID | None = None,
 ) -> tuple[str, str, str | None, list[dict]]:
     """v9.5: ModelRoutingResolver (spec §48) with legacy binding fallback.
 
@@ -97,7 +98,10 @@ async def _resolve_model(
 
     async with async_session_factory() as db:
         try:
-            resolution = await resolve_route(db, agent_role=agent_role, book_id=book_id)
+            resolution = await resolve_route(
+                db, agent_role=agent_role, book_id=book_id,
+                chapter_run_id=chapter_run_id or None,
+            )
             return resolution.provider, resolution.model, None, list(resolution.fallbacks)
         except LookupError:
             pass
@@ -119,6 +123,7 @@ async def call_agent(
     user_content: str,
     chapter_id: uuid.UUID | None = None,
     scene_id: uuid.UUID | None = None,
+    chapter_run_id: uuid.UUID | None = None,  # v9.7 frozen-route chain
     parent_run_id: uuid.UUID | None = None,
     overrides: dict | None = None,
     assembly_manifest: dict | None = None,
@@ -216,7 +221,9 @@ async def call_agent(
                 }
 
     try:
-        provider, model, fallback_model, fallbacks = await _resolve_model(agent_role, book_id, overrides)
+        provider, model, fallback_model, fallbacks = await _resolve_model(
+            agent_role, book_id, overrides, chapter_run_id=chapter_run_id
+        )
     except ModelBindingMissingError as e:
         logger.error(str(e))
         run_id = uuid.uuid4()

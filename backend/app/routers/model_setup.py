@@ -263,3 +263,182 @@ async def model_timeseries(catalog_id: str, metric: str = "ttft", window: str = 
             }
         )
     return {"metric": metric, "window": window, "series": series}
+
+# ── v9.7 Model Evaluation / Certification (spec §13.42, §32) ──
+
+
+@router.get("/evaluation/suites")
+async def eval_suites(db: AsyncSession = Depends(get_db)):
+    from app.model_eval.engine import seed_suites
+    from app.models import ModelEvalCase, ModelEvalSuite
+
+    seed_suites(db)
+    await db.commit()
+    suites = (await db.execute(select(ModelEvalSuite).order_by(ModelEvalSuite.suite_key))).scalars().all()
+    return {
+        "items": [
+            {
+                "suite_key": s.suite_key,
+                "version": s.version,
+                "name": s.name,
+                "target_role": s.target_role,
+                "case_count": s.case_count,
+                "pass_threshold": s.pass_threshold,
+                "is_active": s.is_active,
+                "is_private": s.is_private,
+            }
+            for s in suites
+        ]
+    }
+
+
+@router.post("/evaluation/models/{catalog_id}/qualify")
+async def qualify_model(catalog_id: str, db: AsyncSession = Depends(get_db)):
+    """Tier 1 qualification run: suites + grading → certification (spec §13.11)."""
+    import uuid as _uuid
+    from app.model_eval.engine import run_qualification
+    from app.models import ModelCatalog, ModelEvalRun
+
+    catalog = (
+        await db.execute(
+            select(ModelCatalog).where(ModelCatalog.id == _uuid.UUID(catalog_id))
+        )
+    ).scalar_one_or_none()
+    if catalog is None:
+        raise HTTPException(404, "model not found")
+    try:
+        run = ModelEvalRun(id=_uuid.uuid4(), model_catalog_id=catalog.id, mode="qualification")
+        db.add(run)
+        await db.commit()
+        result = await run_qualification(db, run)
+        return {"run_id": str(run.id), **result}
+    except Exception as e:  # noqa: BLE001 - report for UI
+        await db.rollback()
+        raise HTTPException(500, f"qualification failed: {e}")
+
+
+@router.post("/evaluation/models/{catalog_id}/context-certify")
+async def context_certify(catalog_id: str, db: AsyncSession = Depends(get_db)):
+    """Context ladder: declared/accepted/effective measurement (spec §13.22–§13.27)."""
+    import uuid as _uuid
+    from app.model_eval.engine import run_context_ladder
+    from app.models import ModelCatalog, ModelEvalRun
+
+    catalog = (
+        await db.execute(
+            select(ModelCatalog).where(ModelCatalog.id == _uuid.UUID(catalog_id))
+        )
+    ).scalar_one_or_none()
+    if catalog is None:
+        raise HTTPException(404, "model not found")
+    try:
+        run = ModelEvalRun(id=_uuid.uuid4(), model_catalog_id=catalog.id, mode="context_ladder")
+        db.add(run)
+        await db.commit()
+        result = await run_context_ladder(db, run, catalog)
+        return {"run_id": str(run.id), **result}
+    except Exception as e:  # noqa: BLE001
+        await db.rollback()
+        raise HTTPException(500, f"context certify failed: {e}")
+
+
+@router.post("/evaluation/runs/{run_id}/cancel")
+async def cancel_eval_run(run_id: str, db: AsyncSession = Depends(get_db)):
+    from app.models import ModelEvalRun
+
+    run = (
+        await db.execute(
+            select(ModelEvalRun).where(ModelEvalRun.id == uuid.UUID(run_id))
+        )
+    ).scalar_one_or_none()
+    if run is None:
+        raise HTTPException(404, "run not found")
+    run.cancel_requested = True  # runner checks between cases (real stop, spec §13.51)
+    await db.commit()
+    return {"cancelled": True}
+
+
+@router.get("/evaluation/runs/{run_id}")
+async def get_eval_run(run_id: str, db: AsyncSession = Depends(get_db)):
+    from app.models import ModelEvalCaseResult, ModelEvalRun
+
+    run = (
+        await db.execute(
+            select(ModelEvalRun).where(ModelEvalRun.id == uuid.UUID(run_id))
+        )
+    ).scalar_one_or_none()
+    if run is None:
+        raise HTTPException(404, "run not found")
+    results = (
+        (await db.execute(select(ModelEvalCaseResult).where(ModelEvalCaseResult.run_id == run.id).limit(500)))
+        .scalars()
+        .all()
+    )
+    return {
+        "id": str(run.id),
+        "mode": run.mode,
+        "status": run.status,
+        "overall_score": run.overall_score,
+        "confidence": run.confidence,
+        "result_summary": run.result_summary,
+        "cases": [
+            {
+                "case_id": str(r.case_id),
+                "score": r.score,
+                "passed": r.passed,
+                "error_code": r.error_code,
+                "latency_ms": r.latency_ms,
+            }
+            for r in results
+        ],
+    }
+
+
+@router.get("/evaluation/models/{catalog_id}/certification")
+async def get_certification(catalog_id: str, db: AsyncSession = Depends(get_db)):
+    from app.models import ModelCatalog
+
+    catalog = (
+        await db.execute(
+            select(ModelCatalog).where(ModelCatalog.id == uuid.UUID(catalog_id))
+        )
+    ).scalar_one_or_none()
+    if catalog is None:
+        raise HTTPException(404, "model not found")
+    return {
+        "model_kind": catalog.model_kind,
+        "text_generation_eligible": catalog.text_generation_eligible,
+        "classification_source": catalog.classification_source,
+        "evaluation_status": catalog.evaluation_status,
+        "certification_level": catalog.certification_level,
+        "certification_confidence": catalog.certification_confidence,
+        "benchmark_revision": catalog.benchmark_revision,
+        "last_certified_at": catalog.last_certified_at.isoformat() if catalog.last_certified_at else None,
+        "exclusion_reason": catalog.evaluation_exclusion_reason,
+    }
+
+
+@router.get("/evaluation/models/{catalog_id}/context-profile")
+async def get_context_profile(catalog_id: str, db: AsyncSession = Depends(get_db)):
+    from app.models import ModelContextProfile
+
+    profile = (
+        await db.execute(
+            select(ModelContextProfile).where(
+                ModelContextProfile.model_catalog_id == uuid.UUID(catalog_id)
+            )
+        )
+    ).scalar_one_or_none()
+    if profile is None:
+        return {"status": "not_verified"}
+    return {
+        "declared_context_window": profile.declared_context_window,
+        "accepted_context_window": profile.accepted_context_window,
+        "effective_context_window": profile.effective_context_window,
+        "position_robustness_score": profile.position_robustness_score,
+        "multi_hop_score": profile.multi_hop_score,
+        "instruction_retention_score": profile.instruction_retention_score,
+        "belief_boundary_score": profile.belief_boundary_score,
+        "confidence": profile.confidence,
+        "last_verified_at": profile.last_verified_at.isoformat() if profile.last_verified_at else None,
+    }

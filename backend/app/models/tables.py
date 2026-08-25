@@ -811,6 +811,7 @@ class PromptTemplate(Base, TimestampMixin):
 
 # ---- Technique cards ----
 class TechniqueCard(Base, TimestampMixin):
+    """v9.7 §23 DeepStudy technique knowledge — abstract mechanism, no source copies."""
     __tablename__ = "technique_cards"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -821,6 +822,19 @@ class TechniqueCard(Base, TimestampMixin):
     approved_by_human: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     source_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # v9.7 §23 DeepStudy fields
+    technique_type: Mapped[str] = mapped_column(String(40), nullable=False, default="dialogue")
+    mechanism: Mapped[str | None] = mapped_column(Text, nullable=True)
+    trigger_conditions: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    applicable_scene_types: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    avoid_when: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    planning_instruction: Mapped[str | None] = mapped_column(Text, nullable=True)
+    draft_instruction: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expected_effect: Mapped[str | None] = mapped_column(Text, nullable=True)
+    support_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    contradiction_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="candidate")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -865,6 +879,19 @@ class ModelCatalog(Base, TimestampMixin):
     auto_route_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     availability_status: Mapped[str] = mapped_column(String(20), nullable=False, default="unknown")  # available|missing|disabled
     discovery_source: Mapped[str] = mapped_column(String(30), nullable=False, default="seed")  # provider_api|manual|seed
+    # v9.7 §13.47 model classification & certification
+    model_kind: Mapped[str] = mapped_column(String(40), nullable=False, default="unknown")
+    input_modalities: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    output_modalities: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    text_generation_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    classification_source: Mapped[str] = mapped_column(String(30), nullable=False, default="unknown")
+    classification_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    evaluation_status: Mapped[str] = mapped_column(String(30), nullable=False, default="unclassified")
+    certification_level: Mapped[str] = mapped_column(String(30), nullable=False, default="none")
+    certification_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    benchmark_revision: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    last_certified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    evaluation_exclusion_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
@@ -879,6 +906,11 @@ class ModelCapabilityProfile(Base, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("model_catalog.id"), nullable=False, index=True
     )
     context_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # v9.7 §13.22: three measured context lengths
+    declared_context_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    accepted_context_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    effective_context_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    context_measurement_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     max_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     supports_stream: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     supports_json_schema: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

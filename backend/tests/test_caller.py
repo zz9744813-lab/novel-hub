@@ -149,7 +149,10 @@ class TestCallAgentSessionPattern:
                 uuid.UUID("00000000-0000-0000-0000-000000000001"),
                 {"provider": "unbound-provider", "model": "unbound-model"},
             )
-        assert resolved == ("bound-provider", "bound-model", "bound-fallback")
+        # v9.7: resolution now returns (provider, model, fallback_model, fallbacks[])
+        assert resolved[0] == "bound-provider"
+        assert resolved[1] == "bound-model"
+        assert resolved[3] == [{"model": "bound-fallback", "provider": "bound-provider"}]
 
     @pytest.mark.asyncio
     async def test_usage_event_is_recorded_for_each_gateway_attempt(self):

@@ -58,6 +58,8 @@ async def sync_catalog_from_provider(
     )
     by_model = {c.model_id: c for c in catalog_rows}
 
+    from app.model_autopilot.classification import classify_catalog_model
+
     for item in items:
         model_id = str(item.get("id") or item.get("model") or item.get("name"))
         if not model_id:
@@ -78,6 +80,7 @@ async def sync_catalog_from_provider(
                 auto_route_enabled=seeded,
                 metadata_json=item,
             )
+            classify_catalog_model(catalog)
             db.add(catalog)
             await db.flush()
             await ensure_capability_for_catalog(db, catalog)
@@ -88,6 +91,7 @@ async def sync_catalog_from_provider(
                 result["reappeared"] += 1
             else:
                 result["unchanged"] += 1
+            classify_catalog_model(existing)
             # pre-existing catalog rows (synced before the seed-enable change)
             # get promoted too when the seed knows the model — spec §58 only
             # protects unknown models from auto-route.

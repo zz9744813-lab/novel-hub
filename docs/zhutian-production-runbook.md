@@ -31,7 +31,15 @@ py -3.11 -m pytest backend/tests/test_production_pack.py -q
 ssh-keygen -t ed25519 -a 64 -f "$env:USERPROFILE\.ssh\novelforge_ops" -C "novelforge-ops"
 ```
 
-通过提供商控制台把公钥和 `deploy/ops` 三个脚本放到临时目录，以 root 执行：
+若提供商的 noVNC 会破坏多行粘贴，使用已经合并到主干的完整 SHA，把下面整行一次粘贴执行。参数只传 Ed25519 公钥的 Base64 主体，不含 `ssh-ed25519` 和注释：
+
+```bash
+curl -fsSLo /tmp/novelforge-bootstrap.sh https://raw.githubusercontent.com/zz9744813-lab/novel-hub/<40位主干SHA>/deploy/ops/bootstrap-console.sh && bash /tmp/novelforge-bootstrap.sh <ED25519公钥主体>
+```
+
+控制台末尾必须出现 `NOVELFORGE_BOOTSTRAP_OK` 才算成功。该脚本固定下载经审核的三个运维脚本，并从原部署目录迁移 `.env`；可安全重复运行。
+
+也可以手工把公钥和 `deploy/ops` 三个脚本放到临时目录，以 root 执行：
 
 ```bash
 bash bootstrap-novelops.sh \
@@ -53,7 +61,7 @@ status
 deploy <40位主干提交SHA>
 rollback <已存在的40位主干提交SHA>
 logs <web|api|worker|postgres|redis> <1..500>
-novel <validate|install|start|status|audit|export|download>
+novel <validate|qualify|install|start|status|audit|export|download>
 ```
 
 先确认该通道多次可用，再从控制台决定是否关闭 root 远程登录。引导脚本不会替你冒险关闭最后一个入口，也不会修改本机 v2rayN、TUN 或网络栈。

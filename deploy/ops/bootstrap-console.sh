@@ -5,7 +5,7 @@ umask 077
 
 readonly REPOSITORY_URL=https://github.com/zz9744813-lab/novel-hub.git
 readonly RAW_BASE=https://raw.githubusercontent.com/zz9744813-lab/novel-hub
-readonly OPS_COMMIT=7c5aaee1a1d5b4683248db8ef794b55c8d68dfe1
+readonly OPS_COMMIT=119cd691fc40f0329055961259a301db0bafc43b
 # This is a public key, not a credential. Keeping the dedicated operator key
 # here removes the last long, mixed-case argument from unreliable noVNC paste.
 readonly DEFAULT_KEY_BODY=AAAAC3NzaC1lZDI1NTE5AAAAIJgT3xuYobfW7EuxqF8exL8bgfbGKCSa/9ORDivDzZjM

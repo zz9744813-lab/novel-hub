@@ -157,12 +157,19 @@ def test_restricted_release_runs_model_evidence_before_switching():
     assert release.index(qualification) < release.index('switch_to "$release"')
     assert "validate|qualify|install|start" in release
     assert "validate|qualify|install|start" in forced
+    assert '[ -L "$CURRENT" ]' in release
+    assert '[[ $release =~ ^${RELEASES}/[0-9a-f]{40}$ ]]' in release
+    assert 'legacy="$ROOT/legacy/current-$stamp"' in release
+    assert 'mv -T "$CURRENT" "$legacy"' in release
+    assert release.index('mv -T "$CURRENT" "$legacy"') < release.index(
+        'mv -Tf "$CURRENT.next" "$CURRENT"'
+    )
 
 
 def test_console_bootstrap_is_pinned_and_never_interprets_the_key_as_shell():
     bootstrap = CONSOLE_BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
 
-    assert "OPS_COMMIT=7c5aaee1a1d5b4683248db8ef794b55c8d68dfe1" in bootstrap
+    assert "OPS_COMMIT=119cd691fc40f0329055961259a301db0bafc43b" in bootstrap
     assert "DEFAULT_KEY_BODY=AAAAC3NzaC1lZDI1NTE5AAAAI" in bootstrap
     assert "KEY_BODY=${1:-$DEFAULT_KEY_BODY}" in bootstrap
     assert "[[ $# -le 1 ]]" in bootstrap

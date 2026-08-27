@@ -27,9 +27,13 @@ def test_runtime_configs_are_baked_into_images_not_secret_adjacent_bind_mounts()
     assert "./postgres/pg_hba.conf:/etc/postgresql" not in compose
     assert "./redis/redis.conf:/usr/local/etc/redis" not in compose
     assert "./.env:/app/.env" not in compose
-    assert "COPY --chmod=0644 postgresql.conf" in postgres_image
-    assert "COPY --chmod=0644 pg_hba.conf" in postgres_image
-    assert "COPY --chmod=0644 redis.conf" in redis_image
+    assert "chown postgres:postgres /etc/postgresql" in postgres_image
+    assert "chmod 0755 /etc/postgresql" in postgres_image
+    assert "--chown=postgres:postgres --chmod=0644 postgresql.conf" in postgres_image
+    assert "--chown=postgres:postgres --chmod=0644 pg_hba.conf" in postgres_image
+    assert "chown redis:redis /usr/local/etc/redis" in redis_image
+    assert "chmod 0755 /usr/local/etc/redis" in redis_image
+    assert "--chown=redis:redis --chmod=0644 redis.conf" in redis_image
     assert 'build postgres redis api worker web' in release
 
 

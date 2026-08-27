@@ -132,6 +132,14 @@ switch_to() {
   mv -Tf "$CURRENT.next" "$CURRENT"
 }
 
+install_release_controller() {
+  local release=$1
+  install -o root -g root -m 0755 \
+    "$release/deploy/ops/novelforge-ops" /usr/local/sbin/novelforge-ops
+  install -o root -g root -m 0755 \
+    "$release/deploy/ops/novelforge-release" /usr/local/sbin/novelforge-release
+}
+
 deploy_sha() {
   local sha=$1
   local previous release backup_source backup
@@ -153,6 +161,8 @@ deploy_sha() {
   compose "$release" build api worker web
   compose "$release" run --rm api alembic upgrade head
   compose "$release" run --rm api \
+    python scripts/production_pack.py qualify --pack "$PACK"
+  compose "$release" run --rm api \
     python scripts/production_pack.py validate --pack "$PACK"
   switch_to "$release"
   compose "$release" up -d --remove-orphans
@@ -165,6 +175,10 @@ deploy_sha() {
     fi
     exit 70
   fi
+  # The commit is already proven to be on origin/main.  Updating the forced
+  # command/controller after a healthy switch makes future operational verbs
+  # available without another root-console bootstrap.
+  install_release_controller "$release"
   printf '%s\n' "$sha" >"$SHARED/DEPLOYED_SHA"
   printf '{"ok":true,"action":"deploy","sha":"%s","previous":"%s","backup":"%s"}\n' \
     "$sha" "${previous##*/}" "${backup##*/}"
@@ -206,7 +220,7 @@ show_logs() {
 
 novel_action() {
   local action=$1 release
-  [[ $action =~ ^(validate|install|start|status|audit|export|download)$ ]] || exit 64
+  [[ $action =~ ^(validate|qualify|install|start|status|audit|export|download)$ ]] || exit 64
   release=$(current_release)
   [ -n "$release" ] || exit 69
   if [ "$action" = export ]; then

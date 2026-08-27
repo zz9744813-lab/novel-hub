@@ -23,7 +23,7 @@ case "${1:-}" in
     ;;
   novel)
     [ "$#" -eq 2 ] || exit 64
-    case "$2" in validate|install|start|status|audit|export|download) ;; *) exit 64 ;; esac
+    case "$2" in validate|qualify|install|start|status|audit|export|download) ;; *) exit 64 ;; esac
     ;;
   *)
     echo "allowed: status | deploy SHA | rollback SHA | logs SERVICE LINES | novel ACTION" >&2

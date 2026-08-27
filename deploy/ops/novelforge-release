@@ -1,0 +1,242 @@
+#!/usr/bin/env bash
+# Root-owned, argument-validating NovelForge release controller.
+set -Eeuo pipefail
+umask 027
+
+ROOT=/srv/novelforge
+MIRROR="$ROOT/repo.git"
+RELEASES="$ROOT/releases"
+SHARED="$ROOT/shared"
+CURRENT="$ROOT/current"
+CONF=/etc/novelforge-ops.conf
+PACK=production_packs/zhutian_hongyanlu/pack.json
+
+exec 9>/run/lock/novelforge-release.lock
+flock -w 5 9 || { echo '{"ok":false,"error":"release_busy"}'; exit 75; }
+
+[ -r "$CONF" ] || { echo "missing $CONF" >&2; exit 78; }
+# shellcheck source=/dev/null
+source "$CONF"
+: "${REPOSITORY_URL:?missing REPOSITORY_URL}"
+DEPLOY_BRANCH=${DEPLOY_BRANCH:-main}
+HEALTH_URL=${HEALTH_URL:-http://127.0.0.1/health/ready}
+
+compose() {
+  local release=$1
+  shift
+  docker compose --project-directory "$release/deploy" \
+    -f "$release/deploy/docker-compose.yml" "$@"
+}
+
+current_release() {
+  readlink -f "$CURRENT" 2>/dev/null || true
+}
+
+current_sha() {
+  local release
+  release=$(current_release)
+  [ -n "$release" ] && basename "$release" || true
+}
+
+healthy() {
+  curl --fail --silent --show-error --max-time 8 "$HEALTH_URL" \
+    | grep -Eq '"status"[[:space:]]*:[[:space:]]*"ready"'
+}
+
+wait_healthy() {
+  local attempt
+  for attempt in $(seq 1 30); do
+    healthy && return 0
+    sleep 2
+  done
+  return 1
+}
+
+wait_postgres() {
+  local release=$1 attempt
+  for attempt in $(seq 1 30); do
+    if compose "$release" exec -T postgres sh -ec \
+      'pg_isready --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"' \
+      >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+backup_database() {
+  local release=$1 target_sha=$2 stamp destination temporary
+  stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  destination="$SHARED/data/backups/pre-${target_sha}-${stamp}.dump"
+  temporary="${destination}.tmp"
+  if ! compose "$release" exec -T postgres sh -ec \
+    'export PGPASSWORD="$POSTGRES_PASSWORD"; exec pg_dump --format=custom --no-owner --no-acl --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"' \
+    >"$temporary"; then
+    rm -f "$temporary"
+    echo "database backup failed; migration was not started" >&2
+    return 1
+  fi
+  if [ ! -s "$temporary" ]; then
+    rm -f "$temporary"
+    echo "database backup is empty; migration was not started" >&2
+    return 1
+  fi
+  chmod 0640 "$temporary"
+  mv -f "$temporary" "$destination"
+  echo "database backup: $destination" >&2
+  printf '%s\n' "$destination"
+}
+
+fetch_main() {
+  if [ ! -d "$MIRROR" ]; then
+    git clone --mirror "$REPOSITORY_URL" "$MIRROR"
+  fi
+  git --git-dir="$MIRROR" remote set-url origin "$REPOSITORY_URL"
+  git --git-dir="$MIRROR" fetch --prune origin "+refs/heads/$DEPLOY_BRANCH:refs/remotes/origin/$DEPLOY_BRANCH"
+}
+
+validate_sha() {
+  local sha=$1
+  [[ $sha =~ ^[0-9a-f]{40}$ ]] || { echo "invalid sha" >&2; exit 64; }
+  git --git-dir="$MIRROR" rev-parse --verify "$sha^{commit}" >/dev/null
+  git --git-dir="$MIRROR" merge-base --is-ancestor "$sha" "refs/remotes/origin/$DEPLOY_BRANCH" \
+    || { echo "sha is not on origin/$DEPLOY_BRANCH" >&2; exit 65; }
+}
+
+prepare_release() {
+  local sha=$1
+  local release="$RELEASES/$sha"
+  if [ ! -f "$release/.git" ]; then
+    [ ! -e "$release" ] || { echo "invalid pre-existing release path" >&2; exit 73; }
+    git --git-dir="$MIRROR" worktree add --detach "$release" "$sha" >&2
+  fi
+  [ -f "$SHARED/.env" ] || { echo "missing $SHARED/.env" >&2; exit 78; }
+  install -d -m 0750 -o 10001 -g 10001 \
+    "$SHARED/data/books" "$SHARED/data/exports" \
+    "$SHARED/data/references" "$SHARED/data/imports"
+  install -d -m 0750 -o root -g root "$SHARED/data/backups"
+  rm -f "$release/deploy/.env"
+  ln -s "$SHARED/.env" "$release/deploy/.env"
+  if [ -e "$release/data" ] && [ ! -L "$release/data" ]; then
+    echo "release contains a non-symlink data path" >&2
+    exit 73
+  fi
+  ln -sfn "$SHARED/data" "$release/data"
+  printf '%s\n' "$release"
+}
+
+switch_to() {
+  local release=$1
+  ln -sfn "$release" "$CURRENT.next"
+  mv -Tf "$CURRENT.next" "$CURRENT"
+}
+
+deploy_sha() {
+  local sha=$1
+  local previous release backup_source backup
+  fetch_main
+  validate_sha "$sha"
+  release=$(prepare_release "$sha")
+  previous=$(current_release)
+
+  # Validate interpolation, mounts and service definitions on the target host
+  # before touching the running database or building any image.
+  compose "$release" config --quiet
+
+  backup_source=${previous:-$release}
+  compose "$backup_source" up -d postgres
+  wait_postgres "$backup_source" \
+    || { echo "postgres did not become ready; migration was not started" >&2; exit 70; }
+  backup=$(backup_database "$backup_source" "$sha")
+
+  compose "$release" build api worker web
+  compose "$release" run --rm api alembic upgrade head
+  compose "$release" run --rm api \
+    python scripts/production_pack.py validate --pack "$PACK"
+  switch_to "$release"
+  compose "$release" up -d --remove-orphans
+  if ! wait_healthy; then
+    echo "new release failed health check" >&2
+    if [ -n "$previous" ] && [ -d "$previous" ]; then
+      switch_to "$previous"
+      compose "$previous" up -d --remove-orphans
+      wait_healthy || true
+    fi
+    exit 70
+  fi
+  printf '%s\n' "$sha" >"$SHARED/DEPLOYED_SHA"
+  printf '{"ok":true,"action":"deploy","sha":"%s","previous":"%s","backup":"%s"}\n' \
+    "$sha" "${previous##*/}" "${backup##*/}"
+}
+
+rollback_sha() {
+  local sha=$1
+  local release="$RELEASES/$sha"
+  fetch_main
+  validate_sha "$sha"
+  [ -d "$release" ] || { echo "release not prepared: $sha" >&2; exit 66; }
+  switch_to "$release"
+  compose "$release" up -d --remove-orphans
+  wait_healthy || { echo "rollback target unhealthy" >&2; exit 70; }
+  printf '%s\n' "$sha" >"$SHARED/DEPLOYED_SHA"
+  printf '{"ok":true,"action":"rollback","sha":"%s"}\n' "$sha"
+}
+
+show_status() {
+  local release sha health=false
+  release=$(current_release)
+  sha=$(current_sha)
+  healthy && health=true || true
+  printf '{"ok":true,"sha":"%s","health":%s,"release":"%s"}\n' \
+    "$sha" "$health" "$release"
+  if [ -n "$release" ] && [ -d "$release/deploy" ]; then
+    compose "$release" ps --format json || true
+  fi
+}
+
+show_logs() {
+  local service=$1 lines=$2 release
+  [[ $service =~ ^(web|api|worker|postgres|redis)$ ]] || exit 64
+  [[ $lines =~ ^[0-9]+$ ]] && [ "$lines" -le 500 ] || exit 64
+  release=$(current_release)
+  [ -n "$release" ] || exit 69
+  compose "$release" logs --no-color --tail "$lines" "$service"
+}
+
+novel_action() {
+  local action=$1 release
+  [[ $action =~ ^(validate|install|start|status|audit|export|download)$ ]] || exit 64
+  release=$(current_release)
+  [ -n "$release" ] || exit 69
+  if [ "$action" = export ]; then
+    compose "$release" exec -T api python scripts/production_pack.py export \
+      --pack "$PACK" --output /app/data/exports/zhutian-hongyanlu.txt
+  elif [ "$action" = download ]; then
+    compose "$release" exec -T api python scripts/production_pack.py export \
+      --pack "$PACK" --output /app/data/exports/zhutian-hongyanlu.txt >&2
+    cat "$SHARED/data/exports/zhutian-hongyanlu.txt"
+  else
+    compose "$release" exec -T api python scripts/production_pack.py "$action" \
+      --pack "$PACK"
+  fi
+}
+
+self_heal() {
+  local release
+  release=$(current_release)
+  [ -n "$release" ] || exit 0
+  healthy && exit 0
+  compose "$release" up -d --remove-orphans
+  wait_healthy
+}
+
+case "${1:-status}" in
+  status) [ "$#" -eq 1 ] && show_status ;;
+  deploy) [ "$#" -eq 2 ] && deploy_sha "$2" ;;
+  rollback) [ "$#" -eq 2 ] && rollback_sha "$2" ;;
+  logs) [ "$#" -eq 3 ] && show_logs "$2" "$3" ;;
+  novel) [ "$#" -eq 2 ] && novel_action "$2" ;;
+  healthcheck) [ "$#" -eq 1 ] && self_heal ;;
+  *) exit 64 ;;
+esac

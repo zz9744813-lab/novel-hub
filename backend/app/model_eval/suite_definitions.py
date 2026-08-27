@@ -19,6 +19,29 @@ PRODUCTION_ROLES = (
     "style_analyzer",
 )
 
+# Expensive qualification is intentionally limited to the five orthogonal
+# abilities above.  Auxiliary production agents reuse the closest qualified
+# ability instead of adding near-duplicate gateway calls to every evaluation.
+# Keep these names aligned with ``agents.registry`` and the actual
+# ``call_agent`` role names.
+ROLE_EVIDENCE_ALIASES = {
+    "outline_parser": "chapter_planner",
+    "blank_planner": "chapter_planner",
+    "local_rewrite_editor": "draft_writer",
+    "drift_audit": "state_extractor",
+    "query_planner": "chapter_planner",
+    "evidence_ranker": "review_agent",
+    "memory_compiler": "state_extractor",
+}
+
+ROUTABLE_ROLES = PRODUCTION_ROLES + tuple(ROLE_EVIDENCE_ALIASES)
+
+
+def qualification_role_for(agent_role: str) -> str:
+    """Return the directly tested ability that qualifies ``agent_role``."""
+
+    return ROLE_EVIDENCE_ALIASES.get(agent_role, agent_role)
+
 
 _SUITES: tuple[dict, ...] = (
     {

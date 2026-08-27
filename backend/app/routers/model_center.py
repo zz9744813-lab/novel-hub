@@ -248,7 +248,9 @@ async def routes_timeline(limit: int = 50, db: AsyncSession = Depends(get_db)):
 @router.post("/routes/recalculate")
 async def recalculate(db: AsyncSession = Depends(get_db)):
     """Recompute per-role rankings from current signals."""
-    roles = ("chapter_planner", "draft_writer", "review_agent", "state_extractor", "style_analyzer")
+    from app.agents.registry import required_roles
+
+    roles = required_roles()
     for catalog in (await db.execute(select(ModelCatalog))).scalars().all():
         for role in roles:
             await compute_role_score(db, catalog, role)

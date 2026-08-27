@@ -11,25 +11,27 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.registry import ROLE_REGISTRY
+from app.model_eval.suite_definitions import ROUTABLE_ROLES, qualification_role_for
 from app.models import ModelCapabilityProfile, ModelCatalog
 
 logger = logging.getLogger("novelforge.model_autopilot.capability")
 
 # Key roles whose auto routing REQUIRES a known context window (spec §32).
-CONTEXT_REQUIRED_ROLES = {
+_DIRECT_CONTEXT_REQUIRED_ROLES = {
     "chapter_planner",
     "draft_writer",
     "review_agent",
     "state_extractor",
 }
+CONTEXT_REQUIRED_ROLES = {
+    role
+    for role in ROUTABLE_ROLES
+    if qualification_role_for(role) in _DIRECT_CONTEXT_REQUIRED_ROLES
+}
 
 DEFAULT_ROLE_QUALITY_FLOOR = {
-    "draft_writer": 85.0,
-    "chapter_planner": 80.0,
-    "review_agent": 80.0,
-    "state_extractor": 80.0,
-    "style_analyzer": 75.0,
-    "query_planner": 70.0,
+    role: float(spec.default_quality_floor) for role, spec in ROLE_REGISTRY.items()
 }
 
 

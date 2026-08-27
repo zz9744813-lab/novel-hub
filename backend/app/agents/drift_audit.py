@@ -3,12 +3,13 @@ Per §9 + §A.7 v7.3.
 """
 import uuid
 import json
+import hashlib
 import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.agents.caller import call_agent
 from app.models import (
-    DriftAuditReport, MemoryL4StateSnapshot, StoryEvent,
+    Chapter, ChapterVersion, DriftAuditReport, MemoryL4StateSnapshot, StoryEvent,
     OutlineNode, StyleVoiceCard, StyleToneAnchor
 )
 
@@ -103,6 +104,73 @@ REDLINE_TYPES = [
     "irreversible_forbidden_outcome",
 ]
 
+_STATUS_RANK = {"green": 0, "yellow": 1, "red": 2}
+
+
+def classify_drift_status(
+    metrics: dict,
+    *,
+    requested_status: str,
+    redline_findings: list | None = None,
+) -> str:
+    """Apply configured thresholds instead of trusting a model's colour label."""
+
+    requested = str(requested_status or "").lower()
+    if requested not in _STATUS_RANK:
+        raise ValueError("drift status must be green, yellow, or red")
+    if not isinstance(metrics, dict):
+        raise ValueError("drift metrics must be an object")
+    missing = sorted(set(THRESHOLDS) - set(metrics))
+    if missing:
+        raise ValueError(f"missing drift metrics: {missing}")
+
+    status = requested
+    for name, thresholds in THRESHOLDS.items():
+        value = metrics.get(name)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"drift metric {name} must be numeric")
+        score = float(value)
+        if not 0.0 <= score <= 1.0:
+            raise ValueError(f"drift metric {name} must be within 0..1")
+        measured = "green"
+        red_floor = thresholds.get("red")
+        if red_floor is not None and score < float(red_floor):
+            measured = "red"
+        elif score < float(thresholds["green"]):
+            measured = "yellow"
+        if _STATUS_RANK[measured] > _STATUS_RANK[status]:
+            status = measured
+    if redline_findings:
+        status = "red"
+    return status
+
+
+def stratified_chapter_numbers(start: int, end: int, count: int = 6) -> list[int]:
+    """Select deterministic, evenly spread chapters including both boundaries."""
+    if start < 1 or end < start or count < 1:
+        raise ValueError("invalid chapter sampling range")
+    total = end - start + 1
+    if total <= count:
+        return list(range(start, end + 1))
+    if count == 1:
+        return [start]
+    values = {
+        start + round(index * (total - 1) / (count - 1))
+        for index in range(count)
+    }
+    return sorted(values)
+
+
+def _chapter_excerpt(content: str, max_chars: int = 2400) -> str:
+    text = content or ""
+    if len(text) <= max_chars:
+        return text
+    third = max_chars // 3
+    middle = max(0, len(text) // 2 - third // 2)
+    return "\n[…中段…]\n".join(
+        (text[:third], text[middle : middle + third], text[-third:])
+    )
+
 
 async def run_drift_audit(
     db: AsyncSession,
@@ -111,60 +179,186 @@ async def run_drift_audit(
     chapter_range_end: int,
 ) -> DriftAuditReport:
     """Run a drift audit for chapters [start, end]."""
-    
     # Get events in range
     events = await db.execute(
-        select(StoryEvent).where(
+        select(StoryEvent)
+        .join(Chapter, Chapter.id == StoryEvent.chapter_id)
+        .where(
             StoryEvent.book_id == book_id,
-        ).order_by(StoryEvent.created_at.desc()).limit(100)
+            Chapter.chapter_no >= chapter_range_start,
+            Chapter.chapter_no <= chapter_range_end,
+        )
+        .order_by(Chapter.chapter_no, StoryEvent.created_at)
+        .limit(200)
     )
     event_list = [{"id": str(e.id), "type": e.event_type, "certainty": e.certainty,
                     "excerpt": e.evidence_excerpt[:200]} for e in events.scalars().all()]
 
     # Get outline nodes in range
     nodes = await db.execute(
-        select(OutlineNode).where(
+        select(OutlineNode)
+        .join(Chapter, Chapter.outline_node_id == OutlineNode.id)
+        .where(
             OutlineNode.book_id == book_id,
             OutlineNode.chapter_no >= chapter_range_start,
             OutlineNode.chapter_no <= chapter_range_end,
-        ).order_by(OutlineNode.chapter_no)
+        )
+        .order_by(OutlineNode.chapter_no)
     )
     node_list = [{"chapter_no": n.chapter_no, "goal": n.goal,
                    "required_beats": n.required_beats, "depends_on": n.depends_on} for n in nodes.scalars().all()]
 
     # Get L4 states
     l4 = await db.execute(
-        select(MemoryL4StateSnapshot).where(MemoryL4StateSnapshot.book_id == book_id)
+        select(MemoryL4StateSnapshot)
+        .where(
+            MemoryL4StateSnapshot.book_id == book_id,
+            MemoryL4StateSnapshot.as_of_chapter <= chapter_range_end,
+        )
+        .order_by(
+            MemoryL4StateSnapshot.entity_type,
+            MemoryL4StateSnapshot.entity_id,
+            MemoryL4StateSnapshot.as_of_chapter.desc(),
+            MemoryL4StateSnapshot.version.desc(),
+        )
     )
-    l4_states = [{"entity_type": s.entity_type, "state": s.state} for s in l4.scalars().all()]
+    latest_l4 = {}
+    for state in l4.scalars().all():
+        latest_l4.setdefault((state.entity_type, state.entity_id), state)
+    l4_states = [
+        {
+            "entity_type": state.entity_type,
+            "entity_id": str(state.entity_id),
+            "as_of_chapter": state.as_of_chapter,
+            "state": state.state,
+        }
+        for state in latest_l4.values()
+    ]
 
     # Get voice cards
-    vc = await db.execute(select(StyleVoiceCard).where(StyleVoiceCard.book_id == book_id))
-    voice_cards = [{"register": v.register} for v in vc.scalars().all()]
+    vc = await db.execute(
+        select(StyleVoiceCard)
+        .where(StyleVoiceCard.book_id == book_id)
+        .order_by(StyleVoiceCard.version.desc())
+    )
+    latest_voices = {}
+    for voice in vc.scalars().all():
+        latest_voices.setdefault(voice.character_id, voice)
+    voice_cards = [
+        {"character_id": str(v.character_id), "register": v.register}
+        for v in latest_voices.values()
+    ]
 
     # Get tone anchors
-    ta = await db.execute(select(StyleToneAnchor).where(StyleToneAnchor.book_id == book_id))
+    ta = await db.execute(
+        select(StyleToneAnchor)
+        .where(StyleToneAnchor.book_id == book_id)
+        .order_by(StyleToneAnchor.version.desc())
+        .limit(1)
+    )
     tone_anchors = [{"pov": t.narrative_pov} for t in ta.scalars().all()]
+
+    sample_numbers = stratified_chapter_numbers(
+        chapter_range_start, chapter_range_end
+    )
+    sample_rows = (
+        await db.execute(
+            select(
+                Chapter.chapter_no,
+                ChapterVersion.content,
+                ChapterVersion.content_hash,
+            )
+            .join(
+                ChapterVersion,
+                (ChapterVersion.chapter_id == Chapter.id)
+                & (ChapterVersion.version == Chapter.finalized_version),
+            )
+            .where(
+                Chapter.book_id == book_id,
+                Chapter.chapter_no.in_(sample_numbers),
+                Chapter.status == "finalized",
+                ChapterVersion.version_kind == "final",
+            )
+            .order_by(Chapter.chapter_no)
+        )
+    ).all()
+    drift_samples = [
+        {
+            "sample_id": f"chapter-{chapter_no}",
+            "chapter_no": chapter_no,
+            "content_hash": content_hash,
+            "excerpt": _chapter_excerpt(content),
+        }
+        for chapter_no, content, content_hash in sample_rows
+    ]
 
     # v9 deterministic causal metrics (no LLM — authoritative, spec §34)
     causal_metrics = await _causal_metrics(db, book_id, chapter_range_start, chapter_range_end)
 
-    user_content = json.dumps({
+    audit_payload = {
         "chapter_range": [chapter_range_start, chapter_range_end],
-        "audit_samples": [],  # TODO: generate proper audit samples
+        "audit_samples": [
+            {
+                "sample_id": item["sample_id"],
+                "chapter_no": item["chapter_no"],
+                "content_hash": item["content_hash"],
+            }
+            for item in drift_samples
+        ],
         "l4_state": l4_states,
         "story_events": event_list,
         "outline_nodes": node_list,
         "voice_cards": voice_cards,
         "tone_anchors": tone_anchors,
-        "drift_samples": [],
-    }, ensure_ascii=False)
+        "drift_samples": drift_samples,
+        "causal_metrics": causal_metrics,
+    }
+    input_hash = hashlib.sha256(
+        json.dumps(
+            audit_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    existing = (
+        await db.execute(
+            select(DriftAuditReport)
+            .where(
+                DriftAuditReport.book_id == book_id,
+                DriftAuditReport.chapter_range_start == chapter_range_start,
+                DriftAuditReport.chapter_range_end == chapter_range_end,
+            )
+            .order_by(DriftAuditReport.created_at.desc(), DriftAuditReport.id.desc())
+        )
+    ).scalars().all()
+    for prior in existing:
+        refs = prior.evidence_refs or []
+        same_input = any(
+            isinstance(ref, dict)
+            and ref.get("kind") == "audit_input_hash"
+            and ref.get("sha256") == input_hash
+            for ref in refs
+        )
+        service_failed = any(
+            isinstance(item, dict) and item.get("type") == "audit_service_failure"
+            for item in (prior.yellow_findings or [])
+        )
+        if same_input and not service_failed:
+            return prior
+
+    user_content = json.dumps(audit_payload, ensure_ascii=False)
+
+    # Release the read transaction before the model call.
+    await db.commit()
 
     run, result, meta = await call_agent(
         book_id=book_id,
         agent_role="drift_audit",
         user_content=user_content,
     )
+    meta = meta or {}
 
     # Create report
     report = DriftAuditReport(
@@ -179,17 +373,50 @@ async def run_drift_audit(
         affected_entities=[],
         affected_future_nodes=[],
         recommended_actions=[],
-        evidence_refs=[],
+        evidence_refs=[
+            {"kind": "audit_input_hash", "sha256": input_hash},
+            {
+                "kind": "chapter_samples",
+                "chapters": [
+                    {
+                        "chapter_no": item["chapter_no"],
+                        "content_hash": item["content_hash"],
+                    }
+                    for item in drift_samples
+                ],
+            },
+        ],
     )
 
-    if result:
-        report.status = result.get("status", "green")
+    service_error = (
+        not isinstance(result, dict)
+        or bool(meta.get("error"))
+        or bool(meta.get("block_reason"))
+    )
+    if not service_error:
         report.metrics = result.get("metrics", {})
         report.redline_findings = result.get("redline_findings", [])
+        try:
+            report.status = classify_drift_status(
+                report.metrics,
+                requested_status=result.get("status"),
+                redline_findings=report.redline_findings,
+            )
+        except ValueError as exc:
+            service_error = True
+            meta = {**meta, "block_reason": str(exc)}
         report.yellow_findings = result.get("yellow_findings", [])
         report.affected_entities = result.get("affected_entities", [])
         report.affected_future_nodes = result.get("affected_future_nodes", [])
         report.recommended_actions = result.get("recommended_actions", [])
+    if service_error:
+        report.status = "yellow"
+        report.yellow_findings = [
+            {
+                "type": "audit_service_failure",
+                "detail": meta.get("block_reason") or meta.get("error") or "invalid audit response",
+            }
+        ]
 
     # Deterministic causal metrics override LLM-fuzzy values
     if causal_metrics:

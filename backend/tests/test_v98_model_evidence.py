@@ -51,6 +51,7 @@ from app.model_eval.evidence import (
 )
 from app.model_eval.engine import (
     SuiteDefinitionDriftError,
+    get_catalog_evidence_state,
     run_qualification,
     run_context_ladder,
     seed_suites,
@@ -59,6 +60,11 @@ from app.model_eval.engine import (
     refresh_endpoint_identity,
 )
 from app.model_eval.engine import _ability_suite_hash, _context_suite_hash
+from app.model_eval.suite_definitions import (
+    ROLE_EVIDENCE_ALIASES,
+    ROUTABLE_ROLES,
+    qualification_role_for,
+)
 from app.models import (
     ModelCapabilityProfile,
     ModelCatalog,
@@ -534,20 +540,63 @@ async def test_qualification_persists_role_scores_and_case_results():
     r = await run_qualification(db, run, gateway=gw, force=True)
     assert r["status"] == "succeeded"
 
-    # every production role has a ModelRoleScore with benchmark_score lineage
+    # Every routable role has benchmark lineage. Auxiliary roles reuse a core
+    # score; they do not add gateway calls or duplicate synthetic cases.
     roles = db._table(ModelRoleScore)
     assert roles, "role scores must be persisted"
     by_role = {row.agent_role: row for row in roles}
-    for role in ("chapter_planner", "draft_writer", "review_agent", "state_extractor", "style_analyzer"):
+    for role in ROUTABLE_ROLES:
         assert role in by_role, f"missing role score for {role}"
         assert by_role[role].benchmark_evidence_key == cat.ability_evaluation_key
         assert by_role[role].benchmark_source_run_id == run.id
+        qualification = (by_role[role].detail_json or {}).get("qualification") or {}
+        assert qualification.get("evidence_role") == qualification_role_for(role)
 
     # case results persisted (real evidence trail)
     case_results = db._table(ModelEvalCaseResult)
     assert case_results, "case results must be persisted"
+    assert r["gateway_calls"] == len(case_results)
     assert all(cr.score is not None for cr in case_results)
     assert all(cr.response_hash for cr in case_results)  # digest, not private text
+
+    state = await get_catalog_evidence_state(db, cat)
+    for role, source_role in ROLE_EVIDENCE_ALIASES.items():
+        aliased = state["role_evidence"][role]
+        direct = state["role_evidence"][source_role]
+        assert aliased["state"] == "valid"
+        assert aliased["passed"] is direct["passed"]
+        assert aliased["score"] == direct["score"]
+        assert aliased["evidence_role"] == source_role
+        assert aliased["reused_for_auxiliary_role"] is True
+
+
+@pytest.mark.asyncio
+async def test_auxiliary_role_score_reuses_core_qualification():
+    from app.model_autopilot.scoring import compute_role_score
+
+    db = FakeAsyncSession()
+    cat = make_catalog()
+    db._table(ModelCatalog).append(cat)
+    source = make_run(catalog=cat)
+    db._table(ModelEvalRun).append(source)
+    await db.commit()
+    result = await run_qualification(
+        db,
+        source,
+        gateway=CountingGateway(responder=passing_responder()),
+        force=True,
+    )
+    calls_before_scoring = result["gateway_calls"]
+
+    row = await compute_role_score(db, cat, "memory_compiler")
+    direct = next(r for r in db._table(ModelRoleScore) if r.agent_role == "state_extractor")
+    assert row.benchmark_score == direct.benchmark_score
+    assert row.benchmark_evidence_key == direct.benchmark_evidence_key
+    assert row.benchmark_source_run_id == direct.benchmark_source_run_id
+    assert row.detail_json["benchmark_blended"] is True
+    assert row.detail_json["qualification_evidence_role"] == "state_extractor"
+    assert row.detail_json["qualification_reused"] is True
+    assert result["gateway_calls"] == calls_before_scoring
 
 
 @pytest.mark.asyncio

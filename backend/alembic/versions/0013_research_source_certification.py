@@ -29,6 +29,14 @@ def _ts_columns():
 
 
 def upgrade() -> None:
+    # Alembic creates ``alembic_version.version_num`` as VARCHAR(32) by
+    # default, while this historical revision id is longer than 32 chars.
+    # Widen before Alembic records the revision or a fresh install fails after
+    # successfully executing this migration's DDL.
+    op.execute(
+        "ALTER TABLE alembic_version "
+        "ALTER COLUMN version_num TYPE VARCHAR(128)"
+    )
     conn = op.get_bind()
 
     if not _has_table(conn, "research_source_probe_runs"):

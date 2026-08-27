@@ -6,7 +6,10 @@ from __future__ import annotations
 
 import pytest
 
+from app.agents.registry import ROLE_REGISTRY, required_roles
 from app.model_autopilot.autoconfig_job import REQUIRED_ROLES, ROLE_DISPLAY, VALID_MINUTES
+from app.model_autopilot.capability import CONTEXT_REQUIRED_ROLES
+from app.model_autopilot.preflight import PREFLIGHT_ROLES
 from app.model_autopilot.router import DEFAULT_WEIGHTS
 
 
@@ -16,8 +19,20 @@ def test_autoconfig_required_roles_complete():
     assert "draft_writer" in REQUIRED_ROLES
     assert "review_agent" in REQUIRED_ROLES
     assert "state_extractor" in REQUIRED_ROLES
-    assert len(REQUIRED_ROLES) >= 5
+    assert "memory_compiler" in REQUIRED_ROLES
+    assert "local_rewrite_editor" in REQUIRED_ROLES
+    assert "blank_planner" in REQUIRED_ROLES
+    assert "evidence_ranker" in REQUIRED_ROLES
+    assert REQUIRED_ROLES == required_roles()
+    assert PREFLIGHT_ROLES == REQUIRED_ROLES
+    assert "memory_compiler" in CONTEXT_REQUIRED_ROLES
+    assert "drift_audit" in CONTEXT_REQUIRED_ROLES
+    assert all(
+        ROLE_REGISTRY[role].expected_context_tokens < 128_000 * 0.95
+        for role in REQUIRED_ROLES
+    )
     assert ROLE_DISPLAY["draft_writer"] == "DraftWriter"
+    assert ROLE_DISPLAY["memory_compiler"] == "MemoryCompiler"
     assert VALID_MINUTES == 30
 
 

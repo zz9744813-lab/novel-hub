@@ -393,9 +393,10 @@ async def test_lease_cas_and_checkpoint_reuse():
     from app.engine.step_runner import RunContext, run_step
 
     ctx = RunContext(
-        chapter_run_id=rid,
+        run_id=rid,
         book_id=book.id,
         chapter_id=ch.id,
+        chapter_no=ch.chapter_no,
         worker_id="worker-a",
         pipeline_version="test",
     )

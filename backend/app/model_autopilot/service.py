@@ -203,7 +203,9 @@ async def route_timeline(db: AsyncSession, limit: int = 50) -> list[dict]:
 
 async def current_routes(db: AsyncSession) -> list[dict]:
     """Current per-role primary/fallback assignments (spec §78)."""
-    roles = ("chapter_planner", "draft_writer", "review_agent", "state_extractor", "style_analyzer")
+    from app.agents.registry import required_roles
+
+    roles = required_roles()
     from app.v74_utils import ModelBindingService
 
     svc = ModelBindingService(db)

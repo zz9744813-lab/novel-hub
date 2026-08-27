@@ -23,9 +23,24 @@ from app.models import (
     MemoryL2StageSummary,
     MemoryL3VolumeSummary,
     OutlineNode,
+    OutlineVersion,
 )
 
 logger = logging.getLogger("novelforge.memory_compiler")
+
+
+def volume_stage_window(
+    chapter_no: int,
+    chapter_from: int,
+    chapter_to: int,
+    *,
+    stage_size: int = 10,
+) -> tuple[int, int]:
+    """Return the volume-local L2 window containing ``chapter_no``."""
+    if stage_size < 1 or not chapter_from <= chapter_no <= chapter_to:
+        raise ValueError("chapter must be inside a valid volume range")
+    start = chapter_from + ((chapter_no - chapter_from) // stage_size) * stage_size
+    return start, min(start + stage_size - 1, chapter_to)
 
 
 def _sha256_json(obj) -> str:
@@ -56,11 +71,32 @@ async def generate_l2(
         {"chapter_no": ch_no, "ledger": ledger.ledger_json}
         for ledger, ch_no in l1_pairs
     ]
+    source_hash = _sha256_json(l1_data)
+    existing = (
+        await db.execute(
+            select(MemoryL2StageSummary).where(
+                MemoryL2StageSummary.book_id == book_id,
+                MemoryL2StageSummary.chapter_range_start == chapter_start,
+                MemoryL2StageSummary.chapter_range_end == chapter_end,
+                MemoryL2StageSummary.outline_version == outline_version,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        if (
+            existing.source_hash == source_hash
+            and existing.status == "generated"
+            and isinstance(existing.summary_json, dict)
+            and not existing.summary_json.get("error")
+        ):
+            return existing
 
     nodes = await db.execute(
         select(OutlineNode)
+        .join(OutlineVersion, OutlineVersion.id == OutlineNode.outline_version_id)
         .where(
             OutlineNode.book_id == book_id,
+            OutlineVersion.version == outline_version,
             OutlineNode.chapter_no >= chapter_start,
             OutlineNode.chapter_no <= chapter_end,
         )
@@ -69,6 +105,10 @@ async def generate_l2(
     outline_goals = [
         {"chapter_no": n.chapter_no, "goal": n.goal} for n in nodes.scalars().all()
     ]
+
+    # End the read transaction before network IO.  The same session may safely
+    # acquire a new connection for the append after the model returns.
+    await db.commit()
 
     # Release caller's session before LLM (call_agent opens its own sessions)
     user_content = json.dumps(
@@ -79,7 +119,8 @@ async def generate_l2(
             "chapter_range": [chapter_start, chapter_end],
             "instructions": (
                 "将指定章节范围内的 L1 事实账本压缩为 L2 阶段摘要，"
-                "提取：阶段目标、冲突变化、人物弧线、未决问题。只输出 JSON。"
+                "提取：阶段目标、冲突变化、人物弧线、未决问题；"
+                "summary_type 必须为 l2_stage。只输出 JSON。"
             ),
         },
         ensure_ascii=False,
@@ -90,7 +131,7 @@ async def generate_l2(
     # We pass db only for API compatibility; call_agent uses its own short sessions.
     run, publishable, meta = await call_agent(
         book_id=book_id,
-        agent_role="query_planner",
+        agent_role="memory_compiler",
         user_content=user_content,
         l1_refs=[{"chapter_start": chapter_start, "chapter_end": chapter_end, "count": len(l1_data)}],
         assembly_manifest={
@@ -99,30 +140,49 @@ async def generate_l2(
             "budget": {"max_context": 128000, "reserved_output": 4096, "used": len(user_content) // 4},
         },
     )
+    meta = meta or {}
 
     if isinstance(publishable, dict):
         summary_json = publishable
     elif isinstance(publishable, str) and publishable:
         from app.gateway.normalizer import normalize_json
-        summary_json = normalize_json(publishable) or {"raw": publishable}
+        normalized = normalize_json(publishable)
+        summary_json = (
+            normalized
+            if isinstance(normalized, dict)
+            else {"error": "invalid_l2_summary_shape"}
+        )
     else:
         summary_json = {"error": meta.get("error") or meta.get("block_reason") or "empty"}
+    if summary_json.get("summary_type") != "l2_stage":
+        summary_json = {"error": "invalid_l2_summary_type"}
 
-    source_hash = _sha256_json(l1_data)
     source_run_id = run.id if run else uuid.uuid4()
-
-    l2 = MemoryL2StageSummary(
-        id=uuid.uuid4(),
-        book_id=book_id,
-        chapter_range_start=chapter_start,
-        chapter_range_end=chapter_end,
-        outline_version=outline_version,
-        source_hash=source_hash,
-        status="generated" if not meta.get("error") else "degraded",
-        summary_json=summary_json or {},
-        source_run_id=source_run_id,
+    succeeded = bool(summary_json) and not (
+        meta.get("error")
+        or meta.get("block_reason")
+        or (isinstance(summary_json, dict) and summary_json.get("error"))
     )
-    db.add(l2)
+
+    if existing is None:
+        l2 = MemoryL2StageSummary(
+            id=uuid.uuid4(),
+            book_id=book_id,
+            chapter_range_start=chapter_start,
+            chapter_range_end=chapter_end,
+            outline_version=outline_version,
+            source_hash=source_hash,
+            status="generated" if succeeded else "degraded",
+            summary_json=summary_json or {},
+            source_run_id=source_run_id,
+        )
+        db.add(l2)
+    else:
+        l2 = existing
+        l2.source_hash = source_hash
+        l2.status = "generated" if succeeded else "degraded"
+        l2.summary_json = summary_json or {}
+        l2.source_run_id = source_run_id
     await db.flush()
     logger.info("L2 summary generated for chapters %s-%s", chapter_start, chapter_end)
     return l2
@@ -137,7 +197,10 @@ async def generate_l3(
     chapter_end: int | None = None,
 ) -> MemoryL3VolumeSummary | None:
     """Generate L3 volume summary from L2s in this volume range."""
-    q = select(MemoryL2StageSummary).where(MemoryL2StageSummary.book_id == book_id)
+    q = select(MemoryL2StageSummary).where(
+        MemoryL2StageSummary.book_id == book_id,
+        MemoryL2StageSummary.outline_version == outline_version,
+    )
     if chapter_start is not None:
         q = q.where(MemoryL2StageSummary.chapter_range_end >= chapter_start)
     if chapter_end is not None:
@@ -153,6 +216,26 @@ async def generate_l3(
         }
         for s in l2_rows
     ]
+    source_hash = _sha256_json(l2_data)
+    existing = (
+        await db.execute(
+            select(MemoryL3VolumeSummary).where(
+                MemoryL3VolumeSummary.book_id == book_id,
+                MemoryL3VolumeSummary.volume_no == volume_no,
+                MemoryL3VolumeSummary.outline_version == outline_version,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        if (
+            existing.source_hash == source_hash
+            and existing.status == "generated"
+            and isinstance(existing.summary_json, dict)
+            and not existing.summary_json.get("error")
+        ):
+            return existing
+
+    await db.commit()
 
     user_content = json.dumps(
         {
@@ -162,7 +245,8 @@ async def generate_l3(
             "chapter_range": [chapter_start, chapter_end],
             "instructions": (
                 "将本卷所有 L2 阶段摘要压缩为 L3 卷级摘要，"
-                "提取：本卷主线、支线、角色弧、关键状态变化、下一卷约束。只输出 JSON。"
+                "提取：本卷主线、支线、角色弧、关键状态变化、下一卷约束；"
+                "summary_type 必须为 l3_volume。只输出 JSON。"
             ),
         },
         ensure_ascii=False,
@@ -170,7 +254,7 @@ async def generate_l3(
 
     run, publishable, meta = await call_agent(
         book_id=book_id,
-        agent_role="query_planner",
+        agent_role="memory_compiler",
         user_content=user_content,
         l2_refs=[{"volume_no": volume_no, "l2_count": len(l2_data)}],
         assembly_manifest={
@@ -179,26 +263,47 @@ async def generate_l3(
             "budget": {"max_context": 128000, "reserved_output": 4096, "used": len(user_content) // 4},
         },
     )
+    meta = meta or {}
 
     if isinstance(publishable, dict):
         summary_json = publishable
     elif isinstance(publishable, str) and publishable:
         from app.gateway.normalizer import normalize_json
-        summary_json = normalize_json(publishable) or {"raw": publishable}
+        normalized = normalize_json(publishable)
+        summary_json = (
+            normalized
+            if isinstance(normalized, dict)
+            else {"error": "invalid_l3_summary_shape"}
+        )
     else:
         summary_json = {"error": meta.get("error") or "empty"}
+    if summary_json.get("summary_type") != "l3_volume":
+        summary_json = {"error": "invalid_l3_summary_type"}
 
-    l3 = MemoryL3VolumeSummary(
-        id=uuid.uuid4(),
-        book_id=book_id,
-        volume_no=volume_no,
-        outline_version=outline_version,
-        source_hash=_sha256_json(l2_data),
-        status="generated" if not meta.get("error") else "degraded",
-        summary_json=summary_json or {},
-        source_run_id=run.id if run else uuid.uuid4(),
+    source_run_id = run.id if run else uuid.uuid4()
+    succeeded = bool(summary_json) and not (
+        meta.get("error")
+        or meta.get("block_reason")
+        or (isinstance(summary_json, dict) and summary_json.get("error"))
     )
-    db.add(l3)
+    if existing is None:
+        l3 = MemoryL3VolumeSummary(
+            id=uuid.uuid4(),
+            book_id=book_id,
+            volume_no=volume_no,
+            outline_version=outline_version,
+            source_hash=source_hash,
+            status="generated" if succeeded else "degraded",
+            summary_json=summary_json or {},
+            source_run_id=source_run_id,
+        )
+        db.add(l3)
+    else:
+        l3 = existing
+        l3.source_hash = source_hash
+        l3.status = "generated" if succeeded else "degraded"
+        l3.summary_json = summary_json or {}
+        l3.source_run_id = source_run_id
     await db.flush()
     logger.info("L3 summary generated for volume %s", volume_no)
     return l3

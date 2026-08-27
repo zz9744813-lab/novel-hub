@@ -85,6 +85,17 @@ def upgrade() -> None:
     # ── technique intelligence (spec §23) ──
     # technique_cards already exists (v7 era); extend with v9.7 DeepStudy columns
     tcols = _cols(conn, "technique_cards")
+    if "book_id" not in tcols:
+        op.add_column(
+            "technique_cards",
+            sa.Column(
+                "book_id",
+                UUID(as_uuid=True),
+                sa.ForeignKey("books.id"),
+                nullable=True,
+            ),
+        )
+        tcols.append("book_id")
     for col, type_, default in [
         ("technique_type", sa.String(40), "dialogue"),
         ("mechanism", sa.Text(), None),
@@ -322,7 +333,7 @@ def upgrade() -> None:
     op.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS uq_one_active_prompt_template
-        ON prompt_template_versions(agent_role, scope_type, COALESCE(scope_id, '00000000-0000-0000-0000-000000000000'::uuid), status)
+        ON prompt_template_versions(agent_role, scope_type, COALESCE(scope_id, '00000000-0000-0000-0000-000000000000'), status)
         WHERE status = 'active'
         """
     )

@@ -43,11 +43,13 @@ ROLE_REGISTRY: dict[str, AgentRoleSpec] = {
         "review_agent": ("ReviewAgent", True, True, False, True, True, 80, 96_000, "high", "review"),
         "state_extractor": ("StateExtractor", True, True, True, True, True, 80, 64_000, "high", "state"),
         "style_analyzer": ("StyleAnalyzer", True, True, True, True, True, 75, 48_000, "normal", "style"),
-        "patch_editor": ("PatchEditor", True, True, False, True, True, 75, 32_000, "normal", "patch"),
+        "blank_planner": ("BlankPlanner", True, True, True, True, True, 70, 96_000, "normal", "planner"),
         "query_planner": ("QueryPlanner", True, False, True, True, True, 70, 64_000, "normal", "retrieval"),
         "outline_parser": ("OutlineParser", True, True, True, True, True, 70, 96_000, "normal", "planner"),
-        "drift_audit": ("DriftAudit", True, False, True, True, True, 70, 128_000, "low", "state"),
-        "local_rewrite": ("LocalRewrite", True, True, False, True, True, 75, 32_000, "normal", "draft"),
+        "drift_audit": ("DriftAudit", True, False, True, True, True, 70, 96_000, "low", "state"),
+        "memory_compiler": ("MemoryCompiler", True, False, True, True, True, 70, 64_000, "low", "state"),
+        "local_rewrite_editor": ("LocalRewriteEditor", True, True, True, True, True, 75, 32_000, "normal", "patch"),
+        "evidence_ranker": ("EvidenceRanker", True, True, True, True, True, 70, 64_000, "normal", "retrieval"),
         "ai_tone_lint": ("AIToneLint", False, False, True, False, False, 0, 16_000, "low", "style"),
     }.items()
 }

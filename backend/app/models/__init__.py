@@ -15,7 +15,7 @@ from app.models.tables import (
     MemoryL1ChapterLedger, MemoryL2StageSummary, MemoryL3VolumeSummary, MemoryL4StateSnapshot,
     StyleVoiceCard, StyleToneAnchor,
     QueryPlan, RetrievalRun, RetrievalCandidate, RetrievalJudgement,
-    ReviewIssue, RewritePatch, DriftAuditReport,
+    ReviewIssue, RewritePatch, DriftAuditReport, ManuscriptReleaseAudit,
     AgentRun, AgentRunOutput, LlmUsageEvent,
     HumanIntervention, PromptTemplate, TechniqueCard,
     # v7.4 models
@@ -56,7 +56,7 @@ __all__ = [
     "MemoryL1ChapterLedger", "MemoryL2StageSummary", "MemoryL3VolumeSummary", "MemoryL4StateSnapshot",
     "StyleVoiceCard", "StyleToneAnchor",
     "QueryPlan", "RetrievalRun", "RetrievalCandidate", "RetrievalJudgement",
-    "ReviewIssue", "RewritePatch", "DriftAuditReport",
+    "ReviewIssue", "RewritePatch", "DriftAuditReport", "ManuscriptReleaseAudit",
     "AgentRun", "AgentRunOutput", "LlmUsageEvent",
     "HumanIntervention", "PromptTemplate", "TechniqueCard",
     "AgentModelBinding", "ModelChangeLog", "ModelRouteEvent", "AgentContextPackage",

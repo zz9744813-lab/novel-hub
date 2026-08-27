@@ -126,6 +126,7 @@ async def review_chapter(
                 "required_beats": outline_data.get("required_beats"),
                 "forbidden_outcomes": outline_data.get("forbidden_outcomes"),
                 "depends_on": outline_data.get("depends_on"),
+                "target_char_range": outline_data.get("target_char_range"),
             },
             "depends_on": outline_data.get("depends_on"),
             "scene_contracts": scene_contracts or [],

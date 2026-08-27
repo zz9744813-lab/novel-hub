@@ -730,6 +730,47 @@ class DriftAuditReport(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+class ManuscriptReleaseAudit(Base, TimestampMixin):
+    """Immutable evidence for deterministic + blind full-manuscript release gates."""
+
+    __tablename__ = "manuscript_release_audits"
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=gen_uuid
+    )
+    book_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("books.id"), nullable=False, index=True
+    )
+    production_pack_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    production_pack_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    production_pack_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    gate_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    manuscript_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    sample_chapter_nos: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]"
+    )
+    deterministic_report: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}"
+    )
+    blind_report: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    blind_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    __table_args__ = (
+        UniqueConstraint(
+            "book_id",
+            "manuscript_hash",
+            "gate_version",
+            "production_pack_sha256",
+            name="uq_manuscript_release_evidence",
+        ),
+        Index("ix_manuscript_release_pack", "production_pack_id", "production_pack_revision"),
+    )
+
+
 # ---- Agent run tables ----
 class AgentRun(Base, TimestampMixin):
     __tablename__ = "agent_runs"
@@ -822,6 +863,9 @@ class TechniqueCard(Base, TimestampMixin):
     """v9.7 §23 DeepStudy technique knowledge — abstract mechanism, no source copies."""
     __tablename__ = "technique_cards"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    book_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("books.id"), nullable=True, index=True
+    )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     genre_tags: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     pattern: Mapped[str] = mapped_column(Text, nullable=False)

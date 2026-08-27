@@ -1,0 +1,3384 @@
+[
+  {
+    "chapter_no": 1,
+    "volume_no": 1,
+    "title": "雪城坠海",
+    "active_driver": "CHAR-GU",
+    "involved_character_ids": [
+      "CHAR-GU",
+      "CHAR-NING",
+      "CHAR-HAN"
+    ],
+    "goal": "在霜阙彻底崩解前，把仍有生命反应的城区牵入泊界城航道",
+    "opposition": "界壁持续碎裂，宁照霜拒绝让陌生人代替全城承诺永久归附",
+    "turn": "顾砚舟改用只有十二时辰效力的临时条款，并把自己列为首位担责者",
+    "cost": "空白录吞掉他对一名故人的告别记忆，同时把泊界城坐标暴露给追索者",
+    "payoff": "完成首场救援并确立全书规则：救人不等于取得其同意",
+    "new_question": "十二时辰内，谁能代表仍分散在废墟里的遗民签字？",
+    "event_ids": [
+      "EV-01"
+    ],
+    "plot_thread_ids": [
+      "TH-BLANK",
+      "TH-NING"
+    ],
+    "depends_on_chapters": [],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 2,
+    "volume_no": 1,
+    "title": "死者名册",
+    "active_driver": "CHAR-HAN",
+    "involved_character_ids": [
+      "CHAR-GU",
+      "CHAR-HAN",
+      "CHAR-HELIAN"
+    ],
+    "goal": "核清临时安置区人数并为失散者保留身份席位",
+    "opposition": "泊界城旧系统把顾砚舟标为十二年前死亡，连带冻结他新建的救援账户",
+    "turn": "韩灯绕过账户权限，以公开施工日志建立可复核的人工名册",
+    "cost": "他公开了一段涉及前任城主的旧日志，也让城内反对派得到问责入口",
+    "payoff": "种下顾砚舟身份谜团，并让普通居民第一次拥有独立于契录师的证据",
+    "new_question": "死亡时间早于事故的人，究竟借用了谁的身份继续活着？",
+    "event_ids": [
+      "EV-01"
+    ],
+    "plot_thread_ids": [
+      "TH-IDENTITY",
+      "TH-HAN"
+    ],
+    "depends_on_chapters": [
+      1
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 3,
+    "volume_no": 1,
+    "title": "十二时辰席",
+    "active_driver": "CHAR-NING",
+    "involved_character_ids": [
+      "CHAR-GU",
+      "CHAR-NING",
+      "CHAR-HAN"
+    ],
+    "goal": "从雪卫、工匠与流民中建立三方临时议席",
+    "opposition": "雪卫坚持战时军令优先，流民则把任何集中权力都视为旧王权复辟",
+    "turn": "宁照霜主动把自己的军令置于十二时辰复议条款之下",
+    "cost": "雪卫忠诚出现裂口，她也失去直接调拨民用物资的权力",
+    "payoff": "临时议席成立，救亡合法性从主角善意转为可撤回授权",
+    "new_question": "追兵到来时，这套缓慢程序是否会先害死它要保护的人？",
+    "event_ids": [
+      "EV-01"
+    ],
+    "plot_thread_ids": [
+      "TH-NING"
+    ],
+    "depends_on_chapters": [
+      2
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 4,
+    "volume_no": 1,
+    "title": "弃王军令",
+    "active_driver": "CHAR-NING",
+    "involved_character_ids": [
+      "CHAR-NING",
+      "CHAR-GU",
+      "CHAR-HELIAN"
+    ],
+    "goal": "说服拒绝撤离的旧臣交出王室印库位置",
+    "opposition": "旧臣以她曾放弃王室为由质疑其统军资格，赫连夜阑又拿出校史院的合法接管令",
+    "turn": "宁照霜公开承认当年优先救平民，并拒绝为取得印库而改写该选择",
+    "cost": "她失去一队旧部，却赢得被旧部扣留的平民当场作证",
+    "payoff": "把弃王旧案从羞耻秘密转成待由遗民评价的公开事实",
+    "new_question": "若王室印不能代表遗民，永久界锚还缺哪一种授权？",
+    "event_ids": [
+      "EV-01",
+      "EV-02"
+    ],
+    "plot_thread_ids": [
+      "TH-NING",
+      "TH-HELIAN"
+    ],
+    "depends_on_chapters": [
+      3
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 5,
+    "volume_no": 1,
+    "title": "只签十二时辰",
+    "active_driver": "CHAR-NING",
+    "involved_character_ids": [
+      "CHAR-NING",
+      "CHAR-GU",
+      "CHAR-HAN"
+    ],
+    "goal": "以个人军权担保临时界锚，阻止霜阙滑出航道",
+    "opposition": "签名会让宁照霜承担全部追责，却仍不能替遗民作永久决定",
+    "turn": "她删掉永久归附条款，只签可自动失效的战时担保",
+    "cost": "宁照霜成为校史院可公开拘捕的违令者，泊界城也只得到短暂稳定",
+    "payoff": "兑现临时签署事件，证明时间压力不能抹掉撤回权",
+    "new_question": "复议开始前，泊界城能否扛住第一轮追索？",
+    "event_ids": [
+      "EV-02"
+    ],
+    "plot_thread_ids": [
+      "TH-NING",
+      "TH-BLANK"
+    ],
+    "depends_on_chapters": [
+      4
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 6,
+    "volume_no": 1,
+    "title": "旧桥日志",
+    "active_driver": "CHAR-HAN",
+    "involved_character_ids": [
+      "CHAR-HAN",
+      "CHAR-GU",
+      "CHAR-NING"
+    ],
+    "goal": "修复连接霜阙与泊界城的唯一物资桥",
+    "opposition": "桥梁载荷记录被人为删改，按旧图施工会先压垮难民区",
+    "turn": "韩灯从十二年前的事故日志中找到同一种删改签名，改用分段限载",
+    "cost": "救援速度减半，药品只能先送一侧，韩灯必须公开选择标准",
+    "payoff": "桥保住且旧事故日志第一次与当前阴谋发生物证连接",
+    "new_question": "谁能在校史院档案落笔之前改掉一座城的真实载荷？",
+    "event_ids": [
+      "EV-02"
+    ],
+    "plot_thread_ids": [
+      "TH-HAN",
+      "TH-IDENTITY"
+    ],
+    "depends_on_chapters": [
+      5
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 7,
+    "volume_no": 1,
+    "title": "第一批撤回者",
+    "active_driver": "CHAR-GU",
+    "involved_character_ids": [
+      "CHAR-GU",
+      "CHAR-NING",
+      "CHAR-HAN"
+    ],
+    "goal": "处理临时契生效后要求离开泊界城的四十七名居民",
+    "opposition": "放行会削弱界锚，扣留又会把自愿条款变成骗局",
+    "turn": "顾砚舟开放一条危险但真实可行的返航廊道，并逐人确认风险",
+    "cost": "界锚稳定度下降，首名返航者受伤，顾砚舟承担公开质询",
+    "payoff": "退出权从纸面条款变成有成本但可执行的行动",
+    "new_question": "当个人退出会伤及留下者时，谁该承担共同损失？",
+    "event_ids": [
+      "EV-02"
+    ],
+    "plot_thread_ids": [
+      "TH-BLANK",
+      "TH-RELATION"
+    ],
+    "depends_on_chapters": [
+      6
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 8,
+    "volume_no": 1,
+    "title": "雪卫缴械",
+    "active_driver": "CHAR-NING",
+    "involved_character_ids": [
+      "CHAR-NING",
+      "CHAR-HAN",
+      "CHAR-GU"
+    ],
+    "goal": "让雪卫进入自治街区协助防守而不形成军事占领",
+    "opposition": "居民拒绝持械军队通行，雪卫统领威胁自行夺路",
+    "turn": "宁照霜命雪卫在街口拆分武器与指挥权，由居民保管弩机钥匙",
+    "cost": "她对部队的即时控制削弱，统领带走一批精锐",
+    "payoff": "军民共同防线建立，宁照霜的权力开始真正受结构约束",
+    "new_question": "失去精锐后，谁去截住已经逼近的白页舟？",
+    "event_ids": [
+      "EV-02",
+      "EV-03"
+    ],
+    "plot_thread_ids": [
+      "TH-NING"
+    ],
+    "depends_on_chapters": [
+      7
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 9,
+    "volume_no": 1,
+    "title": "基线来函",
+    "active_driver": "CHAR-HELIAN",
+    "involved_character_ids": [
+      "CHAR-HELIAN",
+      "CHAR-GU",
+      "CHAR-NING"
+    ],
+    "goal": "争取校史院承认临时救援并延后强制裁撤",
+    "opposition": "闻观鹤只接受一个条件：交出被记录为死者的顾砚舟",
+    "turn": "赫连夜阑没有隐瞒条件，而是把来函与天衡预测误差一并公开",
+    "cost": "她失去秘密调停空间，也让居民知道追兵真正目标不是霜阙",
+    "payoff": "天衡基线正式入场，冲突由灾难救援转成制度追捕",
+    "new_question": "为什么一名死者比一座待裁撤的世界更值得追索？",
+    "event_ids": [
+      "EV-03"
+    ],
+    "plot_thread_ids": [
+      "TH-TIANHENG",
+      "TH-IDENTITY",
+      "TH-HELIAN"
+    ],
+    "depends_on_chapters": [
+      8
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 10,
+    "volume_no": 1,
+    "title": "王印落票",
+    "active_driver": "CHAR-HAN",
+    "involved_character_ids": [
+      "CHAR-HAN",
+      "CHAR-NING",
+      "CHAR-GU",
+      "CHAR-HELIAN"
+    ],
+    "goal": "在追兵压境前完成关于旧王权代表效力的有限公投",
+    "opposition": "旧臣制造恐慌，主张战时投票天然无效；雪卫也担忧结果摧毁指挥链",
+    "turn": "韩灯将选项从拥王或废王改为王印能否单独签署界锚，居民否决其单独效力",
+    "cost": "公投并未产生统一政体，反而留下多个必须继续谈判的派别",
+    "payoff": "兑现居民否决旧王权，让永久契约获得清晰的负面边界",
+    "new_question": "没有王印后，什么机制能在战时形成足够快的共同决定？",
+    "event_ids": [
+      "EV-03"
+    ],
+    "plot_thread_ids": [
+      "TH-NING",
+      "TH-HAN"
+    ],
+    "depends_on_chapters": [
+      3,
+      9
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 11,
+    "volume_no": 1,
+    "title": "执校者的名册",
+    "active_driver": "CHAR-HELIAN",
+    "involved_character_ids": [
+      "CHAR-HELIAN",
+      "CHAR-GU",
+      "CHAR-NING"
+    ],
+    "goal": "核对追索舟上被列为威胁者的身份，寻找谈判缺口",
+    "opposition": "官方名单把大量普通撤回者列为附属异常，依法交付等于默认连坐",
+    "turn": "赫连夜阑暗中记下被扩大裁撤的人名，并删去一条即时定位回执",
+    "cost": "她第一次留下可被定罪的私证，追索舟同时锁定泊界城方向",
+    "payoff": "种下私名册线，并让执校者从观察者变成承担选择的人",
+    "new_question": "她会把私名册交给谁，还是继续以程序中立保护自己？",
+    "event_ids": [
+      "EV-03"
+    ],
+    "plot_thread_ids": [
+      "TH-HELIAN",
+      "TH-TIANHENG"
+    ],
+    "depends_on_chapters": [
+      10
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 12,
+    "volume_no": 1,
+    "title": "桥上三问",
+    "active_driver": "CHAR-GU",
+    "involved_character_ids": [
+      "CHAR-GU",
+      "CHAR-NING",
+      "CHAR-HAN",
+      "CHAR-HELIAN"
+    ],
+    "goal": "为追索舟登城谈判设定不可越过的三条程序底线",
+    "opposition": "城内强硬派要扣押赫连夜阑作人质，雪卫则要求顾砚舟先发制人",
+    "turn": "顾砚舟提出公开身份、逐项授权、可中止三问，并允许赫连夜阑拒答后离场",
+    "cost": "他放弃伏击优势，白页舟得以记录泊界城防线布局",
+    "payoff": "谈判规则先约束己方，为之后所有契约协商建立镜像场景",
+    "new_question": "对方若利用规则拖到临时契失效，众人还守不守规则？",
+    "event_ids": [
+      "EV-03"
+    ],
+    "plot_thread_ids": [
+      "TH-BLANK",
+      "TH-HELIAN"
+    ],
+    "depends_on_chapters": [
+      11
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 13,
+    "volume_no": 1,
+    "title": "寒潮断航",
+    "active_driver": "CHAR-NING",
+    "involved_character_ids": [
+      "CHAR-NING",
+      "CHAR-GU",
+      "CHAR-HAN"
+    ],
+    "goal": "截断追索舟与霜阙旧界壁的牵引，保住复议时间",
+    "opposition": "断航需要有人留在正在崩塌的外桥手动释放寒潮阵列",
+    "turn": "宁照霜没有命令部下赴死，而是公布任务和生还概率后自己先报名",
+    "cost": "她重伤并失去对最后一支雪卫的现场指挥，阵列也只能使用一次",
+    "payoff": "追索暂退，行动层面兑现自愿承担而非英雄代签",
+    "new_question": "宁照霜倒下后，谁能阻止公投阵营趁乱清算雪卫？",
+    "event_ids": [
+      "EV-03",
+      "EV-04"
+    ],
+    "plot_thread_ids": [
+      "TH-NING",
+      "TH-RELATION"
+    ],
+    "depends_on_chapters": [
+      12
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 14,
+    "volume_no": 1,
+    "title": "病榻边界",
+    "active_driver": "CHAR-GU",
+    "involved_character_ids": [
+      "CHAR-GU",
+      "CHAR-NING"
+    ],
+    "goal": "在宁照霜无法统军时确认她对治疗、指挥和亲密接触的个人选择",
+    "opposition": "两人积压的信任与欲望被危机放大，但任何承诺都会影响公共权力分配",
+    "turn": "宁照霜明确接受陪伴却拒绝以关系换取军权保留，顾砚舟按其边界退出决策席",
+    "cost": "两人未得到轻松和解，顾砚舟在关键复议中失去一票可靠支持",
+    "payoff": "亲密线第一次以清晰表达、可拒绝和政治后果进入正文",
+    "new_question": "当私人选择与城的生死冲突，他们还能否维持同一套边界？",
+    "event_ids": [
+      "EV-04"
+    ],
+    "plot_thread_ids": [
+      "TH-RELATION",
+      "TH-NING"
+    ],
+    "depends_on_chapters": [
+      13
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 15,
+    "volume_no": 1,
+    "title": "遗民复议",
+    "active_driver": "CHAR-HAN",
+    "involved_character_ids": [
+      "CHAR-HAN",
+      "CHAR-GU",
+      "CHAR-NING",
+      "CHAR-HELIAN"
+    ],
+    "goal": "把临时议席改造成可长期运作的界锚授权程序",
+    "opposition": "各派只同意被救，却无法就税赋、防务与退出损失达成一致",
+    "turn": "韩灯提出分项签署：生存锚先行，王权与并城永久留空，重大条款定期复核",
+    "cost": "泊界城承担超额维护义务，霜阙也保留日后整体离开的权利",
+    "payoff": "永久锚所需授权成立，但不再等同于完整政治合并",
+    "new_question": "宁照霜是否愿意亲手毁掉最后仍有号召力的继承印？",
+    "event_ids": [
+      "EV-04"
+    ],
+    "plot_thread_ids": [
+      "TH-HAN",
+      "TH-NING",
+      "TH-BLANK"
+    ],
+    "depends_on_chapters": [
+      10,
+      14
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 16,
+    "volume_no": 1,
+    "title": "焚印成锚",
+    "active_driver": "CHAR-NING",
+    "involved_character_ids": [
+      "CHAR-NING",
+      "CHAR-GU",
+      "CHAR-HAN",
+      "CHAR-HELIAN"
+    ],
+    "goal": "在追索舟第二次抵达前完成霜阙永久锚定",
+    "opposition": "继承印能快速稳定寒潮，却会把旧王权偷偷写回新制度",
+    "turn": "宁照霜焚毁继承印，把其中界力分给经复议授权的公共锚点",
+    "cost": "她永久失去继承法统，泊界城则背上一个缺乏持续能源的新界锚",
+    "payoff": "第一卷核心选择兑现：霜阙得救，但没有任何人获得被拯救者的所有权",
+    "new_question": "要维持这个昂贵的自由结构，众人能否从赤炉港取得炉心而不复制债役？",
+    "event_ids": [
+      "EV-04"
+    ],
+    "plot_thread_ids": [
+      "TH-NING",
+      "TH-IDENTITY",
+      "TH-TIANHENG"
+    ],
+    "depends_on_chapters": [
+      5,
+      10,
+      15
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 17,
+    "volume_no": 2,
+    "title": "锚位拍卖",
+    "active_driver": "CHAR-ZHU",
+    "involved_character_ids": [
+      "CHAR-ZHU",
+      "CHAR-GU",
+      "CHAR-NING",
+      "CHAR-HAN"
+    ],
+    "goal": "在赤炉港封锁线闭合前取得一个合法入港锚位",
+    "opposition": "商团只接受无法撤销的泊界城坐标作抵押，宁照霜主张强行夺港",
+    "turn": "祝红翎把坐标拆成限时、限域的访问凭证，并当众把自己列为违约第一赔付人",
+    "cost": "凭证仍泄露一段可追踪航迹，祝红翎也押上全部流动资金",
+    "payoff": "新卷以主动冒险开门，同时把市场契约置于可审计边界内",
+    "new_question": "竞得的锚位为何恰好通向祝红翎多年不敢启用的旧仓？",
+    "event_ids": [
+      "EV-05"
+    ],
+    "plot_thread_ids": [
+      "TH-ZHU",
+      "TH-BLANK"
+    ],
+    "depends_on_chapters": [
+      16
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 18,
+    "volume_no": 2,
+    "title": "半枚火印",
+    "active_driver": "CHAR-ZHU",
+    "involved_character_ids": [
+      "CHAR-ZHU",
+      "CHAR-GU",
+      "CHAR-HELIAN"
+    ],
+    "goal": "进入旧仓取回能辨认炉心所有权的账本",
+    "opposition": "仓门只认祝家完整印钥，而祝红翎手里只剩来源可疑的半枚",
+    "turn": "半印打开的不是仓门而是一条校史院维护通道，赫连夜阑认出追踪纹路",
+    "cost": "众人暴露在院方监测下，祝红翎不得不承认她一直隐瞒半印",
+    "payoff": "火港谜线落地，商业同盟第一次因信息不对称受损",
+    "new_question": "校史院为什么把进入黑市核心的钥匙故意留给走私者？",
+    "event_ids": [
+      "EV-05"
+    ],
+    "plot_thread_ids": [
+      "TH-ZHU",
+      "TH-HELIAN",
+      "TH-TIANHENG"
+    ],
+    "depends_on_chapters": [
+      17
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 19,
+    "volume_no": 2,
+    "title": "债契街",
+    "active_driver": "CHAR-HAN",
+    "involved_character_ids": [
+      "CHAR-HAN",
+      "CHAR-ZHU",
+      "CHAR-GU"
+    ],
+    "goal": "查明港口炉心为何有货却无人愿意出售",
+    "opposition": "工匠的劳动、居所与后代资格被捆在同一份债契里，任何个体离职都会牵连家属",
+    "turn": "韩灯发现账面上的自愿签名均在债务追加前完成，后续条款从未重新征得同意",
+    "cost": "公开证据会立即触发商团没收工坊，数百家庭面临断粮",
+    "payoff": "把资源短缺改写为权力问题，而非靠更高出价即可解决的交易题",
+    "new_question": "怎样揭露债契又不让最先反抗的人先付出全部代价？",
+    "event_ids": [
+      "EV-05",
+      "EV-06"
+    ],
+    "plot_thread_ids": [
+      "TH-HAN",
+      "TH-ZHU"
+    ],
+    "depends_on_chapters": [
+      18
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 20,
+    "volume_no": 2,
+    "title": "烈焰账房",
+    "active_driver": "CHAR-ZHU",
+    "involved_character_ids": [
+      "CHAR-ZHU",
+      "CHAR-HAN",
+      "CHAR-NING"
+    ],
+    "goal": "复制商团真实流水并锁定操纵炉价的共同账户",
+    "opposition": "账房以焚账阵自毁，宁照霜只能保人或保账，无法两全",
+    "turn": "祝红翎放弃完整账册，只提取能证明人身债契与炉价联动的最小证据集",
+    "cost": "其余走私网络被火吞没，她失去多年积累的反制筹码",
+    "payoff": "得到足以发动集体谈判的证据，同时保住被困账房员",
+    "new_question": "证据公开后，谁来保证工匠不会被逐个替换？",
+    "event_ids": [
+      "EV-06"
+    ],
+    "plot_thread_ids": [
+      "TH-ZHU",
+      "TH-HAN"
+    ],
+    "depends_on_chapters": [
+      19
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 21,
+    "volume_no": 2,
+    "title": "停炉之前",
+    "active_driver": "CHAR-NING",
+    "involved_character_ids": [
+      "CHAR-NING",
+      "CHAR-HAN",
+      "CHAR-ZHU",
+      "CHAR-GU"
+    ],
+    "goal": "建立停工期间保护工匠家属与泊界城病患的最低供给线",
+    "opposition": "炉心一停，霜阙寒锚将在六个时辰内失稳，居民自然反对工匠行动",
+    "turn": "宁照霜把雪卫储备先交给公共配给，并公开剩余时限而不夸大安全",
+    "cost": "雪卫自身补给降到危险线，她再次被部下指责用军队换取民望",
+    "payoff": "停工不再被包装成零代价正义，两个受损群体开始直接谈判",
+    "new_question": "当第一名病患因短缺恶化，联盟还能否坚持不强征炉心？",
+    "event_ids": [
+      "EV-06"
+    ],
+    "plot_thread_ids": [
+      "TH-NING",
+      "TH-HAN"
+    ],
+    "depends_on_chapters": [
+      20
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 22,
+    "volume_no": 2,
+    "title": "工匠停炉",
+    "active_driver": "CHAR-HAN",
+    "involved_character_ids": [
+      "CHAR-HAN",
+      "CHAR-ZHU",
+      "CHAR-GU",
+      "CHAR-NING"
+    ],
+    "goal": "让九座主炉同时停机，迫使商团承认工匠集体席位",
+    "opposition": "商团以家属债务和泊界城伤亡双重威胁，部分工匠临阵退出",
+    "turn": "韩灯允许退出者保留供给资格，剩余工匠仍以较小规模完成停炉",
+    "cost": "停炉效果减弱且霜阙寒锚出现裂口，韩灯承担最直接的居民怨恨",
+    "payoff": "关键停炉事件成立，工匠以可撤回方式取得真实谈判位置",
+    "new_question": "商团若愿意卖出股份却拒绝拆除债契，胜利是否只是换一种主人？",
+    "event_ids": [
+      "EV-06"
+    ],
+    "plot_thread_ids": [
+      "TH-HAN",
+      "TH-ZHU",
+      "TH-RELATION"
+    ],
+    "depends_on_chapters": [
+      19,
+      21
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 23,
+    "volume_no": 2,
+    "title": "分红陷阱",
+    "active_driver": "CHAR-ZHU",
+    "involved_character_ids": [
+      "CHAR-ZHU",
+      "CHAR-HAN",
+      "CHAR-GU"
+    ],
+    "goal": "评估商团提出的全员工匠持股方案",
+    "opposition": "方案看似把所有权交给工匠，却规定离港即失股并由旧商团控制估值",
+    "turn": "祝红翎用自己的旧交易逐条演示套现路径，证明新股东仍被锁在工坊",
+    "cost": "她公开承认曾靠同类条款获利，失去部分工匠信任和议价声望",
+    "payoff": "击破仅靠产权转移就能消除附庸的伪解法",
+    "new_question": "不用永久锁定劳动者，炉心的长期维护义务如何落实？",
+    "event_ids": [
+      "EV-06"
+    ],
+    "plot_thread_ids": [
+      "TH-ZHU",
+      "TH-HAN"
+    ],
+    "depends_on_chapters": [
+      22
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 24,
+    "volume_no": 2,
+    "title": "一炉两钥",
+    "active_driver": "CHAR-GU",
+    "involved_character_ids": [
+      "CHAR-GU",
+      "CHAR-ZHU",
+      "CHAR-HAN",
+      "CHAR-NING"
+    ],
+    "goal": "试运行由工匠与使用者共同控制的双钥炉心",
+    "opposition": "霜阙急需满功率，工匠议会却担心一旦解锁便再无谈判筹码",
+    "turn": "顾砚舟将两钥写入界契：任一方可停炉，但停炉必须同步公开代价",
+    "cost": "试运只达到七成功率，寒锚受损区域无法立刻修复",
+    "payoff": "共同否决权从政治口号变成可操作的能源结构",
+    "new_question": "有人连续伪造使用方的停炉请求，第二把钥匙是否已经泄露？",
+    "event_ids": [
+      "EV-06",
+      "EV-07"
+    ],
+    "plot_thread_ids": [
+      "TH-BLANK",
+      "TH-HAN"
+    ],
+    "depends_on_chapters": [
+      23
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 25,
+    "volume_no": 2,
+    "title": "泄露的坐标",
+    "active_driver": "CHAR-HELIAN",
+    "involved_character_ids": [
+      "CHAR-HELIAN",
+      "CHAR-ZHU",
+      "CHAR-GU"
+    ],
+    "goal": "确认白页舟如何绕过限域凭证锁定泊界城",
+    "opposition": "所有证据都指向祝红翎抵押的航迹，她若自证必须交出完整走私网",
+    "turn": "赫连夜阑发现追踪信号来自半印内部，说明泄露在拍卖前就已部署",
+    "cost": "她为验证信号主动连接执校频道，暴露了自己与泊界城同行",
+    "payoff": "洗清简单内奸猜疑，同时把半印提升为制度诱饵",
+    "new_question": "闻观鹤为何宁愿放任黑市多年，只为等待顾砚舟出现？",
+    "event_ids": [
+      "EV-07"
+    ],
+    "plot_thread_ids": [
+      "TH-ZHU",
+      "TH-HELIAN",
+      "TH-IDENTITY"
+    ],
+    "depends_on_chapters": [
+      24
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 26,
+    "volume_no": 2,
+    "title": "两份底价",
+    "active_driver": "CHAR-ZHU",
+    "involved_character_ids": [
+      "CHAR-ZHU",
+      "CHAR-NING",
+      "CHAR-HAN"
+    ],
+    "goal": "让工匠议会和泊界城分别写出不可让渡的谈判底线",
+    "opposition": "双方都把自身生存列为绝对优先，任何交集都意味着承认对方可能受损",
+    "turn": "祝红翎不再充当唯一中介，让双方当面交换最坏情形与补偿顺序",
+    "cost": "公开底价削弱她的套利空间，也暴露泊界城能源储备比宣称更少",
+    "payoff": "谈判从人物魅力驱动转为利益透明的结构协商",
+    "new_question": "白页招安令到达后，谁会先用顾砚舟换取更好的条件？",
+    "event_ids": [
+      "EV-07"
+    ],
+    "plot_thread_ids": [
+      "TH-ZHU",
+      "TH-RELATION"
+    ],
+    "depends_on_chapters": [
+      25
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 27,
+    "volume_no": 2,
+    "title": "白页招安",
+    "active_driver": "CHAR-HELIAN",
+    "involved_character_ids": [
+      "CHAR-HELIAN",
+      "CHAR-GU",
+      "CHAR-ZHU",
+      "CHAR-NING"
+    ],
+    "goal": "向全体盟友说明校史院提出的合法复核与自首交换",
+    "opposition": "交出顾砚舟可立即解除港口封锁，拒绝则让两个世界共同承担追捕",
+    "turn": "赫连夜阑逐字公开招安条件，并承认自己认为复核可能比逃亡更安全",
+    "cost": "团队公开分裂，顾砚舟也首次怀疑盟友是否只是被他的秘密绑架",
+    "payoff": "招安事件兑现，不靠误会制造冲突，而由真实利益和风险形成裂缝",
+    "new_question": "顾砚舟若自愿离开，其他人有没有权阻止他用自己换城？",
+    "event_ids": [
+      "EV-07"
+    ],
+    "plot_thread_ids": [
+      "TH-HELIAN",
+      "TH-IDENTITY",
+      "TH-TIANHENG"
+    ],
+    "depends_on_chapters": [
+      9,
+      26
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 28,
+    "volume_no": 2,
+    "title": "酒席散后",
+    "active_driver": "CHAR-ZHU",
+    "involved_character_ids": [
+      "CHAR-ZHU",
+      "CHAR-GU",
+      "CHAR-NING"
+    ],
+    "goal": "在联盟将要解体时厘清祝红翎、顾砚舟与宁照霜之间的私人意愿和政治边界",
+    "opposition": "共同危险催生亲密冲动，三人却对非独占、公开程度与决策回避有不同要求",
+    "turn": "他们不作永久誓言，只确认当下自愿、可随时中止，并约定亲密后不得替彼此投票",
+    "cost": "坦白带来嫉妒与不安，宁照霜退出当晚相处而没有被惩罚或追问",
+    "payoff": "成人关系获得可执行边界，拒绝本身也成为关系继续的证据",
+    "new_question": "当其中一人的政治选择伤害另外两人，私人撤回如何不变成公开报复？",
+    "event_ids": [
+      "EV-07"
+    ],
+    "plot_thread_ids": [
+      "TH-RELATION",
+      "TH-NING",
+      "TH-ZHU"
+    ],
+    "depends_on_chapters": [
+      27
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 29,
+    "volume_no": 2,
+    "title": "港主空椅",
+    "active_driver": "CHAR-HAN",
+    "involved_character_ids": [
+      "CHAR-HAN",
+      "CHAR-ZHU",
+      "CHAR-NING",
+      "CHAR-GU"
+    ],
+    "goal": "在旧商团代表逃离后阻止祝红翎自然继承港主权力",
+    "opposition": "工匠需要能立刻签单的人，祝红翎也确实最懂航路与账本",
+    "turn": "韩灯提议让港主席保持空置，日常权限拆给账本、炉心和航路三个委员会",
+    "cost": "决策速度骤降，一艘补给船因此错过窗口，泊界城必须承担损失",
+    "payoff": "用可感知代价阻止‘好人接管’成为默认结局",
+    "new_question": "多委员会互相否决时，谁来处理真正无法等待的紧急事项？",
+    "event_ids": [
+      "EV-07",
+      "EV-08"
+    ],
+    "plot_thread_ids": [
+      "TH-HAN",
+      "TH-ZHU"
+    ],
+    "depends_on_chapters": [
+      28
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 30,
+    "volume_no": 2,
+    "title": "共治草案",
+    "active_driver": "CHAR-ZHU",
+    "involved_character_ids": [
+      "CHAR-ZHU",
+      "CHAR-HAN",
+      "CHAR-GU",
+      "CHAR-NING"
+    ],
+    "goal": "写出火港炉心、工匠退出与泊界城用能的长期共治条款",
+    "opposition": "每项保护都可能成为另一方的勒索工具，草案在紧急权上反复僵持",
+    "turn": "祝红翎提出紧急权只能提高供能、不能转移所有权，且事后自动触发公开审计",
+    "cost": "她接受个人交易必须纳入公共账本，永久失去最赚钱的暗线业务",
+    "payoff": "共治从价值宣言收束为权限、期限和复核可执行的制度",
+    "new_question": "那枚仍能独占航路的完整契印，会不会让所有新条款沦为空文？",
+    "event_ids": [
+      "EV-08"
+    ],
+    "plot_thread_ids": [
+      "TH-ZHU",
+      "TH-HAN",
+      "TH-BLANK"
+    ],
+    "depends_on_chapters": [
+      22,
+      29
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 31,
+    "volume_no": 2,
+    "title": "烧印前夜",
+    "active_driver": "CHAR-ZHU",
+    "involved_character_ids": [
+      "CHAR-ZHU",
+      "CHAR-GU",
+      "CHAR-HELIAN"
+    ],
+    "goal": "确认销毁独占契印不会同时摧毁唯一安全航路",
+    "opposition": "完整印中藏着港口导航核心，直接焚毁可能让所有船只困在焰流",
+    "turn": "赫连夜阑从追踪纹中分离公共坐标，顾砚舟把导航权拆成可重建的见证片段",
+    "cost": "分离过程让校史院读到空白录的一页回声，闻观鹤开始远程干预",
+    "payoff": "焚印不再是象征动作，而成为准备充分且仍有代价的不可逆选择",
+    "new_question": "祝红翎会不会在最后一刻保留只属于自己的备用权限？",
+    "event_ids": [
+      "EV-08"
+    ],
+    "plot_thread_ids": [
+      "TH-ZHU",
+      "TH-HELIAN",
+      "TH-BLANK"
+    ],
+    "depends_on_chapters": [
+      30
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 32,
+    "volume_no": 2,
+    "title": "火港共治",
+    "active_driver": "CHAR-ZHU",
+    "involved_character_ids": [
+      "CHAR-ZHU",
+      "CHAR-GU",
+      "CHAR-NING",
+      "CHAR-HAN",
+      "CHAR-HELIAN"
+    ],
+    "goal": "完成炉心接入、工匠议会否决权与公共航路同时生效",
+    "opposition": "闻观鹤利用半印追踪强行收拢权限，完整契印成为唯一能抵抗的私钥",
+    "turn": "祝红翎仍选择烧毁私钥，让工匠、泊界城与航海者三方共同重签",
+    "cost": "她失去独占利润与退路；炉心启动后，镜潮把全城记忆映成互相矛盾的版本",
+    "payoff": "第二卷兑现经济与权力改造：能源到手，但没人继承旧商团的王座",
+    "new_question": "当每个人都记得不同的过去，公开账本还能证明什么是真实？",
+    "event_ids": [
+      "EV-08"
+    ],
+    "plot_thread_ids": [
+      "TH-ZHU",
+      "TH-TIANHENG",
+      "TH-LUO"
+    ],
+    "depends_on_chapters": [
+      17,
+      22,
+      27,
+      31
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 33,
+    "volume_no": 3,
+    "title": "镜潮倒城",
+    "active_driver": "CHAR-LUO",
+    "involved_character_ids": [
+      "CHAR-LUO",
+      "CHAR-GU",
+      "CHAR-HAN",
+      "CHAR-ZHU"
+    ],
+    "goal": "阻止炉心唤醒的镜潮把矛盾记忆直接覆盖现实秩序",
+    "opposition": "居民同时看见火港获救与火港覆灭两段过去，任何强行裁定都会制造大规模失认",
+    "turn": "洛弥生只公布经过三人独立确认的局部事实，把不可证部分标为空缺而非谎言",
+    "cost": "泊界城暂时分成两套互不兼容的通行与配给记录，她成为唯一信息接口",
+    "payoff": "确立梦海卷的认识论规则：不确定性必须被标记，不能被权威填平",
+    "new_question": "如果见证接口本身选择隐瞒，谁能知道缺失的是噪声还是真相？",
+    "event_ids": [
+      "EV-09"
+    ],
+    "plot_thread_ids": [
+      "TH-LUO",
+      "TH-BLANK"
+    ],
+    "depends_on_chapters": [
+      32
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 34,
+    "volume_no": 3,
+    "title": "两套昨日",
+    "active_driver": "CHAR-HAN",
+    "involved_character_ids": [
+      "CHAR-HAN",
+      "CHAR-LUO",
+      "CHAR-GU"
+    ],
+    "goal": "让持有不同记忆的居民继续使用同一套基础设施",
+    "opposition": "两组人对桥梁是否已经检修有相反确信，任何一方让步都像承认自己疯了",
+    "turn": "韩灯不裁定谁记得正确，而是重新做承重试验并把当前结果写入双轨日志",
+    "cost": "旧维修记录暂时失去效力，城内工程全部降速并增加人力复核",
+    "payoff": "用当下可复验事实替代人格羞辱，双轨见证链开始成形",
+    "new_question": "谁在镜潮发生前就准备好了两套互相印证的假日志？",
+    "event_ids": [
+      "EV-09"
+    ],
+    "plot_thread_ids": [
+      "TH-HAN",
+      "TH-LUO"
+    ],
+    "depends_on_chapters": [
+      33
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 35,
+    "volume_no": 3,
+    "title": "分层真话",
+    "active_driver": "CHAR-LUO",
+    "involved_character_ids": [
+      "CHAR-LUO",
+      "CHAR-NING",
+      "CHAR-GU"
+    ],
+    "goal": "向军民分别披露镜潮风险而不引发踩踏或军事接管",
+    "opposition": "宁照霜要求先给指挥层完整信息，居民代表则拒绝再次被以稳定为由蒙在鼓里",
+    "turn": "洛弥生按行动需要分层披露，却公开每层未获知的信息类别与补全时点",
+    "cost": "一名指挥官依据不完整信息误判航道，导致物资队失联",
+    "payoff": "分层披露成为可审计工具，也立刻展示选择性真话的危险",
+    "new_question": "那支失联物资队看到的是否正是被洛弥生删去的第三条航路？",
+    "event_ids": [
+      "EV-09"
+    ],
+    "plot_thread_ids": [
+      "TH-LUO",
+      "TH-NING"
+    ],
+    "depends_on_chapters": [
+      34
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 36,
+    "volume_no": 3,
+    "title": "第三条未来",
+    "active_driver": "CHAR-LUO",
+    "involved_character_ids": [
+      "CHAR-LUO",
+      "CHAR-GU",
+      "CHAR-ZHU"
+    ],
+    "goal": "从镜潮预演中找出泊界城可存续的航路",
+    "opposition": "所有公开推演只有投降或全毁两种结局，祝红翎怀疑有人操纵选择空间",
+    "turn": "洛弥生承认自己看见过第三种未来，却删掉了其中自己的位置",
+    "cost": "她拒绝说明原因，顾砚舟暂停其唯一见证权限，团队失去最快导航方式",
+    "payoff": "种下被删第三未来，让预言秘密与角色自利明确绑定",
+    "new_question": "她是在保护众人免受误导，还是在逃避自己必须付出的代价？",
+    "event_ids": [
+      "EV-09",
+      "EV-10"
+    ],
+    "plot_thread_ids": [
+      "TH-LUO",
+      "TH-RELATION"
+    ],
+    "depends_on_chapters": [
+      35
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 37,
+    "volume_no": 3,
+    "title": "记忆税",
+    "active_driver": "CHAR-GU",
+    "involved_character_ids": [
+      "CHAR-GU",
+      "CHAR-LUO",
+      "CHAR-HAN"
+    ],
+    "goal": "查明双轨日志为何仍会在午夜自动丢失同一类细节",
+    "opposition": "每次读取空白录都能补回事实，却会随机带走读取者的私人记忆",
+    "turn": "顾砚舟停止独自读取，建立多人轮值且允许任何人拒绝承担记忆税",
+    "cost": "可用信息骤减，他也必须承认自己早已无法完整描述失去过什么",
+    "payoff": "空白录代价从主角苦难变成需要共同治理的资源风险",
+    "new_question": "那些被收走的记忆究竟消散了，还是被某个系统持续收集？",
+    "event_ids": [
+      "EV-10"
+    ],
+    "plot_thread_ids": [
+      "TH-BLANK",
+      "TH-IDENTITY"
+    ],
+    "depends_on_chapters": [
+      36
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 38,
+    "volume_no": 3,
+    "title": "第三证词",
+    "active_driver": "CHAR-ZHU",
+    "involved_character_ids": [
+      "CHAR-ZHU",
+      "CHAR-GU",
+      "CHAR-LUO",
+      "CHAR-HELIAN"
+    ],
+    "goal": "诱出在黑市出售失落记忆索引的匿名持有人",
+    "opposition": "对方只接受无法追回的私人回忆交易，且校史院监察已包围交易点",
+    "turn": "祝红翎公开拍卖一段虚构航路，引导持有人用真实索引自证后让所有竞买者同步见证",
+    "cost": "持有人逃脱，祝红翎的黑市信誉彻底破产，索引只保住最小一段",
+    "payoff": "第三方证词证明空白录记忆进入天衡样本库，而非自然消失",
+    "new_question": "样本库为什么只保存被放弃的选择，不保存已经发生的结果？",
+    "event_ids": [
+      "EV-10"
+    ],
+    "plot_thread_ids": [
+      "TH-BLANK",
+      "TH-TIANHENG",
+      "TH-ZHU"
+    ],
+    "depends_on_chapters": [
+      18,
+      37
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 39,
+    "volume_no": 3,
+    "title": "深潮航标",
+    "active_driver": "CHAR-NING",
+    "involved_character_ids": [
+      "CHAR-NING",
+      "CHAR-LUO",
+      "CHAR-GU",
+      "CHAR-HAN"
+    ],
+    "goal": "护送取样队进入梦海深层的样本索引坐标",
+    "opposition": "航标会按每个人最相信的记忆分岔，军令无法保证队伍看见同一条路",
+    "turn": "宁照霜放弃单线队形，让成员两两互证并预先约定失联后的自主退出点",
+    "cost": "队伍被迫分散，她无法即时救援陷入错误记忆的旧部",
+    "payoff": "军事策略因认识差异改变，控制让位给可恢复的局部协作",
+    "new_question": "失联旧部声称宁照霜从未焚毁继承印，这段记忆能被验证吗？",
+    "event_ids": [
+      "EV-10"
+    ],
+    "plot_thread_ids": [
+      "TH-NING",
+      "TH-LUO"
+    ],
+    "depends_on_chapters": [
+      38
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 40,
+    "volume_no": 3,
+    "title": "交换一张脸",
+    "active_driver": "CHAR-HELIAN",
+    "involved_character_ids": [
+      "CHAR-HELIAN",
+      "CHAR-GU",
+      "CHAR-LUO"
+    ],
+    "goal": "通过校史院记忆闸进入样本库而不触发身份警报",
+    "opposition": "闸门要求赫连夜阑提交一名异常者的真实面孔作为通行凭证",
+    "turn": "她提交自己的执校面孔并以无名状态过闸，拒绝拿顾砚舟交换",
+    "cost": "校史院系统开始抹除她的官方权限，私名册也面临失去签名证明",
+    "payoff": "执校者第一次以自身身份资产支付代价，关系信任发生实质转向",
+    "new_question": "失去官方面孔后，她记录的那些被裁撤姓名还能成为证据吗？",
+    "event_ids": [
+      "EV-10",
+      "EV-11"
+    ],
+    "plot_thread_ids": [
+      "TH-HELIAN",
+      "TH-IDENTITY"
+    ],
+    "depends_on_chapters": [
+      39
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 41,
+    "volume_no": 3,
+    "title": "梦里公审",
+    "active_driver": "CHAR-LUO",
+    "involved_character_ids": [
+      "CHAR-LUO",
+      "CHAR-GU",
+      "CHAR-NING",
+      "CHAR-ZHU"
+    ],
+    "goal": "穿过由群体记忆构成的审判场，取得样本库读取权",
+    "opposition": "审判场把每个人最羞耻的选择呈给其他人，并诱导众人用一致叙述换取通行",
+    "turn": "洛弥生坚持每人只解释自己的选择，不替同伴辩护或要求统一版本",
+    "cost": "公开秘密撕裂数段关系，宁照霜得知顾砚舟曾考虑自首换城",
+    "payoff": "众人以差异而非一致通过审判，主题机制得到镜像兑现",
+    "new_question": "彼此知道了动摇和欲望之后，联盟还能靠什么继续？",
+    "event_ids": [
+      "EV-11"
+    ],
+    "plot_thread_ids": [
+      "TH-LUO",
+      "TH-RELATION",
+      "TH-IDENTITY"
+    ],
+    "depends_on_chapters": [
+      40
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 42,
+    "volume_no": 3,
+    "title": "善意删忆",
+    "active_driver": "CHAR-NING",
+    "involved_character_ids": [
+      "CHAR-NING",
+      "CHAR-GU",
+      "CHAR-LUO",
+      "CHAR-HAN"
+    ],
+    "goal": "阻止样本库用顾砚舟的痛苦记忆反向定位泊界城",
+    "opposition": "最快方法是由三名盟友授权删除相关记忆，顾砚舟当时处于昏迷无法回应",
+    "turn": "宁照霜拒绝替他作永久决定，只允许建立可醒来后撤销的隔离层",
+    "cost": "定位风险没有解除，追索信号继续逼近；她承担被居民指责延误的压力",
+    "payoff": "把‘为你好’的越权在行动前拦下，为下一章的个人选择保留空间",
+    "new_question": "顾砚舟醒来后会选择保留痛苦，还是接受安全的遗忘？",
+    "event_ids": [
+      "EV-11"
+    ],
+    "plot_thread_ids": [
+      "TH-NING",
+      "TH-BLANK",
+      "TH-RELATION"
+    ],
+    "depends_on_chapters": [
+      41
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 43,
+    "volume_no": 3,
+    "title": "拒绝被善待",
+    "active_driver": "CHAR-GU",
+    "involved_character_ids": [
+      "CHAR-GU",
+      "CHAR-NING",
+      "CHAR-LUO",
+      "CHAR-HAN"
+    ],
+    "goal": "自行选择要交给梦海的记忆，以打开被封锁的深层航路",
+    "opposition": "保留全部记忆会暴露城址，删除最痛苦部分又可能改变他对盟友的判断",
+    "turn": "顾砚舟保留痛苦本身，只交出背叛者的面孔和姓名，并要求全程见证",
+    "cost": "航路开启，但他再也认不出那个可能仍在身边的人，团队互信重新洗牌",
+    "payoff": "兑现自主承担代价，失忆不再只是廉价悬念而成为关系结构变化",
+    "new_question": "若背叛者就在队伍中，谁有责任在他无法辨认时说出真相？",
+    "event_ids": [
+      "EV-11"
+    ],
+    "plot_thread_ids": [
+      "TH-BLANK",
+      "TH-IDENTITY",
+      "TH-RELATION"
+    ],
+    "depends_on_chapters": [
+      37,
+      42
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 44,
+    "volume_no": 3,
+    "title": "陌生的亲密",
+    "active_driver": "CHAR-LUO",
+    "involved_character_ids": [
+      "CHAR-LUO",
+      "CHAR-GU",
+      "CHAR-NING",
+      "CHAR-ZHU"
+    ],
+    "goal": "在顾砚舟失去关键面孔后重建当下可验证的关系边界",
+    "opposition": "旧承诺无法被他完整记起，盟友若要求延续便可能利用信息优势",
+    "turn": "众人把旧承诺降为参考，逐项重新确认信任、身体接触与决策回避",
+    "cost": "有一段关系暂时中止，洛弥生也承认她曾借预言避免表达自己的欲望",
+    "payoff": "成熟关系通过重签而非命定恢复，失忆产生可见余波",
+    "new_question": "不能依赖共同回忆时，爱与忠诚还能由哪些当下行动证明？",
+    "event_ids": [
+      "EV-11"
+    ],
+    "plot_thread_ids": [
+      "TH-RELATION",
+      "TH-LUO"
+    ],
+    "depends_on_chapters": [
+      43
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 45,
+    "volume_no": 3,
+    "title": "样本索引",
+    "active_driver": "CHAR-HAN",
+    "involved_character_ids": [
+      "CHAR-HAN",
+      "CHAR-GU",
+      "CHAR-HELIAN",
+      "CHAR-LUO"
+    ],
+    "goal": "复制天衡收集被删选择的分类索引并找到写入来源",
+    "opposition": "索引以读者私人记忆作校验，复制越多，读取者越难区分自我经历",
+    "turn": "韩灯只取时间戳、版本链和去向，不读取任何人的具体私人内容",
+    "cost": "证据不足以还原受害者故事，只能证明系统长期存在且经过人工维护",
+    "payoff": "获得制度级证据而不侵犯被收集者第二次隐私",
+    "new_question": "版本链末端为何指向无名王庭而不是校史院本部？",
+    "event_ids": [
+      "EV-11",
+      "EV-12"
+    ],
+    "plot_thread_ids": [
+      "TH-HAN",
+      "TH-TIANHENG",
+      "TH-HELIAN"
+    ],
+    "depends_on_chapters": [
+      44
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 46,
+    "volume_no": 3,
+    "title": "守密者离席",
+    "active_driver": "CHAR-LUO",
+    "involved_character_ids": [
+      "CHAR-LUO",
+      "CHAR-GU",
+      "CHAR-ZHU"
+    ],
+    "goal": "让独立见证团接手洛弥生垄断的镜潮解释权",
+    "opposition": "她若交出全部方法，第三未来也会暴露；若继续守密，任何证言都缺乏独立性",
+    "turn": "洛弥生先公布自己删改过的决策日志，再退出对自身争议记录的裁定",
+    "cost": "她失去不可替代地位，并面对因其选择性披露遭受损失者的追责",
+    "payoff": "角色主动削弱超能力优势，为独立证言制度清除利益冲突",
+    "new_question": "第三未来中她隐去的究竟是死亡、背叛，还是一种不愿承认的生路？",
+    "event_ids": [
+      "EV-12"
+    ],
+    "plot_thread_ids": [
+      "TH-LUO"
+    ],
+    "depends_on_chapters": [
+      36,
+      45
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 47,
+    "volume_no": 3,
+    "title": "全城作证",
+    "active_driver": "CHAR-NING",
+    "involved_character_ids": [
+      "CHAR-NING",
+      "CHAR-LUO",
+      "CHAR-HAN",
+      "CHAR-GU"
+    ],
+    "goal": "让两套记忆的居民分别提交可复验证言并停止街区冲突",
+    "opposition": "双方都要求先承认自己的历史为真，否则拒绝开放基础设施",
+    "turn": "宁照霜把共同防线分成事实层和解释层：先验证当前危险，历史争议保留并列",
+    "cost": "许多人得不到想要的道歉或裁决，短期怨恨仍在，防线却恢复运作",
+    "payoff": "证言权从洛弥生个人扩散到居民共同体，且允许互相矛盾",
+    "new_question": "这些并列证言为何共同指向一个从未出现在任何人记忆里的王庭门牌？",
+    "event_ids": [
+      "EV-12"
+    ],
+    "plot_thread_ids": [
+      "TH-LUO",
+      "TH-NING",
+      "TH-HAN"
+    ],
+    "depends_on_chapters": [
+      46
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 48,
+    "volume_no": 3,
+    "title": "梦海独立证言",
+    "active_driver": "CHAR-LUO",
+    "involved_character_ids": [
+      "CHAR-LUO",
+      "CHAR-GU",
+      "CHAR-NING",
+      "CHAR-ZHU",
+      "CHAR-HAN",
+      "CHAR-HELIAN"
+    ],
+    "goal": "将镜潮证言、样本索引与自身误判记录交给独立见证团",
+    "opposition": "公开会坐实洛弥生曾误导盟友，也会让校史院提前知道众人掌握版本证据",
+    "turn": "她不删减对自己不利的部分，并把第三未来标为未披露利益冲突",
+    "cost": "洛弥生失去唯一见证资格，校史院随即封锁通往王庭的公开航道",
+    "payoff": "第三卷完成从个人真相权威到可复核证言网络的转换",
+    "new_question": "那份早于事故签发的死亡公文，能否让顾砚舟以无名者身份进入王庭？",
+    "event_ids": [
+      "EV-12"
+    ],
+    "plot_thread_ids": [
+      "TH-LUO",
+      "TH-IDENTITY",
+      "TH-TIANHENG"
+    ],
+    "depends_on_chapters": [
+      33,
+      38,
+      43,
+      47
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 49,
+    "volume_no": 4,
+    "title": "群栖来客",
+    "active_driver": "CHAR-SANG",
+    "involved_character_ids": [
+      "CHAR-SANG",
+      "CHAR-GU",
+      "CHAR-HAN",
+      "CHAR-NING"
+    ],
+    "goal": "评估群栖界以整体共同体身份接入泊界城的申请",
+    "opposition": "桑翡声称群体感知使个人签署毫无意义，民议会则拒绝给一个共同体整席否决权",
+    "turn": "她允许泊界城接触一名公开反对接入的内部节点，而不是用共识掩盖异议",
+    "cost": "群栖界的谈判优势下降，桑翡也第一次被本族公开质疑代表资格",
+    "payoff": "新卷直接建立集体代表与个人边界的核心矛盾",
+    "new_question": "共同体的感知一致，是否等于每个人都作出了相同选择？",
+    "event_ids": [
+      "EV-13"
+    ],
+    "plot_thread_ids": [
+      "TH-SANG",
+      "TH-RELATION"
+    ],
+    "depends_on_chapters": [
+      48
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 50,
+    "volume_no": 4,
+    "title": "退出节点",
+    "active_driver": "CHAR-HAN",
+    "involved_character_ids": [
+      "CHAR-HAN",
+      "CHAR-SANG",
+      "CHAR-GU"
+    ],
+    "goal": "为要求永久脱离群栖网络的少数节点建立安全通道",
+    "opposition": "脱离会让他们失去共享记忆和部分生存能力，群体也将承受认知缺口",
+    "turn": "韩灯把脱离拆成可暂停的三阶段，并要求每阶段由本人重新确认",
+    "cost": "第一名退出者出现记忆残损，工程团队无法保证完全可逆",
+    "payoff": "退出权不被浪漫化，却获得真实可执行的路径",
+    "new_question": "当退出者无法再完整表达，先前同意还能支撑下一阶段吗？",
+    "event_ids": [
+      "EV-13"
+    ],
+    "plot_thread_ids": [
+      "TH-SANG",
+      "TH-HAN"
+    ],
+    "depends_on_chapters": [
+      49
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 51,
+    "volume_no": 4,
+    "title": "整体席位",
+    "active_driver": "CHAR-SANG",
+    "involved_character_ids": [
+      "CHAR-SANG",
+      "CHAR-NING",
+      "CHAR-ZHU",
+      "CHAR-HAN"
+    ],
+    "goal": "为群栖界争取资源与防务席位而不吞没内部个人票",
+    "opposition": "泊界城各派担心一个群体声音天然压过散户，群栖内部又拒绝被拆成陌生个体",
+    "turn": "桑翡提出整体席处理公共生态，个人席处理身体、迁徙与亲密条款",
+    "cost": "制度复杂度翻倍，紧急决策将更慢，部分族人认为她背叛共同性",
+    "payoff": "建立集体与个人双轨代表，为后续众签制度准备结构原型",
+    "new_question": "王庭只承认单一法名，这套双轨身份怎样穿过第一重门？",
+    "event_ids": [
+      "EV-13"
+    ],
+    "plot_thread_ids": [
+      "TH-SANG",
+      "TH-RELATION"
+    ],
+    "depends_on_chapters": [
+      50
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 52,
+    "volume_no": 4,
+    "title": "无名请愿",
+    "active_driver": "CHAR-GU",
+    "involved_character_ids": [
+      "CHAR-GU",
+      "CHAR-SANG",
+      "CHAR-HELIAN"
+    ],
+    "goal": "联合被王庭拒绝登记的无名者申请公开听证",
+    "opposition": "顾砚舟本人在官方记录中已死，无法成为合法代理；赫连夜阑也仍受执校身份约束",
+    "turn": "顾砚舟不冒用活人身份，改以证物身份提交自身死亡公文并要求版本复核",
+    "cost": "王庭接受证物却拒绝他发言，团队必须让无名者自己陈述诉求",
+    "payoff": "主角放弃代理中心位置，无名者从被拯救对象转为行动主体",
+    "new_question": "如果证物证明自己仍活着，法律应承认人还是销毁矛盾记录？",
+    "event_ids": [
+      "EV-13",
+      "EV-14"
+    ],
+    "plot_thread_ids": [
+      "TH-IDENTITY",
+      "TH-HELIAN"
+    ],
+    "depends_on_chapters": [
+      51
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 53,
+    "volume_no": 4,
+    "title": "借名入城",
+    "active_driver": "CHAR-ZHU",
+    "involved_character_ids": [
+      "CHAR-ZHU",
+      "CHAR-GU",
+      "CHAR-SANG",
+      "CHAR-HELIAN"
+    ],
+    "goal": "取得进入无名王庭外城的临时法名凭证",
+    "opposition": "黑市可提供合法姓名，却意味着盗用一名失踪者的全部债务与亲属关系",
+    "turn": "祝红翎拒绝买名，改买一份公开、到期自动失效且不继承他人义务的访客编号",
+    "cost": "访客编号只能让三人入城，其余盟友被留在易受袭击的门外",
+    "payoff": "再次避免用高效冒名解决身份难题，代价转化为团队分离",
+    "new_question": "宁照霜若放弃军职法名，能否替第四名无名者打开缺口？",
+    "event_ids": [
+      "EV-14"
+    ],
+    "plot_thread_ids": [
+      "TH-ZHU",
+      "TH-IDENTITY"
+    ],
+    "depends_on_chapters": [
+      52
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 54,
+    "volume_no": 4,
+    "title": "第一重门",
+    "active_driver": "CHAR-NING",
+    "involved_character_ids": [
+      "CHAR-NING",
+      "CHAR-GU",
+      "CHAR-SANG",
+      "CHAR-HELIAN"
+    ],
+    "goal": "让无名请愿者穿过只识别官职法名的第一重门",
+    "opposition": "守门契将身份与权力绑定，宁照霜的统军名能过门，却不能带无名者同行",
+    "turn": "她公开注销军职法名，以普通成年人的担保身份重新申请通行",
+    "cost": "宁照霜失去对雪卫残部的远程法定指挥，门外防线陷入权责真空",
+    "payoff": "第一重门出现合法缺口，弃王选择从旧伤转成主动的身份释放",
+    "new_question": "没有统军法名后，她还能否为当年的军令承担公开责任？",
+    "event_ids": [
+      "EV-14"
+    ],
+    "plot_thread_ids": [
+      "TH-NING",
+      "TH-IDENTITY"
+    ],
+    "depends_on_chapters": [
+      4,
+      16,
+      53
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 55,
+    "volume_no": 4,
+    "title": "弃王审判",
+    "active_driver": "CHAR-NING",
+    "involved_character_ids": [
+      "CHAR-NING",
+      "CHAR-GU",
+      "CHAR-HAN",
+      "CHAR-SANG"
+    ],
+    "goal": "在王庭听证中说明当年放弃王室、优先救民的完整决策链",
+    "opposition": "控方用死亡与损失证明她无权自称保护者，旧部证词也互相矛盾",
+    "turn": "宁照霜不以最终救人数为自己开脱，而是提交当时信息、备选项与未兑现承诺",
+    "cost": "她被判承担民事补偿且永不得恢复旧法统，却摆脱道德无瑕的英雄叙事",
+    "payoff": "弃王线完成中段重构：责任可追究，但不能由王权垄断评价",
+    "new_question": "赔偿需要谁来支付，泊界城会不会替她承担私人旧债？",
+    "event_ids": [
+      "EV-14"
+    ],
+    "plot_thread_ids": [
+      "TH-NING",
+      "TH-HAN"
+    ],
+    "depends_on_chapters": [
+      54
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 56,
+    "volume_no": 4,
+    "title": "私人姓名",
+    "active_driver": "CHAR-SANG",
+    "involved_character_ids": [
+      "CHAR-SANG",
+      "CHAR-NING",
+      "CHAR-GU"
+    ],
+    "goal": "帮助首名退出节点在王庭取得不依附群栖界的个人登记",
+    "opposition": "登记必须永久切断群体共享，退出者却只想在部分生活领域独立",
+    "turn": "桑翡拒绝全有或全无选项，要求法庭承认同一人可以拥有多层可撤回身份",
+    "cost": "申请被驳回，退出者被暂时拘留；桑翡与群体感知也出现疼痛断层",
+    "payoff": "将身份冲突推向制度层，而不是靠人物互相理解就结束",
+    "new_question": "九重门的法名系统是否故意把复杂身份压成唯一答案？",
+    "event_ids": [
+      "EV-14",
+      "EV-15"
+    ],
+    "plot_thread_ids": [
+      "TH-SANG",
+      "TH-RELATION"
+    ],
+    "depends_on_chapters": [
+      55
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 57,
+    "volume_no": 4,
+    "title": "早到的死讯",
+    "active_driver": "CHAR-HELIAN",
+    "involved_character_ids": [
+      "CHAR-HELIAN",
+      "CHAR-GU",
+      "CHAR-LUO"
+    ],
+    "goal": "调取顾砚舟十二年前的原始死亡公文",
+    "opposition": "王庭档案只显示不可比对的最终版，任何追查旧版都会触发执校审计",
+    "turn": "赫连夜阑利用自己尚未注销的最后一项复核权限调出版本时间戳",
+    "cost": "权限被永久冻结，她看见死讯签发时间比事故早了七日，却无法复制全文",
+    "payoff": "身份谜团取得硬证据：记录不是事故后的误写，而是事前安排",
+    "new_question": "七日前是谁知道顾砚舟会在事故中‘死亡’？",
+    "event_ids": [
+      "EV-15"
+    ],
+    "plot_thread_ids": [
+      "TH-IDENTITY",
+      "TH-HELIAN"
+    ],
+    "depends_on_chapters": [
+      56
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 58,
+    "volume_no": 4,
+    "title": "版本夹层",
+    "active_driver": "CHAR-LUO",
+    "involved_character_ids": [
+      "CHAR-LUO",
+      "CHAR-HELIAN",
+      "CHAR-GU",
+      "CHAR-HAN"
+    ],
+    "goal": "在不破坏档案证据链的前提下找回被覆盖的死亡公文版本",
+    "opposition": "每次比对都会让镜潮自动补全缺字，却可能把推测写成事实",
+    "turn": "洛弥生只保留各版本差异坐标，由韩灯用物理压痕独立复核文字存在",
+    "cost": "他们仍无法得知被删内容，只能证明至少有三次人工改写",
+    "payoff": "超自然见证与物证互校，避免预言能力包办真相",
+    "new_question": "第三次改写为何使用了只有零号校场才有的编号？",
+    "event_ids": [
+      "EV-15"
+    ],
+    "plot_thread_ids": [
+      "TH-IDENTITY",
+      "TH-LUO",
+      "TH-HAN"
+    ],
+    "depends_on_chapters": [
+      57
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 59,
+    "volume_no": 4,
+    "title": "死亡公文复核",
+    "active_driver": "CHAR-HELIAN",
+    "involved_character_ids": [
+      "CHAR-HELIAN",
+      "CHAR-GU",
+      "CHAR-LUO",
+      "CHAR-HAN"
+    ],
+    "goal": "让王庭正式承认死亡公文存在不可解释的预先签发和版本差异",
+    "opposition": "承认会动摇所有法名记录，审理官试图以程序瑕疵排除赫连夜阑取得的证据",
+    "turn": "赫连夜阑承认自己越权并接受追责，换取证据按举报人例外进入公开记录",
+    "cost": "她失去执校保护和真实姓名权限，成为校史院可即时抹除的叛离者",
+    "payoff": "关键复核事件成立，顾砚舟不再只是自称被陷害",
+    "new_question": "零号校场制造的究竟是一个替身，还是一份容纳被删选择的活索引？",
+    "event_ids": [
+      "EV-15"
+    ],
+    "plot_thread_ids": [
+      "TH-HELIAN",
+      "TH-IDENTITY",
+      "TH-TIANHENG"
+    ],
+    "depends_on_chapters": [
+      41,
+      58
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 60,
+    "volume_no": 4,
+    "title": "活索引",
+    "active_driver": "CHAR-GU",
+    "involved_character_ids": [
+      "CHAR-GU",
+      "CHAR-HELIAN",
+      "CHAR-LUO",
+      "CHAR-SANG"
+    ],
+    "goal": "确认自己体内回声与被删选择样本之间的关系",
+    "opposition": "读取可立即恢复部分真相，却可能让无数陌生选择冲垮顾砚舟人格",
+    "turn": "他只开放一个由本人选定、可中止的最小样本，并由三方记录退出口令",
+    "cost": "样本证明他并非某个世界化身，却让他短暂失去自己的出生记忆",
+    "payoff": "身份谜团重构为价值选择：他是容器，但仍可决定怎样使用自己",
+    "new_question": "如果所有被删选择都要求被释放，他有权只保住个人完整吗？",
+    "event_ids": [
+      "EV-15",
+      "EV-16"
+    ],
+    "plot_thread_ids": [
+      "TH-IDENTITY",
+      "TH-BLANK"
+    ],
+    "depends_on_chapters": [
+      59
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 61,
+    "volume_no": 4,
+    "title": "多数人的门",
+    "active_driver": "CHAR-HAN",
+    "involved_character_ids": [
+      "CHAR-HAN",
+      "CHAR-SANG",
+      "CHAR-NING",
+      "CHAR-GU"
+    ],
+    "goal": "阻止联合请愿阵营以多数票强迫退出节点代表群栖界作证",
+    "opposition": "多数人认为个人拒绝会害所有无名者失去改名机会，舆论开始把退出等同背叛",
+    "turn": "韩灯暂停表决，要求把谁承担拒绝后果与谁拥有身体决定权分开记录",
+    "cost": "请愿进度延误，数名无名者失去临时居所，反对者把损失记在他名下",
+    "payoff": "展现多数联盟也可能复制压迫，制度必须保护不合群的拒绝",
+    "new_question": "不强迫关键证人，众人还能从何处证明法名制度的实际伤害？",
+    "event_ids": [
+      "EV-16"
+    ],
+    "plot_thread_ids": [
+      "TH-SANG",
+      "TH-HAN"
+    ],
+    "depends_on_chapters": [
+      60
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 62,
+    "volume_no": 4,
+    "title": "一人一条款",
+    "active_driver": "CHAR-SANG",
+    "involved_character_ids": [
+      "CHAR-SANG",
+      "CHAR-GU",
+      "CHAR-NING"
+    ],
+    "goal": "由桑翡以个人而非共同体代表身份起草第一份私人界契",
+    "opposition": "群栖网络持续向她传来集体反对，她也无法确定哪些愿望真正只属于自己",
+    "turn": "她把条款限定为此刻身体、称名与亲密边界，并保留定期重新确认",
+    "cost": "签署造成群体感知永久裂缝，桑翡第一次体验无法共享的孤独",
+    "payoff": "私人主体性通过具体代价落地，为改写九门提供可验证先例",
+    "new_question": "失去共享确认后，她要怎样判断未来的自己仍愿意维持这份条款？",
+    "event_ids": [
+      "EV-16"
+    ],
+    "plot_thread_ids": [
+      "TH-SANG",
+      "TH-RELATION"
+    ],
+    "depends_on_chapters": [
+      50,
+      61
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 63,
+    "volume_no": 4,
+    "title": "九门同开",
+    "active_driver": "CHAR-ZHU",
+    "involved_character_ids": [
+      "CHAR-ZHU",
+      "CHAR-SANG",
+      "CHAR-GU",
+      "CHAR-HELIAN",
+      "CHAR-NING"
+    ],
+    "goal": "把私人条款、双轨身份和死亡公文差异同时提交九门复核",
+    "opposition": "九门各自承认一部分，却通过互相引用形成无人负责的循环拒绝",
+    "turn": "祝红翎把九份拒绝的责任链做成公开交易图，让每扇门都无法再声称只是执行上游",
+    "cost": "公开图同时暴露泊界城全部制度弱点，校史院据此准备全域异常判定",
+    "payoff": "行政迷宫被转化为可见权力网络，最后改名具备因果条件",
+    "new_question": "若九门失去唯一法名标准，无名王庭靠什么维持跨界秩序？",
+    "event_ids": [
+      "EV-16"
+    ],
+    "plot_thread_ids": [
+      "TH-ZHU",
+      "TH-TIANHENG",
+      "TH-IDENTITY"
+    ],
+    "depends_on_chapters": [
+      62
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 64,
+    "volume_no": 4,
+    "title": "九门改名",
+    "active_driver": "CHAR-SANG",
+    "involved_character_ids": [
+      "CHAR-SANG",
+      "CHAR-GU",
+      "CHAR-NING",
+      "CHAR-ZHU",
+      "CHAR-LUO",
+      "CHAR-HELIAN",
+      "CHAR-HAN"
+    ],
+    "goal": "使王庭承认多层、可撤回且无人能单独代签的身份结构",
+    "opposition": "闻观鹤远程启动唯一法名回滚，试图用秩序崩溃迫使众人恢复旧制",
+    "turn": "桑翡以私人条款签下首个新名，其他无名者自行选择跟随、保留或拒绝",
+    "cost": "王庭九门失去单一控制，跨界通行短暂瘫痪；顾砚舟被系统识别为活索引",
+    "payoff": "第四卷兑现代表权改造，胜利同时触发天衡对泊界城的全域异常判定",
+    "new_question": "五位界契者若不撤回旧授权，闻观鹤会怎样利用顾砚舟重写所有人？",
+    "event_ids": [
+      "EV-16"
+    ],
+    "plot_thread_ids": [
+      "TH-SANG",
+      "TH-IDENTITY",
+      "TH-TIANHENG",
+      "TH-RELATION"
+    ],
+    "depends_on_chapters": [
+      49,
+      54,
+      59,
+      63
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 65,
+    "volume_no": 5,
+    "title": "五契同撤",
+    "active_driver": "CHAR-NING",
+    "involved_character_ids": [
+      "CHAR-NING",
+      "CHAR-ZHU",
+      "CHAR-LUO",
+      "CHAR-SANG",
+      "CHAR-HELIAN",
+      "CHAR-GU"
+    ],
+    "goal": "在校史院夺用空白录前分别撤回五份面向未来的界契授权",
+    "opposition": "撤回会立刻切断泊界城法则兼容，数万居民将承担供能、记忆与空间崩坏",
+    "turn": "五人不作象征性集体表态，而是逐一说明理由、范围和愿意承担的后果后独立确认",
+    "cost": "校史院失去强制签署入口，泊界城也在同一刻裂成六个互不兼容的法则区",
+    "payoff": "第五卷以真实撤回开局：权利有效必然意味着它可能造成他人损失",
+    "new_question": "不把责任推回签署者的前提下，谁来统计并救助第一批受害者？",
+    "event_ids": [
+      "EV-17"
+    ],
+    "plot_thread_ids": [
+      "TH-RELATION",
+      "TH-TIANHENG",
+      "TH-BLANK"
+    ],
+    "depends_on_chapters": [
+      64
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 66,
+    "volume_no": 5,
+    "title": "断供清单",
+    "active_driver": "CHAR-HAN",
+    "involved_character_ids": [
+      "CHAR-HAN",
+      "CHAR-NING",
+      "CHAR-ZHU",
+      "CHAR-SANG"
+    ],
+    "goal": "在六区断供中建立不掩盖伤亡的救援优先级",
+    "opposition": "每个界锚都声称自身崩坏最急，旧资源算法又天然偏向人口多且记录完整的区域",
+    "turn": "韩灯公开权重和不可救清单，允许各区派员交叉复核而非私下调度",
+    "cost": "清单暴露确有部分人短期得不到救援，他成为居民怒火的直接对象",
+    "payoff": "危机管理避免万能分配，代价和责任有名有据",
+    "new_question": "闻观鹤会否利用必然伤亡证明撤回权本身不可被允许？",
+    "event_ids": [
+      "EV-17"
+    ],
+    "plot_thread_ids": [
+      "TH-HAN",
+      "TH-TIANHENG"
+    ],
+    "depends_on_chapters": [
+      65
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 67,
+    "volume_no": 5,
+    "title": "亲密不是授权",
+    "active_driver": "CHAR-GU",
+    "involved_character_ids": [
+      "CHAR-GU",
+      "CHAR-NING",
+      "CHAR-ZHU",
+      "CHAR-LUO",
+      "CHAR-SANG",
+      "CHAR-HELIAN"
+    ],
+    "goal": "阻止顾砚舟以亲密关系为由替五人恢复旧契权限",
+    "opposition": "空白录不断向他展示恢复权限即可止损的即时结果，居民也要求他‘劝回自己人’",
+    "turn": "顾砚舟公开声明关系不构成政治授权，并把自己的紧急写权限锁入多人见证",
+    "cost": "他失去单独救援能力，也必须面对有人主动暂停与他的私人关系",
+    "payoff": "主题边界在最大压力下通过主角自限得到兑现",
+    "new_question": "若旧契不能恢复，新的临时协作怎样避免再次变成永久控制？",
+    "event_ids": [
+      "EV-17"
+    ],
+    "plot_thread_ids": [
+      "TH-RELATION",
+      "TH-BLANK"
+    ],
+    "depends_on_chapters": [
+      66
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 68,
+    "volume_no": 5,
+    "title": "裂城六夜",
+    "active_driver": "CHAR-SANG",
+    "involved_character_ids": [
+      "CHAR-SANG",
+      "CHAR-HAN",
+      "CHAR-GU",
+      "CHAR-NING"
+    ],
+    "goal": "维持群栖区与其他五区最低感知和物资联络",
+    "opposition": "共享网络把所有区域的痛苦同步给群栖成员，许多人要求永久封闭接口自保",
+    "turn": "桑翡允许各节点自行降低同步强度，并由选择保持连接者组成临时转译链",
+    "cost": "共同体整体协调能力下降，数段重要消息延迟甚至丢失",
+    "payoff": "群体自愿结构经受危机，不以集体天性强迫牺牲",
+    "new_question": "转译链丢失的那份事故报告是否记录了可避免的死亡？",
+    "event_ids": [
+      "EV-17",
+      "EV-18"
+    ],
+    "plot_thread_ids": [
+      "TH-SANG",
+      "TH-HAN"
+    ],
+    "depends_on_chapters": [
+      67
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 69,
+    "volume_no": 5,
+    "title": "责任账本",
+    "active_driver": "CHAR-HAN",
+    "involved_character_ids": [
+      "CHAR-HAN",
+      "CHAR-GU",
+      "CHAR-NING",
+      "CHAR-ZHU",
+      "CHAR-SANG"
+    ],
+    "goal": "公开撤回后全部已知伤亡、资源选择和决策责任",
+    "opposition": "支持撤回者担心数据被当作定罪证据，反对者又试图把所有损失归给五位签署者",
+    "turn": "韩灯把直接原因、结构原因与可避免环节分列，拒绝写成单一替罪名单",
+    "cost": "公开后民议会出现罢免动议，五位签署者也必须参加受损者听证",
+    "payoff": "泊界城分裂事件兑现，责任不被权利话语抹去，也不被简化成报复",
+    "new_question": "居民还愿不愿意承担一次可能再次失败的有限重签实验？",
+    "event_ids": [
+      "EV-18"
+    ],
+    "plot_thread_ids": [
+      "TH-HAN",
+      "TH-RELATION"
+    ],
+    "depends_on_chapters": [
+      65,
+      68
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 70,
+    "volume_no": 5,
+    "title": "半印原价",
+    "active_driver": "CHAR-ZHU",
+    "involved_character_ids": [
+      "CHAR-ZHU",
+      "CHAR-HELIAN",
+      "CHAR-GU",
+      "CHAR-HAN"
+    ],
+    "goal": "追查半枚火印最初由谁铸造、为何只让祝红翎得到一半",
+    "opposition": "原始账本显示她父辈自愿与校史院合作，祝红翎若公开将失去家族正当性",
+    "turn": "她公布完整交易链，并承认自己的早期财富建立在被设计好的走私特许上",
+    "cost": "火港盟友要求重新审计她全部资产，她失去私人补偿居民的快捷手段",
+    "payoff": "火港半印线兑现：它既是追踪诱饵，也是校史院培育灰色中介的制度证据",
+    "new_question": "被诱导的获利者该如何补偿，而又不把所有责任洗给操纵者？",
+    "event_ids": [
+      "EV-18"
+    ],
+    "plot_thread_ids": [
+      "TH-ZHU",
+      "TH-HELIAN",
+      "TH-TIANHENG"
+    ],
+    "depends_on_chapters": [
+      18,
+      27,
+      69
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 71,
+    "volume_no": 5,
+    "title": "撤回者法庭",
+    "active_driver": "CHAR-NING",
+    "involved_character_ids": [
+      "CHAR-NING",
+      "CHAR-SANG",
+      "CHAR-ZHU",
+      "CHAR-LUO",
+      "CHAR-HELIAN",
+      "CHAR-HAN"
+    ],
+    "goal": "完成五位撤回者与受损居民的公开责任听证",
+    "opposition": "居民要求恢复旧契作为赔偿，五人对何种补偿不等于重新让渡权力意见分裂",
+    "turn": "宁照霜接受资源与职位赔偿，却拒绝以永久授权偿债，并支持对自己单独表决",
+    "cost": "她被暂停防务席位，其他四人也分别背上不同期限的公共义务",
+    "payoff": "撤回权和后果责任同时成立，避免角色因正确立场免于追责",
+    "new_question": "失去原有职权后，谁来保护即将进入校史院区的重签队？",
+    "event_ids": [
+      "EV-18"
+    ],
+    "plot_thread_ids": [
+      "TH-NING",
+      "TH-RELATION"
+    ],
+    "depends_on_chapters": [
+      70
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 72,
+    "volume_no": 5,
+    "title": "一刻重签",
+    "active_driver": "CHAR-LUO",
+    "involved_character_ids": [
+      "CHAR-LUO",
+      "CHAR-GU",
+      "CHAR-HAN",
+      "CHAR-SANG"
+    ],
+    "goal": "测试仅维持一刻钟、到期自动解除的跨区兼容契",
+    "opposition": "镜潮预测显示三种互斥故障，任何一种防护都会放大另外两种",
+    "turn": "洛弥生同时公布三种预测与置信度，让各区分别选择防护而非替全城定案",
+    "cost": "一个区域选择错误并出现新伤员，实验仍证明局部重签可以独立存在",
+    "payoff": "从灾难中取得有限可重复证据，不用一次试验宣称完美方案",
+    "new_question": "怎样取得天衡原始基线，判断故障来自多样性还是被删样本？",
+    "event_ids": [
+      "EV-18"
+    ],
+    "plot_thread_ids": [
+      "TH-LUO",
+      "TH-TIANHENG",
+      "TH-HAN"
+    ],
+    "depends_on_chapters": [
+      71
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 73,
+    "volume_no": 5,
+    "title": "名册校验",
+    "active_driver": "CHAR-HELIAN",
+    "involved_character_ids": [
+      "CHAR-HELIAN",
+      "CHAR-HAN",
+      "CHAR-GU"
+    ],
+    "goal": "验证赫连夜阑私名册中的裁撤者确实对应天衡缺失样本",
+    "opposition": "名册没有官方签章，部分名字又来自她个人记忆，公开可能同时伤害尚存家属",
+    "turn": "她先公布哈希、时间和裁撤批次，让家属自愿决定是否解封姓名",
+    "cost": "证据暂时只能证明规模，无法用具体受害故事赢得舆论冲击",
+    "payoff": "私名册从私人悼念转成尊重当事人的证据容器",
+    "new_question": "若关键批次无人愿意公开，法庭会不会以缺乏姓名为由否认他们存在？",
+    "event_ids": [
+      "EV-18",
+      "EV-19"
+    ],
+    "plot_thread_ids": [
+      "TH-HELIAN",
+      "TH-HAN"
+    ],
+    "depends_on_chapters": [
+      72
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 74,
+    "volume_no": 5,
+    "title": "执校真名",
+    "active_driver": "CHAR-HELIAN",
+    "involved_character_ids": [
+      "CHAR-HELIAN",
+      "CHAR-WEN",
+      "CHAR-GU"
+    ],
+    "goal": "进入校史院原始基线库并保住名册证据",
+    "opposition": "闻观鹤恢复她的执校真名，条件是带回顾砚舟并永久封存私名册",
+    "turn": "赫连夜阑表面恢复身份进入内库，却预先把退出口令交给独立见证人",
+    "cost": "盟友无法判断她是真投降还是有限渗透，顾砚舟拒绝以信任名义免除监督",
+    "payoff": "高风险潜入建立在可验证边界而非读者被迫相信角色忠诚",
+    "new_question": "当退出口令会暴露所有见证人时，她还会按约使用吗？",
+    "event_ids": [
+      "EV-19"
+    ],
+    "plot_thread_ids": [
+      "TH-HELIAN",
+      "TH-IDENTITY",
+      "TH-RELATION"
+    ],
+    "depends_on_chapters": [
+      73
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 75,
+    "volume_no": 5,
+    "title": "私名成证",
+    "active_driver": "CHAR-HELIAN",
+    "involved_character_ids": [
+      "CHAR-HELIAN",
+      "CHAR-WEN",
+      "CHAR-GU",
+      "CHAR-LUO",
+      "CHAR-HAN"
+    ],
+    "goal": "让被裁撤者名册进入公开基线审查并阻止闻观鹤销毁",
+    "opposition": "只有以执校真名签署才能认证名册，而签署同时会把她重新绑定为执行者",
+    "turn": "赫连夜阑签署认证后立刻使用预置退出口令放弃真名，把名册交给多方见证",
+    "cost": "她成为无名叛离者，失去所有院内救援渠道；闻观鹤提前启动全域归零",
+    "payoff": "私名册线兑现，被删除样本取得法律存在，且无人能再次单独抹除",
+    "new_question": "归零已经启动，证据还来得及改变任何世界的选择吗？",
+    "event_ids": [
+      "EV-19"
+    ],
+    "plot_thread_ids": [
+      "TH-HELIAN",
+      "TH-TIANHENG"
+    ],
+    "depends_on_chapters": [
+      11,
+      59,
+      74
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 76,
+    "volume_no": 5,
+    "title": "归零钟响",
+    "active_driver": "CHAR-WEN",
+    "involved_character_ids": [
+      "CHAR-WEN",
+      "CHAR-GU",
+      "CHAR-HELIAN",
+      "CHAR-NING",
+      "CHAR-ZHU"
+    ],
+    "goal": "在全域公开说明归零理由并迫使泊界城交出活索引",
+    "opposition": "闻观鹤展示多世界冲突造成的真实死难数据，单靠揭露罪行无法反驳其稳定诉求",
+    "turn": "他允许各界旁听却把选择压成服从基线或共同毁灭，顾砚舟拒绝在伪二选一中答复",
+    "cost": "归零倒计时不因道德辩论停止，泊界城多个边缘区开始消失",
+    "payoff": "反派获得完整理性与证据，终局冲突成为方案竞争而非人格邪恶",
+    "new_question": "能否证明天衡失败来自删除异议，而不是自由本身必然失控？",
+    "event_ids": [
+      "EV-19",
+      "EV-20"
+    ],
+    "plot_thread_ids": [
+      "TH-TIANHENG",
+      "TH-IDENTITY"
+    ],
+    "depends_on_chapters": [
+      75
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 77,
+    "volume_no": 5,
+    "title": "失败基线",
+    "active_driver": "CHAR-LUO",
+    "involved_character_ids": [
+      "CHAR-LUO",
+      "CHAR-HELIAN",
+      "CHAR-HAN",
+      "CHAR-GU"
+    ],
+    "goal": "从公开名册与一刻实验中重建天衡第一次失败的缺失变量",
+    "opposition": "现有数据只包含幸存方案，任何推论都可能把看不见的受害者再次当作噪声",
+    "turn": "洛弥生把结论降级为可证伪假设：被删除的异议样本可能正是稳定所需反馈",
+    "cost": "假设无法立刻说服居民冒险，团队必须承认还没有安全答案",
+    "payoff": "避免用新真理取代旧基线，终局方案建立在有限证据和可退出试验上",
+    "new_question": "谁愿意成为第一批拥有真正拒绝权的重签样本？",
+    "event_ids": [
+      "EV-20"
+    ],
+    "plot_thread_ids": [
+      "TH-TIANHENG",
+      "TH-LUO",
+      "TH-HAN"
+    ],
+    "depends_on_chapters": [
+      76
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 78,
+    "volume_no": 5,
+    "title": "永久退出者",
+    "active_driver": "CHAR-SANG",
+    "involved_character_ids": [
+      "CHAR-SANG",
+      "CHAR-HAN",
+      "CHAR-GU"
+    ],
+    "goal": "完成最早退出节点的最后阶段，并由其决定是否参加重签",
+    "opposition": "退出将永久失去群体支持，不参加又可能在归零中最先消失",
+    "turn": "退出者明确拒绝重签、选择独立撤离；桑翡用共同体资源护送而不要求回报",
+    "cost": "群栖界永久失去一段共享记忆与一个关键感知节点，重签样本也少了一份成功数据",
+    "payoff": "退出节点线兑现：拒绝不是等待被主角说服的过场，而有完整结局",
+    "new_question": "替代系统能否保护那些不愿加入它的人？",
+    "event_ids": [
+      "EV-20"
+    ],
+    "plot_thread_ids": [
+      "TH-SANG",
+      "TH-RELATION"
+    ],
+    "depends_on_chapters": [
+      50,
+      61,
+      77
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 79,
+    "volume_no": 5,
+    "title": "三钥拆分",
+    "active_driver": "CHAR-ZHU",
+    "involved_character_ids": [
+      "CHAR-ZHU",
+      "CHAR-HAN",
+      "CHAR-NING",
+      "CHAR-GU"
+    ],
+    "goal": "把空白录、炉心和公共账本拆成无人可独占的三组权限",
+    "opposition": "拆分会让任何紧急操作至少等待三方响应，而归零波正按息推进",
+    "turn": "祝红翎设计离线降级：缺席方只允许维持现状，任何扩权仍必须等齐见证",
+    "cost": "一处正在坍缩的街区错过最佳扩容时机，众人亲自承担慢制度的伤亡",
+    "payoff": "分布式重签的权限结构成形，不用主角保留秘密后门",
+    "new_question": "三组钥匙若被不同世界各自扣留，下一次跨界危机如何协调？",
+    "event_ids": [
+      "EV-20"
+    ],
+    "plot_thread_ids": [
+      "TH-ZHU",
+      "TH-HAN",
+      "TH-BLANK"
+    ],
+    "depends_on_chapters": [
+      78
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 80,
+    "volume_no": 5,
+    "title": "分布式重签",
+    "active_driver": "CHAR-ZHU",
+    "involved_character_ids": [
+      "CHAR-ZHU",
+      "CHAR-GU",
+      "CHAR-NING",
+      "CHAR-LUO",
+      "CHAR-SANG",
+      "CHAR-HELIAN",
+      "CHAR-HAN"
+    ],
+    "goal": "用三钥结构恢复泊界城最低稳定并验证无人可单独控制界锚",
+    "opposition": "闻观鹤集中归零压力诱使各方把权限临时交回顾砚舟，部分居民也赞成先活下来",
+    "turn": "众人仍按分项、限时、多方见证完成重签，允许拒绝者保持独立通道",
+    "cost": "泊界城只恢复最低功能，拒绝参与的世界仍面临归零，团队必须外出争取而不能代签",
+    "payoff": "第五卷从撤回走到可审计重签，获得终局方案的最小可运行原型",
+    "new_question": "各世界是否会在看到真实代价后自愿署名，还是选择闻观鹤的单一稳定？",
+    "event_ids": [
+      "EV-20"
+    ],
+    "plot_thread_ids": [
+      "TH-ZHU",
+      "TH-RELATION",
+      "TH-TIANHENG",
+      "TH-BLANK"
+    ],
+    "depends_on_chapters": [
+      65,
+      69,
+      75,
+      79
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 81,
+    "volume_no": 6,
+    "title": "各界署名",
+    "active_driver": "CHAR-SANG",
+    "involved_character_ids": [
+      "CHAR-SANG",
+      "CHAR-GU",
+      "CHAR-NING",
+      "CHAR-ZHU",
+      "CHAR-LUO",
+      "CHAR-HAN"
+    ],
+    "goal": "向仍可联络的世界公开分布式界锚方案及全部已知代价",
+    "opposition": "时间不足以逐界说服，许多代表要求泊界城替沉默居民作紧急默认同意",
+    "turn": "桑翡坚持沉默不等于同意，让每界独立选择加入、暂缓或拒绝并记录后果",
+    "cost": "首轮只有不足半数加入，公共航路无法覆盖所有拒绝区域",
+    "payoff": "终卷从不完整的真实选择开始，自由第一次成为天衡可观测的稳定变量",
+    "new_question": "如何保护明确拒绝却仍会被归零波波及的世界？",
+    "event_ids": [
+      "EV-21"
+    ],
+    "plot_thread_ids": [
+      "TH-SANG",
+      "TH-RELATION",
+      "TH-TIANHENG"
+    ],
+    "depends_on_chapters": [
+      80
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 82,
+    "volume_no": 6,
+    "title": "拒绝者航线",
+    "active_driver": "CHAR-ZHU",
+    "involved_character_ids": [
+      "CHAR-ZHU",
+      "CHAR-SANG",
+      "CHAR-NING",
+      "CHAR-GU"
+    ],
+    "goal": "为拒绝加入众签方案的世界建立不依赖公共锚的撤离航线",
+    "opposition": "开放航线会分走本就不足的炉心，并可能被闻观鹤用来反向渗透",
+    "turn": "祝红翎把航路坐标一次性分片交给拒绝者，泊界城不保留追踪副本",
+    "cost": "众签舰队失去一成能源与情报，部分支持者指责她资助潜在敌人",
+    "payoff": "替代制度用行动保护不加入者，拒绝权不再只是宣传",
+    "new_question": "没有跟踪能力后，谁来确认航线未被利用攻击署名者？",
+    "event_ids": [
+      "EV-21"
+    ],
+    "plot_thread_ids": [
+      "TH-ZHU",
+      "TH-SANG"
+    ],
+    "depends_on_chapters": [
+      81
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 83,
+    "volume_no": 6,
+    "title": "旧事故全卷",
+    "active_driver": "CHAR-HAN",
+    "involved_character_ids": [
+      "CHAR-HAN",
+      "CHAR-GU",
+      "CHAR-HELIAN",
+      "CHAR-LUO"
+    ],
+    "goal": "拼合韩灯保存的施工日志与王庭版本链，定位零号校场",
+    "opposition": "日志显示前任城主参与试验，却也记录他曾试图中止，责任归属并不单纯",
+    "turn": "韩灯公开包括自己导师失误在内的全卷，不剪去有利于校史院的段落",
+    "cost": "泊界城的道德优势被削弱，前任城主声望坍塌，仍活着的工程师面临审查",
+    "payoff": "旧事故日志线兑现并提供零号坐标，证据完整性胜过阵营叙事",
+    "new_question": "第一次试验究竟因设计错误失败，还是被人主动删除了反对样本？",
+    "event_ids": [
+      "EV-21",
+      "EV-22"
+    ],
+    "plot_thread_ids": [
+      "TH-HAN",
+      "TH-IDENTITY",
+      "TH-TIANHENG"
+    ],
+    "depends_on_chapters": [
+      6,
+      46,
+      82
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 84,
+    "volume_no": 6,
+    "title": "众签试航",
+    "active_driver": "CHAR-NING",
+    "involved_character_ids": [
+      "CHAR-NING",
+      "CHAR-ZHU",
+      "CHAR-SANG",
+      "CHAR-HAN",
+      "CHAR-GU"
+    ],
+    "goal": "让不同法则的署名舰队穿越归零前沿并保持自主指挥",
+    "opposition": "统一军令最有效，却会把刚建立的独立签署重新变成服从链",
+    "turn": "宁照霜采用任务边界而非过程命令，各舰自行选择路线并公开最低互助义务",
+    "cost": "两舰选择互斥路线导致错失会合，一处前沿锚点被归零吞没",
+    "payoff": "多中心协作得到实战检验，成功和失败都被如实保留",
+    "new_question": "零号校场只能容纳一条航线，谁有权决定先进入者？",
+    "event_ids": [
+      "EV-21"
+    ],
+    "plot_thread_ids": [
+      "TH-NING",
+      "TH-HAN"
+    ],
+    "depends_on_chapters": [
+      83
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 85,
+    "volume_no": 6,
+    "title": "零号门外",
+    "active_driver": "CHAR-HELIAN",
+    "involved_character_ids": [
+      "CHAR-HELIAN",
+      "CHAR-GU",
+      "CHAR-WEN",
+      "CHAR-LUO"
+    ],
+    "goal": "用私名册批次链打开零号校场而不恢复执校最高权限",
+    "opposition": "门锁只认闻观鹤与赫连夜阑的旧师生双签，恢复签名意味着重新受院规控制",
+    "turn": "赫连夜阑仅恢复一次性见证资格，并把权限到期写入外部三钥而非门内系统",
+    "cost": "到期后她将永远无法再次进入院方档案，闻观鹤也获得与她直接对话的机会",
+    "payoff": "进入终局核心仍遵守临时、可审计和无后门原则",
+    "new_question": "闻观鹤若主动交出第二签名，他真正想让众人看见什么？",
+    "event_ids": [
+      "EV-22"
+    ],
+    "plot_thread_ids": [
+      "TH-HELIAN",
+      "TH-TIANHENG"
+    ],
+    "depends_on_chapters": [
+      84
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 86,
+    "volume_no": 6,
+    "title": "三份零号证词",
+    "active_driver": "CHAR-LUO",
+    "involved_character_ids": [
+      "CHAR-LUO",
+      "CHAR-GU",
+      "CHAR-HELIAN",
+      "CHAR-HAN",
+      "CHAR-WEN"
+    ],
+    "goal": "复原第一次多世界共存试验的原始样本",
+    "opposition": "现存三份证词互相排斥：设计崩溃、操作破坏与主动撤回都各有完整证据",
+    "turn": "洛弥生拒绝选一份最方便的真相，让三份证词在同一模型中保持并列变量",
+    "cost": "众人无法得到单一罪责叙事，终局方案也必须承受更高不确定性",
+    "payoff": "证明试验失败的致命动作不是差异本身，而是删除异议后强行收敛",
+    "new_question": "闻观鹤为何亲自保留足以推翻天衡合法性的三份原件？",
+    "event_ids": [
+      "EV-22"
+    ],
+    "plot_thread_ids": [
+      "TH-LUO",
+      "TH-TIANHENG",
+      "TH-HAN"
+    ],
+    "depends_on_chapters": [
+      38,
+      77,
+      85
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 87,
+    "volume_no": 6,
+    "title": "基线守墓人",
+    "active_driver": "CHAR-WEN",
+    "involved_character_ids": [
+      "CHAR-WEN",
+      "CHAR-GU",
+      "CHAR-HELIAN",
+      "CHAR-LUO"
+    ],
+    "goal": "说服顾砚舟接受单一基线，避免重演零号试验的全面崩溃",
+    "opposition": "闻观鹤承认删除异议，却展示未经删除时更惨烈的早期伤亡与自己的丧失",
+    "turn": "他提出由顾砚舟继任最高权限并保留少量审计，比自己继续统治更可信",
+    "cost": "顾砚舟看见一个能迅速止损且允许他保护亲近者的真实诱惑",
+    "payoff": "反派目标从自保显出守墓逻辑，最高权限成为主角价值选择而非战利品",
+    "new_question": "如果拒绝继任会让更多人立刻死亡，分权仍是负责的答案吗？",
+    "event_ids": [
+      "EV-22"
+    ],
+    "plot_thread_ids": [
+      "TH-TIANHENG",
+      "TH-IDENTITY",
+      "TH-HELIAN"
+    ],
+    "depends_on_chapters": [
+      86
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 88,
+    "volume_no": 6,
+    "title": "缺页归处",
+    "active_driver": "CHAR-GU",
+    "involved_character_ids": [
+      "CHAR-GU",
+      "CHAR-LUO",
+      "CHAR-HELIAN",
+      "CHAR-WEN"
+    ],
+    "goal": "查明空白录所有缺页和失去记忆的最终去向",
+    "opposition": "缺页并非物件而是顾砚舟体内被隔离的选择索引，释放可能瓦解其人格边界",
+    "turn": "顾砚舟先开放一页给独立见证网，确认每段记忆可由原当事人选择取回或继续封存",
+    "cost": "首轮释放让他永久失去一段童年归属感，且无法保证所有当事人仍存在",
+    "payoff": "空白录线核心真相兑现：代价被保存而非消失，归还也必须尊重本人选择",
+    "new_question": "数以万计无人认领的选择应由谁保管，是否可以再次封存？",
+    "event_ids": [
+      "EV-22",
+      "EV-23"
+    ],
+    "plot_thread_ids": [
+      "TH-BLANK",
+      "TH-IDENTITY"
+    ],
+    "depends_on_chapters": [
+      1,
+      35,
+      43,
+      87
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 89,
+    "volume_no": 6,
+    "title": "不是复活者",
+    "active_driver": "CHAR-GU",
+    "involved_character_ids": [
+      "CHAR-GU",
+      "CHAR-HAN",
+      "CHAR-HELIAN",
+      "CHAR-NING"
+    ],
+    "goal": "向泊界城公开自己的形成过程并确认法律与人格地位",
+    "opposition": "部分人把他视为无数死者的公共容器，要求他放弃私人生活和身体决定权",
+    "turn": "韩灯以连续行动、当下意愿和可追责记录证明他是独立人格，不是可被征用档案",
+    "cost": "顾砚舟仍接受保管公共索引的有限义务，却失去继承任何旧身份财产的资格",
+    "payoff": "身份谜线从‘他是谁’落到‘他选择承担什么且仍拥有什么边界’",
+    "new_question": "作为独立人格，他是否愿意主动放弃唯一执录权？",
+    "event_ids": [
+      "EV-23"
+    ],
+    "plot_thread_ids": [
+      "TH-IDENTITY",
+      "TH-HAN",
+      "TH-BLANK"
+    ],
+    "depends_on_chapters": [
+      2,
+      59,
+      88
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 90,
+    "volume_no": 6,
+    "title": "互斥终局",
+    "active_driver": "CHAR-LUO",
+    "involved_character_ids": [
+      "CHAR-LUO",
+      "CHAR-GU",
+      "CHAR-NING",
+      "CHAR-ZHU",
+      "CHAR-SANG",
+      "CHAR-HELIAN"
+    ],
+    "goal": "把三种终局方案及各自不可逆损失交给所有署名者选择",
+    "opposition": "方案互斥且不存在人人受益的合并版，洛弥生若披露第三未来会暴露自己的私人选择",
+    "turn": "她公开第三未来：自己留在天衡中承担长期见证，而不是预言中的死亡或背叛",
+    "cost": "团队必须接受她可能与众人分离，亲密关系也不能成为否决其选择的理由",
+    "payoff": "被删第三未来完整回归，预言从悬念工具转成角色自主承担的方案",
+    "new_question": "各界选择不同终局时，系统如何不靠多数票压掉少数方案？",
+    "event_ids": [
+      "EV-23"
+    ],
+    "plot_thread_ids": [
+      "TH-LUO",
+      "TH-RELATION",
+      "TH-TIANHENG"
+    ],
+    "depends_on_chapters": [
+      36,
+      48,
+      89
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 91,
+    "volume_no": 6,
+    "title": "已死之人的票",
+    "active_driver": "CHAR-NING",
+    "involved_character_ids": [
+      "CHAR-NING",
+      "CHAR-GU",
+      "CHAR-HAN",
+      "CHAR-SANG"
+    ],
+    "goal": "决定顾砚舟能否作为独立人格参与终局署名而非仅作公共设备",
+    "opposition": "允许他投票可能让其活索引权重过大，禁止又复制王庭以记录抹除人的逻辑",
+    "turn": "宁照霜提出一人一票与索引托管分离，顾砚舟只以个人身份投票且回避托管方案表决",
+    "cost": "他的个人票无法决定结果，最偏爱的方案暂时落后",
+    "payoff": "已死身份线兑现：人格被承认，但没有因此获得救世主特权",
+    "new_question": "若最终方案不是顾砚舟愿意承担的，他是否仍须开放体内索引？",
+    "event_ids": [
+      "EV-23"
+    ],
+    "plot_thread_ids": [
+      "TH-IDENTITY",
+      "TH-NING",
+      "TH-RELATION"
+    ],
+    "depends_on_chapters": [
+      89,
+      90
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 92,
+    "volume_no": 6,
+    "title": "白页公开",
+    "active_driver": "CHAR-GU",
+    "involved_character_ids": [
+      "CHAR-GU",
+      "CHAR-LUO",
+      "CHAR-NING",
+      "CHAR-ZHU",
+      "CHAR-SANG",
+      "CHAR-HELIAN",
+      "CHAR-HAN",
+      "CHAR-WEN"
+    ],
+    "goal": "放弃私人执录权，让被删选择由当事人与公共协议共同见证",
+    "opposition": "公开会让归零波读到全部差异并立即加速，也会永久带走顾砚舟部分个人记忆",
+    "turn": "顾砚舟在完全知情且可中止的见证下开启索引，不给自己保留秘密恢复钥匙",
+    "cost": "天衡失去唯一终局控制；他保住人格连续，却再也记不起几段珍贵相处",
+    "payoff": "核心神器公共化，身份、缺页和第三未来三线在同一选择中汇合",
+    "new_question": "当不同世界同时用公开选择要求互斥结果，众签门该怎样裁决？",
+    "event_ids": [
+      "EV-23"
+    ],
+    "plot_thread_ids": [
+      "TH-BLANK",
+      "TH-IDENTITY",
+      "TH-LUO",
+      "TH-RELATION"
+    ],
+    "depends_on_chapters": [
+      80,
+      88,
+      90,
+      91
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 93,
+    "volume_no": 6,
+    "title": "三路署名",
+    "active_driver": "CHAR-ZHU",
+    "involved_character_ids": [
+      "CHAR-ZHU",
+      "CHAR-NING",
+      "CHAR-LUO",
+      "CHAR-SANG",
+      "CHAR-HAN",
+      "CHAR-GU"
+    ],
+    "goal": "让选择三种互斥终局的世界同时保有可执行路径",
+    "opposition": "炉心只能支持两路，强行兼容第三路会让全部方案一起崩溃",
+    "turn": "祝红翎公开能源缺口并发起带条件交换，一批拒绝者自愿提供临时航道但不加入制度",
+    "cost": "第三路获得窗口，却必须放弃一处已被归零包围的资源锚点",
+    "payoff": "市场机制被重新约束为知情交换，而不是由强者定价的万能答案",
+    "new_question": "闻观鹤若关闭最后的天衡核心，三路还能否各自完成？",
+    "event_ids": [
+      "EV-23",
+      "EV-24"
+    ],
+    "plot_thread_ids": [
+      "TH-ZHU",
+      "TH-SANG",
+      "TH-TIANHENG"
+    ],
+    "depends_on_chapters": [
+      92
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 94,
+    "volume_no": 6,
+    "title": "最后一页之后",
+    "active_driver": "CHAR-NING",
+    "involved_character_ids": [
+      "CHAR-NING",
+      "CHAR-ZHU",
+      "CHAR-LUO",
+      "CHAR-SANG",
+      "CHAR-HELIAN",
+      "CHAR-GU"
+    ],
+    "goal": "在终战前确认主要关系于记忆损失、长期分离和公共职责后的真实形式",
+    "opposition": "过去的承诺已被失忆和选择改变，任何‘永远一起’都会掩盖不同去向",
+    "turn": "六人分别重述愿望与边界：有人同住、有人远行、有人保持恋爱但退出共同决策",
+    "cost": "关系没有整齐收束为同一种亲密；顾砚舟必须接受自己不再记得部分共同经历",
+    "payoff": "关系线在终局前完成长期议价，爱不替代个人道路也不因分离自动失效",
+    "new_question": "当赫连夜阑面对最高权限，私人承诺会不会成为她拒绝或接受的理由？",
+    "event_ids": [
+      "EV-24"
+    ],
+    "plot_thread_ids": [
+      "TH-RELATION",
+      "TH-NING",
+      "TH-ZHU",
+      "TH-LUO",
+      "TH-SANG",
+      "TH-HELIAN"
+    ],
+    "depends_on_chapters": [
+      93
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  },
+  {
+    "chapter_no": 95,
+    "volume_no": 6,
+    "title": "无人居首",
+    "active_driver": "CHAR-HELIAN",
+    "involved_character_ids": [
+      "CHAR-HELIAN",
+      "CHAR-WEN",
+      "CHAR-GU",
+      "CHAR-LUO",
+      "CHAR-HAN"
+    ],
+    "goal": "夺回天衡核心控制并阻止闻观鹤关闭三路署名",
+    "opposition": "闻观鹤败退前把最高权限转给赫连夜阑，只有她能立即停止归零",
+    "turn": "她先用权限暂停归零一息，随即按预置协议把控制拆给见证、执行、审计和退出四方",
+    "cost": "拆分期间多处世界永久受损，闻观鹤也拒绝以个人悔悟换取免责",
+    "payoff": "高潮由有限临时权和主动放权完成，而不是更善良的人继承王座",
+    "new_question": "没有最高权限后，谁来处理第一场四方意见完全相反的新危机？",
+    "event_ids": [
+      "EV-24"
+    ],
+    "plot_thread_ids": [
+      "TH-HELIAN",
+      "TH-TIANHENG",
+      "TH-HAN"
+    ],
+    "depends_on_chapters": [
+      75,
+      85,
+      94
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得在章末把信息、关系、资源与可用选择全部恢复到章初"
+    ]
+  },
+  {
+    "chapter_no": 96,
+    "volume_no": 6,
+    "title": "众签门",
+    "active_driver": "CHAR-HELIAN",
+    "involved_character_ids": [
+      "CHAR-HELIAN",
+      "CHAR-GU",
+      "CHAR-NING",
+      "CHAR-ZHU",
+      "CHAR-LUO",
+      "CHAR-SANG",
+      "CHAR-HAN",
+      "CHAR-WEN"
+    ],
+    "goal": "让可审计、可退出、无单人最高权限的众签协议度过第一次完整结算",
+    "opposition": "三路方案产生冲突结果，闻观鹤要求以失败证明旧基线必要，居民则要求立刻选出新领袖",
+    "turn": "赫连夜阑拒绝继承最高位，各方按公开规则承担各自损失并保留下一轮修订权",
+    "cost": "全域归零停止但部分世界无法复原；众人获得继续争论、相爱、分离与犯错的未来",
+    "payoff": "全书主题与六卷机制汇合：自由不是无代价，而是无人替你选择代价且责任可追",
+    "new_question": "下一次有人拒绝现有协议时，新的共同体能否继续保护异议而不忘记这次伤亡？",
+    "event_ids": [
+      "EV-24"
+    ],
+    "plot_thread_ids": [
+      "TH-RELATION",
+      "TH-TIANHENG",
+      "TH-BLANK",
+      "TH-IDENTITY",
+      "TH-HELIAN"
+    ],
+    "depends_on_chapters": [
+      81,
+      86,
+      92,
+      95
+    ],
+    "forbidden_outcomes": [
+      "不得以巧合、临时新增能力或未登记的外援无代价解决本章冲突",
+      "不得替未在场者作出永久签署、撤回或身体关系决定",
+      "不得用解释性总结代替人物行动、选择和可观察的状态变化",
+      "不得把沉默、服从、受困或权力差解释为同意"
+    ]
+  }
+]

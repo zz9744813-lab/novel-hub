@@ -586,7 +586,7 @@ async def call_agent(
     await _record_health_signals(attempts)
 
     # v9.7 §25: AI-Tone lint on draft output — diagnosis only, never a rewrite.
-    if agent_role in ("draft_writer", "local_rewrite") and publishable:
+    if agent_role in ("draft_writer", "local_rewrite", "local_rewrite_editor") and publishable:
         await _run_ai_tone_lint(
             book_id=book_id,
             agent_role=agent_role,

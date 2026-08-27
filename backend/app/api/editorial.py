@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 
 from arq import create_pool
 from arq.connections import RedisSettings
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -797,11 +797,15 @@ async def patch_annotation(
     return _ann_out(ann)
 
 
-@router.delete("/editorial/annotations/{annotation_id}", status_code=204)
+@router.delete(
+    "/editorial/annotations/{annotation_id}",
+    status_code=204,
+    response_class=Response,
+)
 async def delete_annotation(
     annotation_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-) -> None:
+) -> Response:
     ann = (
         await db.execute(
             select(EditorialAnnotation).where(EditorialAnnotation.id == annotation_id)
@@ -811,6 +815,7 @@ async def delete_annotation(
         raise HTTPException(status_code=404, detail="annotation not found")
     await db.delete(ann)
     await db.commit()
+    return Response(status_code=204)
 
 
 # ── AI issue disposition (spec §86, §19–§21) ──────────────────────────

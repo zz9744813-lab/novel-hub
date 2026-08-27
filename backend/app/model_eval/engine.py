@@ -36,9 +36,9 @@ from app.model_eval.evidence import (
     suite_aggregate_hash,
 )
 from app.model_eval.suite_definitions import (
-    PRODUCTION_ROLES,
+    ROUTABLE_ROLES,
     SUITE_VERSION,
-    V98_SUITE_KEYS,
+    qualification_role_for,
     v98_suite_definitions,
 )
 from app.models import (
@@ -567,8 +567,9 @@ async def _persist_role_scores(
         )
     ).scalars().all()
     by_role = {row.agent_role: row for row in rows}
-    for role in PRODUCTION_ROLES:
-        detail = roles.get(role) or {}
+    for role in ROUTABLE_ROLES:
+        evidence_role = qualification_role_for(role)
+        detail = roles.get(evidence_role) or {}
         row = by_role.get(role)
         if row is None:
             row = ModelRoleScore(
@@ -591,6 +592,8 @@ async def _persist_role_scores(
             **(row.detail_json or {}),
             "qualification": {
                 **detail,
+                "evidence_role": evidence_role,
+                "reused_for_auxiliary_role": evidence_role != role,
                 "evidence_key": evidence_key,
                 "source_run_id": str(source_run_id),
                 "evaluator_revision": ABILITY_EVALUATOR_REVISION,
@@ -1240,8 +1243,12 @@ async def get_catalog_evidence_state(
         )
     ).scalars().all()
     role_evidence = {}
-    for role in PRODUCTION_ROLES:
-        row = next((item for item in role_rows if item.agent_role == role), None)
+    for role in ROUTABLE_ROLES:
+        evidence_role = qualification_role_for(role)
+        # The directly-qualified row is the source of truth.  This also makes
+        # old one-time evidence immediately reusable after a new auxiliary role
+        # is introduced; no retest is needed merely to create an alias row.
+        row = next((item for item in role_rows if item.agent_role == evidence_role), None)
         current = bool(
             row
             and state["ability"]["state"] == "valid"
@@ -1254,6 +1261,8 @@ async def get_catalog_evidence_state(
             "passed": bool(row.benchmark_passed) if current else False,
             "evidence_key": row.benchmark_evidence_key if row else None,
             "source_run_id": str(row.benchmark_source_run_id) if row and row.benchmark_source_run_id else None,
+            "evidence_role": evidence_role,
+            "reused_for_auxiliary_role": evidence_role != role,
         }
     profile = await _context_profile_for(db, catalog.id)
     state["endpoint_identity_hash"] = endpoint_hash

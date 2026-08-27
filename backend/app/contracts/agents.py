@@ -204,6 +204,16 @@ class DriftAuditContract(StrictModel):
     redline_findings: list[Any] = Field(default_factory=list)
 
 
+class MemorySummaryContract(StrictModel):
+    summary_type: Literal["l2_stage", "l3_volume"]
+    stage_goal: str = Field(min_length=1)
+    conflict_changes: list[str]
+    character_arcs: list[str]
+    state_changes: list[str]
+    open_questions: list[str]
+    next_constraints: list[str]
+
+
 # ── v9.2 style analyzer (spec §44) ─────────────────────────────────
 
 # Semantic dimensions are judgment outputs; allow int→float coercion and
@@ -269,6 +279,7 @@ ROLE_CONTRACTS: dict[str, Type[BaseModel]] = {
     "outline_parser": OutlineParseContract,
     "blank_planner": BlankPlanningContract,
     "drift_audit": DriftAuditContract,
+    "memory_compiler": MemorySummaryContract,
     "style_analyzer": StyleAnalyzerContract,
     # research_synth / aileak_judge: soft — no strict contract yet
 }

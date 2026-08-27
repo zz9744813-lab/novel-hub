@@ -14,6 +14,7 @@ from datetime import datetime, timezone, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.registry import ROLE_REGISTRY, required_roles
 from app.model_autopilot.capability import DEFAULT_ROLE_QUALITY_FLOOR, required_context_for
 from app.model_autopilot.catalog import ensure_capability_for_catalog, sync_catalog_from_provider
 from app.model_autopilot.health import upsert_health_snapshot
@@ -31,13 +32,7 @@ from app.models import (
 logger = logging.getLogger("novelforge.model_autopilot.preflight")
 
 # Roles routed during preflight (spec §64/§42).
-PREFLIGHT_ROLES = [
-    "chapter_planner",
-    "draft_writer",
-    "review_agent",
-    "state_extractor",
-    "style_analyzer",
-]
+PREFLIGHT_ROLES = required_roles()
 
 # Context estimates per role (defaults; real estimates could come from the ctx assembler).
 ROLE_CONTEXT_ESTIMATE = {
@@ -46,6 +41,13 @@ ROLE_CONTEXT_ESTIMATE = {
     "review_agent": (60000, 10000),
     "state_extractor": (40000, 8000),
     "style_analyzer": (30000, 6000),
+    "outline_parser": (70000, 10000),
+    "blank_planner": (60000, 10000),
+    "local_rewrite_editor": (20000, 6000),
+    "drift_audit": (80000, 10000),
+    "query_planner": (40000, 8000),
+    "evidence_ranker": (35000, 8000),
+    "memory_compiler": (44000, 8000),
 }
 
 UNKNOWN = "unknown"
@@ -200,7 +202,11 @@ async def run_model_preflight(
     roles_result = {}
     blockers = []
     for role in PREFLIGHT_ROLES:
-        est_in, est_out = ROLE_CONTEXT_ESTIMATE.get(role, (50000, 8000))
+        expected = ROLE_REGISTRY[role].expected_context_tokens
+        est_in, est_out = ROLE_CONTEXT_ESTIMATE.get(
+            role,
+            (max(8000, int(expected * 0.75)), max(4000, int(expected * 0.10))),
+        )
         required_ctx = required_context_for(est_in, est_out, 0)
         result = await build_role_route(
             db,

@@ -107,13 +107,14 @@ async def upsert_health_snapshot(db: AsyncSession, catalog_id: uuid.UUID) -> Mod
     snap.p95_latency_ms = _percentile([r.latency_ms for r in ping_rows], 0.95)
 
     snap.consecutive_failures = 0
-    if prod_rows:
-        for r in prod_rows[:20]:
+    reliability_rows = prod_rows if prod_rows else l1_ok
+    if reliability_rows:
+        for r in reliability_rows[:20]:
             if r.status == "ok":
                 break
             snap.consecutive_failures += 1
-        last_ok = next((r for r in prod_rows if r.status == "ok"), None)
-        last_fail = next((r for r in prod_rows if r.status != "ok"), None)
+        last_ok = next((r for r in reliability_rows if r.status == "ok"), None)
+        last_fail = next((r for r in reliability_rows if r.status != "ok"), None)
         snap.last_success_at = last_ok.started_at if last_ok else None
         snap.last_failure_at = last_fail.started_at if last_fail else None
     if l1_ok:
@@ -124,7 +125,8 @@ async def upsert_health_snapshot(db: AsyncSession, catalog_id: uuid.UUID) -> Mod
 
     recent_probe_ok = None
     if l1_ok[:3]:
-        recent_probe_ok = sum(1 for r in l1_ok[:3] if r.status == "ok") / 3
+        recent = l1_ok[:3]
+        recent_probe_ok = sum(1 for r in recent if r.status == "ok") / len(recent)
 
     last_probe_status = l1_ok[0].status if l1_ok else None
     last_error = l1_ok[0].error_code if l1_ok and l1_ok[0].status != "ok" else None

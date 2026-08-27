@@ -17,6 +17,21 @@ from app.models import ModelCapabilityProfile, ModelCatalog
 
 logger = logging.getLogger("novelforge.model_autopilot.catalog")
 
+_SENSITIVE_METADATA_PARTS = ("api_key", "apikey", "token", "secret", "password", "authorization")
+
+
+def _safe_provider_metadata(value):
+    """Remove credential-shaped fields before provider data reaches JSONB."""
+    if isinstance(value, dict):
+        return {
+            str(key): _safe_provider_metadata(item)
+            for key, item in value.items()
+            if not any(part in str(key).casefold() for part in _SENSITIVE_METADATA_PARTS)
+        }
+    if isinstance(value, list):
+        return [_safe_provider_metadata(item) for item in value]
+    return value
+
 
 async def _get_provider_models(base_url: str, api_key: str) -> list[dict]:
     """GET {base}/models — returns raw model objects or raises."""
@@ -49,7 +64,11 @@ async def sync_catalog_from_provider(
         return result
 
     now = datetime.now(timezone.utc)
-    seen_ids = [str(i.get("id") or i.get("model") or i.get("name")) for i in items]
+    seen_ids = [
+        str(raw_id)
+        for item in items
+        if (raw_id := item.get("id") or item.get("model") or item.get("name"))
+    ]
 
     catalog_rows = (
         (await db.execute(select(ModelCatalog).where(ModelCatalog.provider == provider)))
@@ -61,9 +80,11 @@ async def sync_catalog_from_provider(
     from app.model_autopilot.classification import classify_catalog_model
 
     for item in items:
-        model_id = str(item.get("id") or item.get("model") or item.get("name"))
-        if not model_id:
+        raw_model_id = item.get("id") or item.get("model") or item.get("name")
+        if not raw_model_id:
             continue
+        model_id = str(raw_model_id)
+        safe_item = _safe_provider_metadata(item)
         existing = by_model.get(model_id)
         if existing is None:
             # spec §58: brand-new models must NOT enter auto-route… except
@@ -78,11 +99,15 @@ async def sync_catalog_from_provider(
                 availability_status="available",
                 discovery_source="provider_api",
                 auto_route_enabled=seeded,
-                metadata_json=item,
+                metadata_json=safe_item,
             )
             classify_catalog_model(catalog)
             db.add(catalog)
             await db.flush()
+            # v9.8 (P0-3): compute & store the SAFE endpoint identity hash from
+            # the real normalized base URL / routing endpoint (never an optional
+            # metadata field that is never auto-filled; never a secret).
+            await _refresh_endpoint_identity(db, catalog, base_url=base_url)
             await ensure_capability_for_catalog(db, catalog)
             result["new"] += 1
         else:
@@ -98,6 +123,14 @@ async def sync_catalog_from_provider(
             if not existing.auto_route_enabled and seed_for_model(model_id) is not None:
                 existing.auto_route_enabled = True
             existing.last_seen_at = now
+            existing.metadata_json = {
+                **_safe_provider_metadata(dict(existing.metadata_json or {})),
+                **safe_item,
+            }
+            # v9.8 (P0-3): refresh the SAFE endpoint identity hash on every sync
+            # so a base-url / routing-endpoint change is captured; an API-key
+            # change does NOT alter the hash.
+            await _refresh_endpoint_identity(db, existing, base_url=base_url)
 
     for catalog in catalog_rows:
         if catalog.model_id in seen_ids:
@@ -143,3 +176,41 @@ async def ensure_capability_for_catalog(db: AsyncSession, catalog: ModelCatalog)
     db.add(profile)
     await db.flush()
     return profile
+
+
+async def _refresh_endpoint_identity(
+    db: AsyncSession,
+    catalog: ModelCatalog,
+    *,
+    base_url: str | None = None,
+) -> None:
+    """Compute and persist the SAFE endpoint identity hash for one catalog.
+
+    Uses the real normalized provider base URL / routing endpoint (task裁定 #8).
+    API-key changes do NOT change the hash; base-URL / routing-endpoint changes
+    DO. The result is stored in catalog.metadata_json["endpoint_identity_hash"]
+    so it is auditable and stable. No secret is persisted.
+    """
+    del db
+    from app.model_eval.evidence import (
+        compute_endpoint_identity_hash,
+        compute_upstream_identity_hash,
+        normalize_endpoint,
+    )
+
+    meta = dict(catalog.metadata_json or {})
+    effective_base_url = base_url or meta.get("base_url") or meta.get("provider_base_url")
+    routing = meta.get("routing_endpoint")
+    eh = compute_endpoint_identity_hash(base_url=effective_base_url, routing_endpoint=routing)
+    uh = compute_upstream_identity_hash(
+        owned_by=meta.get("owned_by"),
+        created=meta.get("created"),
+        upstream_revision=meta.get("upstream_revision"),
+    )
+    catalog.endpoint_identity_hash = eh
+    catalog.upstream_identity_hash = uh
+    meta["endpoint_identity_hash"] = eh
+    meta["upstream_identity_hash"] = uh
+    if effective_base_url:
+        meta["endpoint_normalized"] = normalize_endpoint(effective_base_url)
+    catalog.metadata_json = meta

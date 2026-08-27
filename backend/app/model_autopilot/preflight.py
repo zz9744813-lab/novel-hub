@@ -23,6 +23,7 @@ from app.model_autopilot.scoring import compute_role_score
 from app.models import (
     AgentModelBinding,
     ModelCatalog,
+    ModelHealthSnapshot,
     ModelRoutePlan,
     WritingSession,
 )
@@ -89,7 +90,7 @@ async def bootstrap_catalog_and_probes() -> dict:
     """
     from app.database import async_session_factory
 
-    report = {"providers": 0, "probed": 0}
+    report = {"providers": 0, "probed": 0, "skipped_fresh": 0, "errors": []}
     for provider, base_url, api_key in await _provider_sync_list_for_network():
         try:
             async with async_session_factory() as db:
@@ -100,34 +101,59 @@ async def bootstrap_catalog_and_probes() -> dict:
                 report["providers"] += 1
         except Exception as e:  # noqa: BLE001
             logger.warning("catalog sync skipped for %s: %s", provider, e)
-            await db.rollback()
-    # probe eligible candidates (L1 ping, limited). Deadlock fix: probe
-    # auto-route models AND seed-known ones — otherwise a fresh catalog has
-    # zero candidates and zero probes forever (spec §30 step 3).
-    catalogs = list(
-        (
-            await db.execute(
-                select(ModelCatalog).where(ModelCatalog.enabled.is_(True), ModelCatalog.availability_status == "available")
-            )
-        )
-        .scalars()
-        .all()
-    )
-    from app.model_autopilot.seed import seed_for_model
+            report["errors"].append({"provider": provider, "phase": "catalog_sync", "error": type(e).__name__})
 
-    probe_targets = [
-        c for c in catalogs
-        if c.auto_route_enabled or seed_for_model(c.model_id) is not None
-    ][:6]
-    for catalog in probe_targets:
-        try:
-            probe = await probe_model_ping(db, catalog)
-            db.add(probe)
-            await upsert_health_snapshot(db, catalog.id)
-            report["probed"] += 1
-        except Exception as e:  # noqa: BLE001
-            logger.debug("probe skipped %s/%s: %s", catalog.provider, catalog.model_id, e)
-    await db.commit()
+    # Probe only due text-generation candidates.  The session remains valid for
+    # this phase even when no provider was configured above.
+    ttl_seconds = int(os.environ.get("MODEL_PREWRITE_HEALTH_TTL_SECONDS", "300"))
+    probe_limit = int(os.environ.get("MODEL_PREFLIGHT_PROBE_LIMIT", "12"))
+    fresh_after = datetime.now(timezone.utc) - timedelta(seconds=ttl_seconds)
+    async with async_session_factory() as db:
+        catalogs = list(
+            (
+                await db.execute(
+                    select(ModelCatalog).where(
+                        ModelCatalog.enabled.is_(True),
+                        ModelCatalog.availability_status == "available",
+                        ModelCatalog.text_generation_eligible.is_(True),
+                    )
+                )
+            ).scalars().all()
+        )
+        candidates = [catalog for catalog in catalogs if catalog.auto_route_enabled]
+        candidates.sort(key=lambda catalog: (catalog.provider, catalog.model_id))
+        for catalog in candidates[:probe_limit]:
+            snapshot = (
+                await db.execute(
+                    select(ModelHealthSnapshot).where(
+                        ModelHealthSnapshot.model_catalog_id == catalog.id
+                    )
+                )
+            ).scalar_one_or_none()
+            last_probe = snapshot.last_probe_at if snapshot else None
+            if last_probe is not None and last_probe.tzinfo is None:
+                last_probe = last_probe.replace(tzinfo=timezone.utc)
+            if last_probe is not None and last_probe >= fresh_after:
+                report["skipped_fresh"] += 1
+                continue
+            try:
+                probe = await probe_model_ping(db, catalog)
+                db.add(probe)
+                await db.flush()
+                await upsert_health_snapshot(db, catalog.id)
+                await db.commit()
+                report["probed"] += 1
+            except Exception as e:  # noqa: BLE001
+                await db.rollback()
+                logger.warning("prewrite probe failed %s/%s: %s", catalog.provider, catalog.model_id, e)
+                report["errors"].append(
+                    {
+                        "provider": catalog.provider,
+                        "model": catalog.model_id,
+                        "phase": "l1_ping",
+                        "error": type(e).__name__,
+                    }
+                )
     return report
 
 
@@ -144,6 +170,10 @@ async def run_model_preflight(
 ) -> dict:
     """Execute the DB-only core of preflight inside the caller's transaction (spec §30 steps 4–10)."""
     now = datetime.now(timezone.utc)
+    from app.model_eval.engine import ensure_v98_suites
+
+    await ensure_v98_suites(db)
+    await db.flush()
     policy = await policy_from_db(db, binding.routing_policy_id if binding else None)
 
     catalog_rows = list(

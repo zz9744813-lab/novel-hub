@@ -1,8 +1,8 @@
 """v9.6: model detection / one-click autoconfigure jobs (spec §94–§99, §38–§41).
 
-run_model_detection   — sync → health → performance → capability → quick
-                        benchmark → RoleScore → recommendation (never changes
-                        current config).
+run_model_detection   — sync → due lightweight health → capability → read the
+                        versioned evidence state → recommendation (never runs
+                        ability/context/performance generation).
 run_model_autoconfigure — reuse ≤30min detection (or run one), snapshot,
                         atomically apply every required role binding, verify,
                         ModelChangeLog, then success. Any required-role gap
@@ -13,6 +13,7 @@ Both write progress to model_autoconfig_runs so the UI shows real phases.
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from datetime import datetime, timezone, timedelta
 
@@ -22,18 +23,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.model_autopilot.catalog import ensure_capability_for_catalog, sync_catalog_from_provider
 from app.model_autopilot.capability import DEFAULT_ROLE_QUALITY_FLOOR
 from app.model_autopilot.health import upsert_health_snapshot
-from app.model_autopilot.probe import probe_model_ping, probe_model_performance
+from app.model_autopilot.probe import probe_model_ping
 from app.model_autopilot.router import build_role_route, default_policy_for
 from app.model_autopilot.scoring import compute_role_score
-from app.model_autopilot.classification import TEXT_KINDS, eligible_text_candidates, classify_catalog_model
-from app.model_autopilot.seed import seed_for_model
+from app.model_autopilot.classification import eligible_text_candidates
 from app.models import (
     AgentModelBinding,
     ModelAutoConfigRun,
     ModelCatalog,
 
     ModelChangeLog,
-    ModelHealthProbe,
     ModelHealthSnapshot,
 )
 
@@ -86,62 +85,18 @@ async def _get_models(db: AsyncSession) -> list[ModelCatalog]:
     )
 
 
-# ── quick benchmark (spec §38–§40) ──
-
-
-async def run_quick_role_benchmark(db: AsyncSession, catalog: ModelCatalog, role: str) -> float | None:
-    """One lightweight role probe (top models only, per spec §38). Returns 0-100 or None."""
-    from app.gateway.model_gateway import stream_completion_and_collect
-
-    tasks = {
-        "draft_writer": (
-            "写一句对白：角色“沈砚”用拒绝的语气回应“陆晚”的邀约。只输出对白。",
-            lambda s: "沈砚" in s and any(k in s for k in ("不", "没", "别", "不必")),
-        ),
-        "review_agent": (
-            "找出下面这句话里的逻辑错误并指出：\"他在下雨前到了家，因为路上被雨淋湿了。\"",
-            lambda s: any(k in s for k in ("淋", "时间", "先", "顺序")),
-        ),
-        "state_extractor": (
-            "提取关键信息(JSON,字段:人名,是否进入宗门):\"张三拒绝进入青云宗。\"",
-            lambda s: ("张三" in s and "JSON" in s.upper() or "{" in s) and ("拒绝" in s or "否" in s),
-        ),
-        "chapter_planner": (
-            "判断因果顺序(A先于B?):A.推倒多米诺 B.多米诺倒下。只回答\"是\"或\"否\"。",
-            lambda s: "是" in s and "否" not in s[:2],
-        ),
-        "style_analyzer": (
-            "这段文字的风格是?一选一:悲伤/悬疑/温暖:门缝里透出的光像一柄钝刀。",
-            lambda s: any(k in s for k in ("悬疑", "悲伤")),
-        ),
-    }
-    task = tasks.get(role)
-    if task is None:
-        return None
-    prompt, judge = task
-    try:
-        result = await stream_completion_and_collect(
-            system_prompt=prompt,
-            user_content="",
-            model=catalog.model_id,
-            temperature=0,
-            max_tokens=64,
-            provider_role="primary",
-            provider=catalog.provider,
-        )
-        if not result.final_content or result.error:
-            return 0.0
-        return 100.0 if judge(result.final_content) else 40.0
-    except Exception as e:  # noqa: BLE001 - single model failure is isolated
-        logger.debug("benchmark failed %s/%s: %s", catalog.provider, catalog.model_id, e)
-        return 0.0
-
-
 # ── detection (spec §95) ──
 
 
 async def run_model_detection(db: AsyncSession, run: ModelAutoConfigRun) -> dict:
     from app.model_autopilot.preflight import _provider_sync_list
+    from app.model_autopilot.jobs import _probe_due
+    from app.model_eval.engine import (
+        ABILITY_EVALUATOR_REVISION,
+        CONTEXT_EVALUATOR_REVISION,
+        ensure_v98_suites,
+        get_catalog_evidence_state,
+    )
 
     now = datetime.now(timezone.utc)
     run.started_at = run.started_at or now
@@ -166,14 +121,19 @@ async def run_model_detection(db: AsyncSession, run: ModelAutoConfigRun) -> dict
     models = eligible_text_candidates(await _get_models(db))
     run.detected_models = len(models)
     run.total = len(models)
-    run.total = len(models)
 
-    # phases: health + performance per model (isolated per model, §99)
+    await ensure_v98_suites(db)
+    await db.commit()
+
+    # Routine detection performs only due L1 pings.  Performance and full
+    # capability generation are explicit/low-frequency jobs, never blockers.
     run.phase = "provider_check"
     run.progress = 15
     await db.commit()
 
     healthy = 0
+    health_ttl_seconds = int(os.environ.get("MODEL_PREWRITE_HEALTH_TTL_SECONDS", "300"))
+    health_interval_minutes = max(1, (health_ttl_seconds + 59) // 60)
     run.phase = "model_health"
     run.progress = 20
     await db.commit()
@@ -182,9 +142,21 @@ async def run_model_detection(db: AsyncSession, run: ModelAutoConfigRun) -> dict
         run.finished = idx
         run.progress = 20 + int(40 * (idx / max(1, len(models))))
         await db.commit()
+        if not await _probe_due(db, catalog, interval_minutes=health_interval_minutes):
+            snapshot = (
+                await db.execute(
+                    select(ModelHealthSnapshot).where(
+                        ModelHealthSnapshot.model_catalog_id == catalog.id
+                    )
+                )
+            ).scalar_one_or_none()
+            if snapshot and snapshot.health_status in ("healthy", "degraded"):
+                healthy += 1
+            continue
         try:
             probe = await probe_model_ping(db, catalog)
             db.add(probe)
+            await db.flush()
             await upsert_health_snapshot(db, catalog.id)
             await db.commit()
             snap = (
@@ -201,52 +173,38 @@ async def run_model_detection(db: AsyncSession, run: ModelAutoConfigRun) -> dict
             await db.rollback()
 
     run.healthy_models = healthy
-    run.phase = "performance_probe"
-    run.progress = 60
-    await db.commit()
-    for idx, catalog in enumerate(models):
-        run.current_model = f"perf:{catalog.model_id}"
-        run.progress = 60 + int(20 * (idx / max(1, len(models))))
-        await db.commit()
-        try:
-            probe = await probe_model_performance(db, catalog)
-            db.add(probe)
-            await db.commit()
-        except Exception as e:  # noqa: BLE001
-            logger.debug("perf probe failed %s: %s", catalog.model_id, e)
-            await db.rollback()
-
     run.phase = "capability"
-    run.progress = 82
+    run.progress = 70
     await db.commit()
     for catalog in models:
         await ensure_capability_for_catalog(db, catalog)
 
-    # quick benchmark on healthy + seed-known candidates (top per role)
-    run.phase = "role_benchmark"
+    # Detection and auto-configuration never run the expensive full
+    # qualification benchmark. They only reuse existing one-time
+    # ability evidence. Models without a valid ability_evaluation_key are
+    # reported with ``needs_qualification=True`` so the UI can prompt a
+    # deliberate /qualify run; the full suite is never started implicitly.
+    run.phase = "role_evidence"
     run.progress = 86
     await db.commit()
-    for role in REQUIRED_ROLES:
-        top4 = sorted(
-            (m for m in models if seed_for_model(m.model_id) is not None),
-            key=lambda m: -(m.display_name and 0) or 0,
-        )[:4]
-        for catalog in top4:
-            benchmark = await run_quick_role_benchmark(db, catalog, role)
-            from app.models import ModelRoleScore
-
-            row = (
-                await db.execute(
-                    select(ModelRoleScore).where(
-                        ModelRoleScore.model_catalog_id == catalog.id,
-                        ModelRoleScore.agent_role == role,
-                    )
-                )
-            ).scalar_one_or_none()
-            if row is not None:
-                row.benchmark_score = benchmark
-        await db.commit()
-    # recompute composite with benchmark in play
+    needs_qualification: list[str] = []
+    needs_qualification_detail: list[dict] = []
+    for catalog in models:
+        state = await get_catalog_evidence_state(db, catalog)
+        if state.get("ability", {}).get("state") != "valid":
+            needs_qualification.append(catalog.model_id)
+            needs_qualification_detail.append(
+                {
+                    "catalog_id": str(catalog.id),
+                    "provider": catalog.provider,
+                    "model": catalog.model_id,
+                    "state": state.get("ability", {}).get("state"),
+                    "reason": state.get("ability", {}).get("reason"),
+                    "changed_fields": state.get("ability", {}).get("changed_fields") or [],
+                }
+            )
+    # recompute composite; benchmark_score (if any prior qualification exists)
+    # is preserved by compute_role_score (v9.8 P0-2 fix) and folded in.
     for catalog in models:
         for role in REQUIRED_ROLES:
             await compute_role_score(db, catalog, role)
@@ -256,6 +214,12 @@ async def run_model_detection(db: AsyncSession, run: ModelAutoConfigRun) -> dict
     await db.commit()
 
     recommendation, eligible = await build_recommendation(db, models)
+    recommendation["needs_qualification"] = needs_qualification
+    recommendation["needs_qualification_detail"] = needs_qualification_detail
+    recommendation["evidence_revision"] = {
+        "ability": ABILITY_EVALUATOR_REVISION,
+        "context": CONTEXT_EVALUATOR_REVISION,
+    }
     run.eligible_models = eligible
     run.recommendation_json = recommendation
     run.phase = "done"
@@ -285,8 +249,9 @@ async def build_recommendation(db: AsyncSession, models: list[ModelCatalog]) -> 
         if result.assignment:
             eligible += 1
         recommendation[role] = {
-            **result.assignment,
+            **(result.assignment or {"primary": None, "fallbacks": []}),
             "minimum_quality_score": floor,
+            "blockers": result.blockers or [],
         }
     return recommendation, eligible
 

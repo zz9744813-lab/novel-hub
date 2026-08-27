@@ -545,8 +545,16 @@ export const api = {
     run: (runId: string) => fetchJSON<any>(`/api/model-setup/runs/${runId}`),
     current: () => fetchJSON<any>("/api/model-setup/current"),
     evalSuites: () => fetchJSON<any>("/api/model-setup/evaluation/suites"),
-    qualify: (catalogId: string) => fetchJSON<any>(`/api/model-setup/evaluation/models/${catalogId}/qualify`, { method: "POST" }),
-    contextCertify: (catalogId: string) => fetchJSON<any>(`/api/model-setup/evaluation/models/${catalogId}/context-certify`, { method: "POST" }),
+    evidence: () => fetchJSON<{ items: any[] }>("/api/model-setup/evaluation/evidence"),
+    qualify: (catalogId: string, force = false) =>
+      fetchJSON<any>(`/api/model-setup/evaluation/models/${catalogId}/qualify${force ? "?force=true" : ""}`, { method: "POST" }),
+    contextCertify: (catalogId: string, force = false) =>
+      fetchJSON<any>(`/api/model-setup/evaluation/models/${catalogId}/context-certify${force ? "?force=true" : ""}`, { method: "POST" }),
+    forceRetest: (catalogId: string) =>
+      fetchJSON<any>(`/api/model-setup/evaluation/models/${catalogId}/force-retest`, { method: "POST" }),
+    evalRun: (runId: string) => fetchJSON<any>(`/api/model-setup/evaluation/runs/${runId}`),
+    cancelEvalRun: (runId: string) =>
+      fetchJSON<{ cancelled: boolean }>(`/api/model-setup/evaluation/runs/${runId}/cancel`, { method: "POST" }),
     certification: (catalogId: string) => fetchJSON<any>(`/api/model-setup/evaluation/models/${catalogId}/certification`),
     contextProfile: (catalogId: string) => fetchJSON<any>(`/api/model-setup/evaluation/models/${catalogId}/context-profile`),
     recommendation: () => fetchJSON<any>("/api/model-setup/recommendation"),

@@ -900,6 +900,26 @@ class ModelCatalog(Base, TimestampMixin):
     benchmark_revision: Mapped[str | None] = mapped_column(String(40), nullable=True)
     last_certified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     evaluation_exclusion_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # v9.8: identity / ability evidence fingerprint (reuse & invalidation)
+    endpoint_identity_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    upstream_identity_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ability_evaluation_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    ability_identity_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ability_suite_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ability_evaluator_revision: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    ability_reuse_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    ability_source_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("model_eval_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    ability_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    context_evaluation_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    context_identity_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    context_suite_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    context_evaluator_revision: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    context_source_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("model_eval_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    context_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
@@ -987,6 +1007,14 @@ class ModelRoleScore(Base, TimestampMixin):
     agent_role: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     static_prior_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     benchmark_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # v9.8: ability evidence lineage for the persisted benchmark_score (P0-4).
+    # benchmark_score only contributes to the composite when its evidence key
+    # still matches the model's CURRENT valid ability key.
+    benchmark_evidence_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    benchmark_source_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("model_eval_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    benchmark_passed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     production_quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     human_quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     reliability_score: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -1917,5 +1945,4 @@ class EditorialExperiment(Base, TimestampMixin):
     recommendation: Mapped[str | None] = mapped_column(String(20), nullable=True)  # promote|hold|reject
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
 

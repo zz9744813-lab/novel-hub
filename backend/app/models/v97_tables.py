@@ -2,7 +2,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -149,13 +149,41 @@ class ModelEvalRun(Base, TimestampMixin):
     mode: Mapped[str] = mapped_column(String(20), nullable=False, default="qualification")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued", index=True)
     benchmark_revision: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # v9.8 evidence model: identity / suite / evaluator separation + reuse
+    ability_evaluation_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    ability_identity_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ability_suite_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ability_evaluator_revision: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    ability_source_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("model_eval_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    context_evaluation_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    context_identity_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    context_suite_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    context_evaluator_revision: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    context_source_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("model_eval_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    reuse_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)  # cache_hit|identity_changed|suite_changed|force|no_evidence
+    triggered_by: Mapped[str | None] = mapped_column(String(40), nullable=True)  # cache_hit|version_change|expiry|force
+    force_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    gateway_calls: Mapped[int | None] = mapped_column(Integer, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     overall_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     result_summary: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     cancel_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    __table_args__ = (Index("ix_model_eval_runs_model_status", "model_catalog_id", "status"),)
+    __table_args__ = (
+        Index("ix_model_eval_runs_model_status", "model_catalog_id", "status"),
+        Index(
+            "uq_model_eval_runs_active_claim",
+            "model_catalog_id",
+            "mode",
+            unique=True,
+            postgresql_where=text("status IN ('running', 'in_progress')"),
+        ),
+    )
 
 
 class ModelEvalCaseResult(Base, TimestampMixin):
@@ -191,3 +219,11 @@ class ModelContextProfile(Base, TimestampMixin):
     last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     benchmark_revision: Mapped[str | None] = mapped_column(String(40), nullable=True)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # v9.8: context evidence key (SEPARATE from ability evidence)
+    context_evaluation_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    context_identity_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    context_suite_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    context_evaluator_revision: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    context_source_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("model_eval_runs.id", ondelete="SET NULL"), nullable=True
+    )

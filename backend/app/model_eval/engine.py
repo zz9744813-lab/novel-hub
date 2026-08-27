@@ -373,6 +373,7 @@ async def _default_gateway(**kwargs):
         max_tokens=kwargs.get("max_tokens", 512),
         provider_role="primary",
         provider=kwargs.get("provider"),
+        reasoning_mode="disabled",
     )
 
 

@@ -74,6 +74,31 @@ RETRYABLE_ERRORS = {
 }
 
 
+def _generation_controls(
+    model: str,
+    *,
+    max_tokens: int | None,
+    reasoning_mode: str | None,
+) -> dict:
+    """Return provider-compatible optional generation controls.
+
+    GLM reasoning can be disabled for tiny probes and deterministic benchmark
+    cases.  Step 3-family APIs recommend omitting ``max_tokens`` because a cap
+    can consume the whole allowance in reasoning and return no final content.
+    Unknown model families retain the ordinary OpenAI-compatible payload.
+    """
+
+    normalized = str(model or "").strip().casefold()
+    controls: dict = {}
+    is_step_3 = normalized.startswith("step-3") or "/step-3" in normalized
+    if max_tokens is not None and not is_step_3:
+        controls["max_tokens"] = int(max_tokens)
+    is_glm = normalized.startswith("glm-") or "/glm-" in normalized
+    if is_glm and reasoning_mode in {"enabled", "disabled"}:
+        controls["thinking"] = {"type": reasoning_mode}
+    return controls
+
+
 def _get_provider_config(role: str = "primary", provider: str | None = None) -> dict:
     """Read provider config from environment per §2.7.
 
@@ -126,10 +151,11 @@ async def stream_completion_and_collect(
     user_content: str,
     model: str,
     temperature: float = 0.7,
-    max_tokens: int = 16384,
+    max_tokens: int | None = 16384,
     provider_role: str = "primary",
     provider: str | None = None,
     response_format: dict | None = None,
+    reasoning_mode: str | None = None,
 ) -> StreamResult:
     """Stream and collect all chunks from a single provider attempt."""
     config = _get_provider_config(provider_role, provider=provider)
@@ -145,8 +171,12 @@ async def stream_completion_and_collect(
             {"role": "user", "content": user_content},
         ],
         "temperature": temperature,
-        "max_tokens": max_tokens,
         "stream": True,
+        **_generation_controls(
+            model,
+            max_tokens=max_tokens,
+            reasoning_mode=reasoning_mode,
+        ),
     }
     if response_format:
         payload["response_format"] = response_format

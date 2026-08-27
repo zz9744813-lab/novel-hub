@@ -23,8 +23,8 @@ from app.model_eval.suite_definitions import (
 )
 
 
-ABILITY_EVALUATOR_REVISION = "v98-ability-3"
-CONTEXT_EVALUATOR_REVISION = "v98-context-4"
+ABILITY_EVALUATOR_REVISION = "v98-ability-4"
+CONTEXT_EVALUATOR_REVISION = "v98-context-5"
 _DIRECT_CONTEXT_REQUIRED_ROLES = {
     "chapter_planner",
     "draft_writer",

@@ -29,6 +29,13 @@ from .contracts import ProductionPack
 from .service import stable_id
 
 
+KNOWN_CONFIGURED_MODEL_ALIASES = {
+    ("new-api", "deepseek-v4-flash-free"): ("new-api", "deepseek-v4-flash"),
+    ("new-api", "z-ai/glm-5.2"): ("new-api", "glm-5.2"),
+    ("openrouter", "z-ai/glm-5.2"): ("new-api", "glm-5.2"),
+}
+
+
 async def _effective_targets(db, book_id: uuid.UUID) -> tuple[dict, list[str]]:
     service = ModelBindingService(db)
     targets: dict[tuple[str, str], set[str]] = defaultdict(set)
@@ -53,6 +60,66 @@ def _required_context(roles: set[str]) -> int:
     return required
 
 
+async def _reconcile_known_model_aliases(db, book_id: uuid.UUID) -> dict:
+    """Replace only exact, unavailable legacy IDs with discovered equivalents.
+
+    This runs solely inside the explicit production release command.  It never
+    guesses a model: both the legacy tuple and replacement are allow-listed,
+    and the replacement must be present in the live provider catalog.
+    """
+
+    catalogs = list(
+        (
+            await db.execute(
+                select(ModelCatalog).where(
+                    ModelCatalog.enabled.is_(True),
+                    ModelCatalog.availability_status == "available",
+                )
+            )
+        ).scalars().all()
+    )
+    available = {(catalog.provider, catalog.model_id) for catalog in catalogs}
+    service = ModelBindingService(db)
+    changed: list[dict] = []
+    unresolved: list[dict] = []
+    seen_bindings: set[uuid.UUID] = set()
+    for role in required_roles():
+        binding = await service.get_binding(role, book_id)
+        if binding is None or binding.id in seen_bindings:
+            continue
+        seen_bindings.add(binding.id)
+        current = (binding.provider, binding.primary_model)
+        target = KNOWN_CONFIGURED_MODEL_ALIASES.get(current)
+        if target is None or current in available:
+            continue
+        if target not in available:
+            unresolved.append(
+                {
+                    "role": role,
+                    "provider": current[0],
+                    "model": current[1],
+                    "target_provider": target[0],
+                    "target_model": target[1],
+                }
+            )
+            continue
+        await service.update_binding(
+            binding.id,
+            new_provider=target[0],
+            new_model=target[1],
+            reason="replace unavailable legacy model alias during production release",
+            changed_by="production_release",
+        )
+        changed.append(
+            {
+                "role": role,
+                "from": {"provider": current[0], "model": current[1]},
+                "to": {"provider": target[0], "model": target[1]},
+            }
+        )
+    return {"changed": changed, "unresolved": unresolved}
+
+
 async def ensure_configured_model_evidence(pack: ProductionPack) -> dict:
     """Create/reuse evidence for every model effectively bound to pack roles."""
 
@@ -71,6 +138,16 @@ async def ensure_configured_model_evidence(pack: ProductionPack) -> dict:
     await ensure_required_bindings()
     bootstrap = await bootstrap_catalog_and_probes()
     book_id = stable_id(pack.pack_id, "book", "root")
+
+    async with async_session_factory() as db:
+        reconciliation = await _reconcile_known_model_aliases(db, book_id)
+        await db.commit()
+    if reconciliation["changed"]:
+        # The first pass synchronized the provider catalogs.  Re-run the cheap
+        # handshake layer against the corrected bindings; fresh successful
+        # probes are reused and therefore do not repeat network work.
+        bootstrap = await bootstrap_catalog_and_probes()
+    bootstrap["binding_reconciliation"] = reconciliation
 
     async with async_session_factory() as db:
         targets, missing_bindings = await _effective_targets(db, book_id)

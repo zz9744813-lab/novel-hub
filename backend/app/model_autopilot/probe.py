@@ -86,6 +86,7 @@ async def probe_model_ping(db: AsyncSession, catalog: ModelCatalog) -> ModelHeal
             max_tokens=_health_probe_max_tokens(),
             provider_role="primary",
             provider=catalog.provider,
+            reasoning_mode="disabled",
         )
         probe.latency_ms = result.latency_ms
         probe.first_token_ms = result.first_token_ms  # measured TTFT (v9.6 §44)

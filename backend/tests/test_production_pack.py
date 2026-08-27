@@ -266,6 +266,9 @@ async def test_production_qualification_reuses_current_evidence_without_calls():
         "app.production_pack.model_evidence.bootstrap_catalog_and_probes",
         AsyncMock(return_value={"probed": 0, "skipped_fresh": 1, "errors": []}),
     ), patch(
+        "app.production_pack.model_evidence._reconcile_known_model_aliases",
+        AsyncMock(return_value={"changed": [], "unresolved": []}),
+    ), patch(
         "app.production_pack.model_evidence._effective_targets",
         AsyncMock(
             return_value=({("primary", "configured-writer"): {"draft_writer"}}, [])
@@ -291,6 +294,70 @@ async def test_production_qualification_reuses_current_evidence_without_calls():
     }
     ability.assert_awaited_once()
     context.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_release_reconciles_only_allowlisted_alias_to_discovered_model():
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from app.production_pack.model_evidence import _reconcile_known_model_aliases
+
+    binding = SimpleNamespace(
+        id=uuid.uuid4(),
+        provider="new-api",
+        primary_model="z-ai/glm-5.2",
+    )
+    target = ModelCatalog(
+        id=uuid.uuid4(),
+        provider="new-api",
+        model_id="glm-5.2",
+        enabled=True,
+        availability_status="available",
+    )
+
+    class Rows:
+        def scalars(self):
+            return self
+
+        def all(self):
+            return [target]
+
+    class Session:
+        async def execute(self, statement):
+            return Rows()
+
+    class Service:
+        def __init__(self):
+            self.updates = []
+
+        async def get_binding(self, role, book_id):
+            return binding
+
+        async def update_binding(self, binding_id, **changes):
+            self.updates.append((binding_id, changes))
+
+    service = Service()
+    with patch(
+        "app.production_pack.model_evidence.ModelBindingService",
+        return_value=service,
+    ), patch(
+        "app.production_pack.model_evidence.required_roles",
+        return_value=["draft_writer"],
+    ):
+        report = await _reconcile_known_model_aliases(Session(), uuid.uuid4())
+
+    assert report["unresolved"] == []
+    assert report["changed"] == [
+        {
+            "role": "draft_writer",
+            "from": {"provider": "new-api", "model": "z-ai/glm-5.2"},
+            "to": {"provider": "new-api", "model": "glm-5.2"},
+        }
+    ]
+    assert service.updates[0][1]["new_provider"] == "new-api"
+    assert service.updates[0][1]["new_model"] == "glm-5.2"
+    assert service.updates[0][1]["changed_by"] == "production_release"
 
 
 def test_every_key_event_is_present_at_its_declared_chapter():

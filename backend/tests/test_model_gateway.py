@@ -3,9 +3,32 @@ from app.gateway.model_gateway import (
     StreamResult,
     AttemptRecord,
     _strip_inline_reasoning,
+    _generation_controls,
     RETRYABLE_ERRORS,
     REASONING_FIELDS,
 )
+
+
+class TestGenerationControls:
+    def test_glm_benchmark_can_disable_reasoning(self):
+        assert _generation_controls(
+            "z-ai/glm-5.2", max_tokens=512, reasoning_mode="disabled"
+        ) == {
+            "max_tokens": 512,
+            "thinking": {"type": "disabled"},
+        }
+
+    def test_step_3_omits_truncating_output_cap(self):
+        assert _generation_controls(
+            "stepfun-ai/step-3.7-flash",
+            max_tokens=512,
+            reasoning_mode="disabled",
+        ) == {}
+
+    def test_unknown_model_keeps_standard_token_cap(self):
+        assert _generation_controls(
+            "deepseek-v4-flash", max_tokens=512, reasoning_mode="disabled"
+        ) == {"max_tokens": 512}
 
 
 class TestStreamResult:

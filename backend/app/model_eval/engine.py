@@ -9,7 +9,6 @@ from __future__ import annotations
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -507,13 +506,23 @@ async def _claim_run(
 
 
 async def _cancel_requested(db: AsyncSession, run: ModelEvalRun) -> bool:
+    # ``refresh`` starts a transaction.  A model request can legitimately take
+    # longer than PostgreSQL's ``idle_in_transaction_session_timeout``; leaving
+    # this read transaction open while the gateway runs makes PostgreSQL kill
+    # the connection and the eventual evidence commit fail with
+    # PendingRollbackError.  Capture the last known value, then always finish
+    # (or roll back) the tiny polling transaction before network I/O resumes.
+    cancelled = bool(run.cancel_requested)
     refresh = getattr(db, "refresh", None)
     if refresh is not None:
         try:
             await refresh(run, attribute_names=["cancel_requested"])
+            cancelled = bool(run.cancel_requested)
+            await db.commit()
+            return cancelled
         except Exception:
-            pass
-    return bool(run.cancel_requested)
+            await db.rollback()
+    return cancelled
 
 
 async def _persist_case_results(

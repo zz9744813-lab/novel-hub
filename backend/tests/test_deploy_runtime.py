@@ -21,8 +21,8 @@ def test_runtime_configs_are_baked_into_images_not_secret_adjacent_bind_mounts()
     redis_image = REDIS_DOCKERFILE.read_text(encoding="utf-8")
     release = RELEASE_SCRIPT.read_text(encoding="utf-8")
 
-    assert "image: novelforge-postgres:16" in compose
-    assert "image: novelforge-redis:7" in compose
+    assert "image: novelforge-postgres:16-config-v2" in compose
+    assert "image: novelforge-redis:7-config-v2" in compose
     assert "./postgres/postgresql.conf:/etc/postgresql" not in compose
     assert "./postgres/pg_hba.conf:/etc/postgresql" not in compose
     assert "./redis/redis.conf:/usr/local/etc/redis" not in compose

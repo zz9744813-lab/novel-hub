@@ -973,6 +973,88 @@ async def test_cancel_aborts_without_evidence():
     assert r["gateway_calls"] == 0
 
 
+@pytest.mark.asyncio
+async def test_cancel_poll_closes_read_transaction_before_slow_gateway():
+    class TransactionTrackingSession(FakeAsyncSession):
+        def __init__(self):
+            super().__init__()
+            self.read_transaction_open = False
+
+        async def refresh(self, instance, attribute_names=None):
+            self.read_transaction_open = True
+
+        async def commit(self):
+            await super().commit()
+            self.read_transaction_open = False
+
+        async def rollback(self):
+            await super().rollback()
+            self.read_transaction_open = False
+
+    db = TransactionTrackingSession()
+    cat = make_catalog()
+    db._table(ModelCatalog).append(cat)
+    run = make_run(catalog=cat)
+    db._table(ModelEvalRun).append(run)
+    await db.commit()
+
+    async def reasoning_only(**kwargs):
+        assert not db.read_transaction_open, (
+            "the cancellation poll transaction must be closed before gateway I/O"
+        )
+        return "", "final_content_empty"
+
+    result = await run_qualification(db, run, gateway=reasoning_only, force=True)
+
+    assert result["status"] == "failed"
+    assert result["error"] == "final_content_empty"
+    assert result["gateway_calls"] == 1
+    assert not db.read_transaction_open
+
+
+@pytest.mark.asyncio
+async def test_cancel_poll_rolls_back_poisoned_session_before_failure_persistence():
+    class PoisonedRefreshSession(FakeAsyncSession):
+        def __init__(self):
+            super().__init__()
+            self.pending_rollback = False
+            self.rollbacks = 0
+
+        async def refresh(self, instance, attribute_names=None):
+            self.pending_rollback = True
+            raise RuntimeError("connection terminated by idle transaction timeout")
+
+        async def commit(self):
+            if self.pending_rollback:
+                raise RuntimeError("PendingRollbackError")
+            await super().commit()
+
+        async def rollback(self):
+            self.rollbacks += 1
+            self.pending_rollback = False
+            await super().rollback()
+
+    db = PoisonedRefreshSession()
+    cat = make_catalog()
+    db._table(ModelCatalog).append(cat)
+    run = make_run(catalog=cat)
+    db._table(ModelEvalRun).append(run)
+    await db.commit()
+
+    async def reasoning_only(**kwargs):
+        return "", "final_content_empty"
+
+    result = await run_qualification(db, run, gateway=reasoning_only, force=True)
+
+    assert result["status"] == "failed"
+    assert result["error"] == "final_content_empty"
+    assert result["gateway_calls"] == 1
+    assert db.rollbacks == 1
+    assert not db.pending_rollback
+    assert run.result_summary["error"] == "final_content_empty"
+    await db.commit()  # the caller can continue using the session
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # 8. seed async, idempotent, deterministic; GET is read-only; old v1 not mixed
 # ═══════════════════════════════════════════════════════════════════════

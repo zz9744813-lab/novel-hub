@@ -285,11 +285,27 @@ async def ensure_configured_model_evidence(pack: ProductionPack) -> dict:
                     "ability_state": (state.get("ability") or {}).get("state"),
                     "ability_reused": bool(ability.get("reused")),
                     "ability_gateway_calls": int(ability.get("gateway_calls") or 0),
+                    "ability_result": {
+                        "status": ability.get("status"),
+                        "error": ability.get("error"),
+                        "reuse_reason": ability.get("reuse_reason"),
+                    },
                     "context_state": (state.get("context") or {}).get("state"),
                     "context_reused": bool((context or {}).get("reused")),
                     "context_gateway_calls": int((context or {}).get("gateway_calls") or 0),
                     "effective_context": effective_context,
                     "required_context": required_context or None,
+                    "role_scores": {
+                        role: {
+                            "state": detail.get("state"),
+                            "score": detail.get("score"),
+                            "passed": bool(detail.get("passed")),
+                            "evidence_role": detail.get("evidence_role"),
+                        }
+                        for role, detail in sorted(
+                            (state.get("role_evidence") or {}).items()
+                        )
+                    },
                 }
             )
 

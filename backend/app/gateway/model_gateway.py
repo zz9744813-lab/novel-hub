@@ -54,6 +54,7 @@ class StreamResult:
     actual_model: str = ""
     successful_attempt_no: int | None = None
     first_token_ms: int | None = None  # v9.6: measured TTFT, never latency/2
+    finish_reason: str | None = None
     attempts: list[AttemptRecord] = field(default_factory=list)
 
 
@@ -221,7 +222,10 @@ async def stream_completion_and_collect(
                             result.reasoning_tokens = usage.get("reasoning_tokens", 0)
                         continue
 
-                    delta = choices[0].get("delta", {})
+                    choice = choices[0]
+                    if choice.get("finish_reason") is not None:
+                        result.finish_reason = str(choice["finish_reason"])
+                    delta = choice.get("delta", {})
 
                     for field_name in REASONING_FIELDS:
                         val = delta.get(field_name)
@@ -303,7 +307,8 @@ async def stream_completion_and_collect(
         result.error = "final_content_empty"
         logger.warning(
             f"REASONING_ONLY_RESPONSE blocked: "
-            f"reasoning={len(result.reasoning_text)}c final=0c"
+            f"reasoning={len(result.reasoning_text)}c final=0c "
+            f"finish={result.finish_reason or 'unknown'}"
         )
 
     logger.info(

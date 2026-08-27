@@ -30,6 +30,14 @@ def _health_probe_max_tokens() -> int:
     return max(8, min(512, configured))
 
 
+def _configured_handshake_max_tokens() -> int:
+    try:
+        configured = int(os.environ.get("MODEL_HANDSHAKE_MAX_TOKENS", "2048"))
+    except ValueError:
+        configured = 2048
+    return max(512, min(4096, configured))
+
+
 def _provider_config(provider: str):
     from app.gateway.model_gateway import _get_provider_config
 
@@ -63,7 +71,12 @@ async def probe_provider(db: AsyncSession, *, provider: str) -> ModelHealthProbe
     return probe
 
 
-async def probe_model_ping(db: AsyncSession, catalog: ModelCatalog) -> ModelHealthProbe:
+async def probe_model_ping(
+    db: AsyncSession,
+    catalog: ModelCatalog,
+    *,
+    allow_reasoning_retry: bool = False,
+) -> ModelHealthProbe:
     """L1: tiny streaming ping (spec §20)."""
     started = datetime.now(timezone.utc)
     probe = ModelHealthProbe(
@@ -88,11 +101,33 @@ async def probe_model_ping(db: AsyncSession, catalog: ModelCatalog) -> ModelHeal
             provider=catalog.provider,
             reasoning_mode="disabled",
         )
+        retried = False
+        first_error = result.error
+        first_finish_reason = result.finish_reason
+        if allow_reasoning_retry and result.error == "final_content_empty":
+            retried = True
+            result = await stream_completion_and_collect(
+                system_prompt="Return exactly OK.",
+                user_content="ping",
+                model=catalog.model_id,
+                temperature=0,
+                max_tokens=_configured_handshake_max_tokens(),
+                provider_role="primary",
+                provider=catalog.provider,
+                reasoning_mode="disabled",
+            )
         probe.latency_ms = result.latency_ms
         probe.first_token_ms = result.first_token_ms  # measured TTFT (v9.6 §44)
         probe.output_valid = bool(result.final_content.strip())
         probe.status = "ok" if (result.final_content.strip() and not result.error) else "failed"
         probe.error_code = result.error
+        probe.detail_json = {
+            "finish_reason": result.finish_reason,
+            "reasoning_chars": len(result.reasoning_text),
+            "adaptive_retry": retried,
+            "first_error": first_error if retried else None,
+            "first_finish_reason": first_finish_reason if retried else None,
+        }
     except Exception as e:  # noqa: BLE001
         probe.error_code = str(e)[:60]
         probe.status = "failed"

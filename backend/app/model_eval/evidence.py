@@ -754,6 +754,7 @@ async def _invoke_gateway(gateway: Callable, **kwargs) -> tuple[str, str | None,
             "latency_ms",
             "first_token_ms",
             "tokens_per_second",
+            "finish_reason",
         ):
             metrics[key] = getattr(raw, key, None)
     metrics.setdefault("latency_ms", int((time.perf_counter() - started) * 1000))

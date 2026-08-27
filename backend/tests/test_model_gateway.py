@@ -42,6 +42,7 @@ class TestStreamResult:
         assert r.actual_provider == ""
         assert r.actual_model == ""
         assert r.successful_attempt_no is None
+        assert r.finish_reason is None
         assert r.attempts == []
         # backward-compat properties
         assert r.provider_used == "primary"

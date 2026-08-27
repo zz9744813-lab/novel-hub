@@ -62,8 +62,11 @@ status
 deploy <40位主干提交SHA>
 rollback <已存在的40位主干提交SHA>
 logs <web|api|worker|postgres|redis> <1..500>
+candidate <已准备的40位主干提交SHA>
 novel <validate|qualify|install|start|status|audit|export|download>
 ```
+
+`candidate` 只读取指定已准备版本的 Compose 状态和最近 200 行 PostgreSQL 日志，且会核对工作树 HEAD 与 SHA 完全一致；它用于首次受管发布尚未建立 `current` 链接时的失败诊断，不提供任意服务名、路径或 shell。
 
 先确认该通道多次可用，再从控制台决定是否关闭 root 远程登录。引导脚本不会替你冒险关闭最后一个入口，也不会修改本机 v2rayN、TUN 或网络栈。
 

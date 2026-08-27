@@ -21,12 +21,17 @@ case "${1:-}" in
     case "$3" in *[!0-9]*|'') exit 64 ;; esac
     [ "$3" -le 500 ] || exit 64
     ;;
+  candidate)
+    [ "$#" -eq 2 ] || exit 64
+    [ "${#2}" -eq 40 ] || exit 64
+    case "$2" in *[!0-9a-f]*) exit 64 ;; esac
+    ;;
   novel)
     [ "$#" -eq 2 ] || exit 64
     case "$2" in validate|qualify|install|start|status|audit|export|download) ;; *) exit 64 ;; esac
     ;;
   *)
-    echo "allowed: status | deploy SHA | rollback SHA | logs SERVICE LINES | novel ACTION" >&2
+    echo "allowed: status | deploy SHA | rollback SHA | logs SERVICE LINES | candidate SHA | novel ACTION" >&2
     exit 64
     ;;
 esac

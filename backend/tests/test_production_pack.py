@@ -157,6 +157,13 @@ def test_restricted_release_runs_model_evidence_before_switching():
     assert release.index(qualification) < release.index('switch_to "$release"')
     assert "validate|qualify|install|start" in release
     assert "validate|qualify|install|start" in forced
+    assert "candidate)" in release
+    assert "candidate)" in forced
+    assert 'git -C "$release" rev-parse HEAD' in release
+    assert 'logs --no-color --tail 200 postgres' in release
+    assert release.index("if ! wait_postgres") < release.index(
+        "backup=$(backup_database"
+    )
     assert '[ -L "$CURRENT" ]' in release
     assert '[[ $release =~ ^${RELEASES}/[0-9a-f]{40}$ ]]' in release
     assert 'legacy="$ROOT/legacy/current-$stamp"' in release

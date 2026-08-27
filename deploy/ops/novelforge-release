@@ -73,6 +73,26 @@ wait_postgres() {
   return 1
 }
 
+candidate_release() {
+  local sha=$1 release actual
+  [[ $sha =~ ^[0-9a-f]{40}$ ]] || { echo "invalid sha" >&2; exit 64; }
+  release="$RELEASES/$sha"
+  [ -f "$release/.git" ] && [ -f "$release/deploy/docker-compose.yml" ] \
+    || { echo "candidate release not prepared: $sha" >&2; exit 66; }
+  actual=$(git -C "$release" rev-parse HEAD)
+  [ "$actual" = "$sha" ] \
+    || { echo "candidate release identity mismatch" >&2; exit 73; }
+  printf '%s\n' "$release"
+}
+
+show_candidate() {
+  local release
+  release=$(candidate_release "$1")
+  printf '{"ok":true,"candidate":"%s"}\n' "${release##*/}"
+  compose "$release" ps --format json || true
+  compose "$release" logs --no-color --tail 200 postgres || true
+}
+
 backup_database() {
   local release=$1 target_sha=$2 stamp destination temporary
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
@@ -175,8 +195,12 @@ deploy_sha() {
 
   backup_source=${previous:-$release}
   compose "$backup_source" up -d postgres
-  wait_postgres "$backup_source" \
-    || { echo "postgres did not become ready; migration was not started" >&2; exit 70; }
+  if ! wait_postgres "$backup_source"; then
+    echo "postgres did not become ready; migration was not started" >&2
+    compose "$backup_source" ps --format json >&2 || true
+    compose "$backup_source" logs --no-color --tail 200 postgres >&2 || true
+    exit 70
+  fi
   backup=$(backup_database "$backup_source" "$sha")
 
   compose "$release" build api worker web
@@ -276,6 +300,7 @@ case "${1:-status}" in
   deploy) [ "$#" -eq 2 ] && deploy_sha "$2" ;;
   rollback) [ "$#" -eq 2 ] && rollback_sha "$2" ;;
   logs) [ "$#" -eq 3 ] && show_logs "$2" "$3" ;;
+  candidate) [ "$#" -eq 2 ] && show_candidate "$2" ;;
   novel) [ "$#" -eq 2 ] && novel_action "$2" ;;
   healthcheck) [ "$#" -eq 1 ] && self_heal ;;
   *) exit 64 ;;

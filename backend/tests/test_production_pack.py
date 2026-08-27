@@ -163,7 +163,9 @@ def test_console_bootstrap_is_pinned_and_never_interprets_the_key_as_shell():
     bootstrap = CONSOLE_BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
 
     assert "OPS_COMMIT=7c5aaee1a1d5b4683248db8ef794b55c8d68dfe1" in bootstrap
-    assert "KEY_BODY=$1" in bootstrap
+    assert "DEFAULT_KEY_BODY=AAAAC3NzaC1lZDI1NTE5AAAAI" in bootstrap
+    assert "KEY_BODY=${1:-$DEFAULT_KEY_BODY}" in bootstrap
+    assert "[[ $# -le 1 ]]" in bootstrap
     assert "printf 'ssh-ed25519 %s" in bootstrap
     assert "/root/novelforge/deploy/.env /root/novelforge/.env" in bootstrap
     assert "NOVELFORGE_BOOTSTRAP_OK" in bootstrap

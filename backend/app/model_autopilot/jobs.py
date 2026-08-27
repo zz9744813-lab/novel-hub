@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
@@ -71,7 +72,10 @@ async def _probe_due(
     if interval_minutes is None:
         status = snap.health_status or "unknown"
         interval_minutes = PROBE_MINUTES.get(status, 30)
-    return snap.last_probe_at <= datetime.now(timezone.utc) - timedelta(minutes=interval_minutes)
+    last_probe_at = snap.last_probe_at
+    if last_probe_at.tzinfo is None:
+        last_probe_at = last_probe_at.replace(tzinfo=timezone.utc)
+    return last_probe_at <= datetime.now(timezone.utc) - timedelta(minutes=interval_minutes)
 
 
 async def _route_plan_models_with_kind(db, session: WritingSession) -> list[tuple[str, str, str]]:
@@ -100,7 +104,7 @@ async def _route_plan_models_with_kind(db, session: WritingSession) -> list[tupl
 
 async def model_health_probe_tick(ctx):
     """Cron: probe due models without competing with an active chapter pipeline (spec §27–§28)."""
-    report = {"probed": 0, "skipped_active": 0}
+    report = {"probed": 0, "skipped_active": 0, "errors": []}
     try:
         async with async_session_factory() as db:
             # v9.6 §54: MULTIPLE books may run sessions at once — aggregate all.
@@ -117,12 +121,6 @@ async def model_health_probe_tick(ctx):
                 .scalars()
                 .all()
             )
-            active_primary: set[tuple[str, str]] = set()
-            active_fallback: set[tuple[str, str]] = set()
-            for session in active_sessions:
-                for provider, model in await _route_plan_models(db, session):
-                    pass  # placeholder replaced below
-
             # distinct route models per session (provider, model) with role kind
             route_kind: dict[tuple[str, str], str] = {}
             for session in active_sessions:
@@ -133,7 +131,25 @@ async def model_health_probe_tick(ctx):
             if active_sessions and not route_kind:
                 report["skipped_active"] = 1
 
-            catalogs = list((await db.execute(select(ModelCatalog))).scalars().all())
+            catalogs = list(
+                (
+                    await db.execute(
+                        select(ModelCatalog).where(
+                            ModelCatalog.enabled.is_(True),
+                            ModelCatalog.availability_status == "available",
+                            ModelCatalog.text_generation_eligible.is_(True),
+                        )
+                    )
+                ).scalars().all()
+            )
+            catalogs.sort(
+                key=lambda catalog: (
+                    0 if route_kind.get((catalog.provider, catalog.model_id)) == "primary" else
+                    1 if route_kind.get((catalog.provider, catalog.model_id)) == "fallback" else 2,
+                    catalog.provider,
+                    catalog.model_id,
+                )
+            )
             targets = []
             for catalog in catalogs:
                 kind = route_kind.get((catalog.provider, catalog.model_id))
@@ -145,17 +161,30 @@ async def model_health_probe_tick(ctx):
                     interval = None
                 if await _probe_due(db, catalog, interval_minutes=interval):
                     targets.append(catalog)
-            targets = targets[:6]
+            targets = targets[: int(os.environ.get("MODEL_HEALTH_TICK_LIMIT", "12"))]
+
+            # Release the selection transaction before provider I/O.  No
+            # session/book row lock is held while the lightweight ping runs.
+            await db.commit()
 
             for catalog in targets:
                 try:
                     probe = await probe_model_ping(db, catalog)
                     db.add(probe)
+                    await db.flush()
                     await upsert_health_snapshot(db, catalog.id)
+                    await db.commit()
                     report["probed"] += 1
                 except Exception as e:  # noqa: BLE001
-                    logger.debug("probe failed %s/%s: %s", catalog.provider, catalog.model_id, e)
-            await db.commit()
+                    await db.rollback()
+                    logger.warning("probe failed %s/%s: %s", catalog.provider, catalog.model_id, e)
+                    report["errors"].append(
+                        {
+                            "provider": catalog.provider,
+                            "model": catalog.model_id,
+                            "error": type(e).__name__,
+                        }
+                    )
         if report["probed"]:
             logger.info("model_health_probe_tick: %s", report)
     except Exception as e:  # noqa: BLE001

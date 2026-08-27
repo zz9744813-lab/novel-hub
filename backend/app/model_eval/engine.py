@@ -1,460 +1,1300 @@
-"""v9.7 Model Qualification & Certification Engine (spec §13, §13.40).
+"""Database boundary for versioned, reusable model evidence.
 
-Versioned suites/cases → deterministic graders → qualification run →
-context ladder (declared/accepted/effective) → certification levels.
-Non-text models are excluded before anything runs (classification.py).
+The expensive ability and context evaluators run only when their content key is
+missing/stale or the caller explicitly forces a retest.  Lightweight health
+probes live in ``model_autopilot`` and never call this evaluator.
 """
 from __future__ import annotations
 
-import hashlib
-import json
-import logging
-import random
-import time
+import os
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.model_eval.evidence import (
+    ABILITY_EVALUATOR_REVISION,
+    CONTEXT_EVALUATOR_REVISION,
+    ability_evaluation_key,
+    case_definition_hash,
+    compute_endpoint_identity_hash,
+    compute_upstream_identity_hash,
+    context_evaluation_key,
+    current_evidence_state,
+    decide_ability_reuse_with_parts,
+    decide_context_reuse_with_parts,
+    grade_response,
+    model_identity_hash,
+    normalize_endpoint,
+    normalize_suite,
+    pick_ladder,
+    run_context_ladder_core,
+    run_qualification_core,
+    suite_aggregate_hash,
+)
+from app.model_eval.suite_definitions import (
+    PRODUCTION_ROLES,
+    SUITE_VERSION,
+    V98_SUITE_KEYS,
+    v98_suite_definitions,
+)
 from app.models import (
-    ModelCatalog,
     ModelCapabilityProfile,
+    ModelCatalog,
     ModelContextProfile,
     ModelEvalCase,
     ModelEvalCaseResult,
     ModelEvalRun,
     ModelEvalSuite,
+    ModelRoleScore,
 )
 
-logger = logging.getLogger("novelforge.model_eval")
 
-TEXT_ELIGIBLE = {"text_generation", "multimodal_text_generation"}
-
-CERT_TTL = {
-    "health_only": timedelta(days=1),
-    "basic": timedelta(days=7),
-    "role_qualified": timedelta(days=7),
-    "production_qualified": timedelta(days=30),
-}
+class SuiteDefinitionDriftError(RuntimeError):
+    """The database row for an immutable suite version differs from code."""
 
 
-# ── suites & versioned cases (spec §13.8/§13.9/§13.14–§13.21) ──
+def _suite_id(suite_key: str, version: str = SUITE_VERSION) -> uuid.UUID:
+    return uuid.uuid5(uuid.NAMESPACE_URL, f"novelforge:model-eval-suite:{suite_key}:{version}")
 
 
-def _suite_id(seed: int = 0) -> uuid.UUID:
-    return uuid.uuid5(uuid.NAMESPACE_DNS, f"novelforge-eval-suite-{seed}")
+def _case_id(suite_key: str, version: str, case_key: str, case_version: str) -> uuid.UUID:
+    return uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"novelforge:model-eval-case:{suite_key}:{version}:{case_key}:{case_version}",
+    )
 
 
-def _case_id(suite_key: str, case_key: str) -> uuid.UUID:
-    return uuid.uuid5(uuid.NAMESPACE_DNS, f"novelforge-case-{suite_key}-{case_key}")
+def _case_payload(case: ModelEvalCase) -> dict:
+    return {
+        "id": case.id,
+        "case_key": case.case_key,
+        "case_version": case.case_version,
+        "role": case.role,
+        "category": case.category,
+        "difficulty": case.difficulty,
+        "prompt_template": case.prompt_template,
+        "context_template": case.context_template,
+        "generator_type": case.generator_type,
+        "generator_config": case.generator_config or {},
+        "expected_answer": case.expected_answer,
+        "expected_schema": case.expected_schema or {},
+        "grader_type": case.grader_type,
+        "grader_config": case.grader_config or {},
+        "max_output_tokens": case.max_output_tokens,
+        "temperature": case.temperature,
+        "private_case": case.private_case,
+        "active": case.active,
+        "case_hash": case.case_hash,
+    }
 
 
-def seed_suites(db: AsyncSession) -> int:
-    """Seed the anchor/rotation suites; idempotent by (suite_key, version)."""
-    suites = [
-        ("core-text-v1", "core_text", None, "Core Text Intelligence Qualification", "qualification", "anchor", 14, 0.75),
-        ("planner-v1", "chapter_planner", "causal_planning", "Planner: 因果/场景/知识边界", "qualification", "anchor", 12, 0.70),
-        ("draft-v1", "draft_writer", "prose", "Draft: 人物/对白/风格/AI-Tone", "qualification", "private", 10, 0.75),
-        ("review-v1", "review_agent", "human_gold", "Review: Recall/FP/F1", "qualification", "private", 10, 0.70),
-        ("state-extractor-v1", "state_extractor", "json_schema", "StateExtractor: 事实/知识边界", "qualification", "private", 12, 0.75),
-        ("long-context-v1", None, "long_context", "Adaptive Context Ladder", "qualification", "private", 20, 0.80),
-    ]
-    added = 0
-    for key, role, category, name, mode, kind, count, threshold in suites:
-        exists = (
-            db.execute(
+def _suite_payload(suite: ModelEvalSuite, cases: list[ModelEvalCase]) -> dict:
+    return {
+        "id": suite.id,
+        "suite_key": suite.suite_key,
+        "version": suite.version,
+        "name": suite.name,
+        "purpose": suite.purpose,
+        "target_role": suite.target_role,
+        "difficulty": suite.difficulty,
+        "mode": suite.mode,
+        "case_count": suite.case_count,
+        "pass_threshold": suite.pass_threshold,
+        "is_active": suite.is_active,
+        "is_private": suite.is_private,
+        "cases": [_case_payload(case) for case in cases],
+    }
+
+
+def _desired_case_payload(case: dict, *, private_case: bool) -> dict:
+    return {
+        **case,
+        "difficulty": case.get("difficulty") or "medium",
+        "context_template": case.get("context_template"),
+        "generator_type": case.get("generator_type"),
+        "generator_config": case.get("generator_config") or {},
+        "expected_schema": case.get("expected_schema") or {},
+        "private_case": bool(case.get("private_case", private_case)),
+        "active": bool(case.get("active", True)),
+    }
+
+
+async def seed_suites(db: AsyncSession) -> int:
+    """Create the immutable v2 suites or fail closed on same-version drift."""
+
+    created = 0
+    for definition in v98_suite_definitions():
+        suite_id = _suite_id(definition["suite_key"], definition["version"])
+        suite = (
+            await db.execute(select(ModelEvalSuite).where(ModelEvalSuite.id == suite_id))
+        ).scalar_one_or_none()
+        desired_cases = [
+            _desired_case_payload(case, private_case=definition["is_private"])
+            for case in definition["cases"]
+        ]
+        if suite is None:
+            suite = ModelEvalSuite(
+                id=suite_id,
+                suite_key=definition["suite_key"],
+                version=definition["version"],
+                name=definition["name"],
+                purpose=definition["purpose"],
+                target_role=definition["target_role"],
+                difficulty=definition["difficulty"],
+                mode=definition["mode"],
+                case_count=len(desired_cases),
+                pass_threshold=definition["pass_threshold"],
+                is_active=definition["is_active"],
+                is_private=definition["is_private"],
+            )
+            db.add(suite)
+            await db.flush()
+            for desired in desired_cases:
+                db.add(
+                    ModelEvalCase(
+                        id=_case_id(
+                            definition["suite_key"],
+                            definition["version"],
+                            desired["case_key"],
+                            desired["case_version"],
+                        ),
+                        suite_id=suite_id,
+                        case_key=desired["case_key"],
+                        case_version=desired["case_version"],
+                        role=desired.get("role"),
+                        category=desired.get("category"),
+                        difficulty=desired.get("difficulty"),
+                        prompt_template=desired["prompt_template"],
+                        context_template=desired.get("context_template"),
+                        generator_type=desired.get("generator_type"),
+                        generator_config=desired.get("generator_config") or {},
+                        expected_answer=desired.get("expected_answer"),
+                        expected_schema=desired.get("expected_schema") or {},
+                        grader_type=desired["grader_type"],
+                        grader_config=desired.get("grader_config") or {},
+                        max_output_tokens=desired.get("max_output_tokens") or 512,
+                        temperature=desired.get("temperature") or 0,
+                        private_case=desired["private_case"],
+                        active=desired["active"],
+                        case_hash=case_definition_hash(desired),
+                    )
+                )
+            await db.flush()
+            created += 1
+            continue
+
+        scalar_fields = {
+            "suite_key": definition["suite_key"],
+            "version": definition["version"],
+            "name": definition["name"],
+            "purpose": definition["purpose"],
+            "target_role": definition["target_role"],
+            "difficulty": definition["difficulty"],
+            "mode": definition["mode"],
+            "case_count": len(desired_cases),
+            "pass_threshold": definition["pass_threshold"],
+            "is_active": definition["is_active"],
+            "is_private": definition["is_private"],
+        }
+        drifted = [name for name, value in scalar_fields.items() if getattr(suite, name) != value]
+        existing_cases = (
+            await db.execute(select(ModelEvalCase).where(ModelEvalCase.suite_id == suite_id))
+        ).scalars().all()
+        existing_by_key = {(case.case_key, case.case_version): case for case in existing_cases}
+        desired_keys = {(case["case_key"], case["case_version"]) for case in desired_cases}
+        if set(existing_by_key) != desired_keys:
+            drifted.append("case_set")
+        for desired in desired_cases:
+            existing = existing_by_key.get((desired["case_key"], desired["case_version"]))
+            if existing is None:
+                continue
+            actual_hash = case_definition_hash(_case_payload(existing))
+            desired_hash = case_definition_hash(desired)
+            if actual_hash != desired_hash or existing.case_hash != desired_hash:
+                drifted.append(f"case:{desired['case_key']}")
+        if drifted:
+            raise SuiteDefinitionDriftError(
+                f"immutable suite {definition['suite_key']}:{definition['version']} drifted: "
+                + ", ".join(sorted(set(drifted)))
+            )
+    return created
+
+
+async def ensure_v98_suites(db: AsyncSession) -> int:
+    """Explicit write/evaluation-path seed; GET handlers must never call this."""
+
+    return await seed_suites(db)
+
+
+async def _load_v98_suites(db: AsyncSession, *, mode: str | None = None) -> list[dict]:
+    payloads = []
+    definitions = v98_suite_definitions()
+    for definition in definitions:
+        if mode is not None and definition["mode"] != mode:
+            continue
+        suite = (
+            await db.execute(
                 select(ModelEvalSuite).where(
-                    ModelEvalSuite.suite_key == key, ModelEvalSuite.version == "1"
+                    ModelEvalSuite.id == _suite_id(definition["suite_key"], definition["version"])
                 )
             )
         ).scalar_one_or_none()
-        if exists:
+        if suite is None or not suite.is_active:
             continue
-        suite = ModelEvalSuite(
-            id=_suite_id(added),
-            suite_key=key,
-            version="1",
-            name=name,
-            purpose=f"v9.7 {name}",
-            target_role=role,
-            difficulty="medium",
-            mode=mode,
-            case_count=count,
-            pass_threshold=threshold,
-            is_active=True,
-            is_private=kind == "private",
-        )
-        db.add(suite)
-        db.flush()
-        for i in range(count):
-            case = _make_case(suite, i)
-            db.add(case)
-        added += 1
-    return added
+        cases = (
+            await db.execute(
+                select(ModelEvalCase).where(
+                    ModelEvalCase.suite_id == suite.id,
+                    ModelEvalCase.active.is_(True),
+                )
+            )
+        ).scalars().all()
+        cases = sorted(cases, key=lambda case: (case.case_key, case.case_version))
+        payloads.append(_suite_payload(suite, cases))
+    return payloads
 
 
-def _make_case(suite: ModelEvalSuite, index: int) -> ModelEvalCase:
-    """Deterministic case from suite/case index — answer never leaks into prompt."""
-    seed = random.Random(f"{suite.suite_key}:{index}".encode())
-    characters = ["沈砚", "陆晚", "周岚", "林夏", "顾青", "苏月"]
-    secret_holder = seed.choice(characters)
-    knower = seed.choice([c for c in characters if c != secret_holder])
-    site = seed.choice(["旧钟楼", "北码头", "竹林别院", "东市当铺"])
-    item = seed.choice(["黄铜钥匙", "墨玉扳指", "鎏金铜镜", "青瓷香炉"])
+async def _ability_suite_hash(db: AsyncSession) -> str | None:
+    suites = await _load_v98_suites(db, mode="qualification")
+    expected = sum(1 for suite in v98_suite_definitions() if suite["mode"] == "qualification")
+    return suite_aggregate_hash(suites) if len(suites) == expected else None
 
-    if suite.suite_key.startswith("core-"):
-        prompt = (
-            f"判断哪个角色知道秘密：秘密在{site}，只有{secret_holder}知道。"
-            f"问：{knower}应该知道吗？只回\"是\"或\"否\"。"
-        )
-        expected = "否"
-        grader = "exact_match"
-        category = "knowledge_boundary"
-    elif suite.suite_key.startswith("planner"):
-        prompt = (
-            f"任务：本章讲{secret_holder}发现{item}不见了，{knower}是最大嫌疑人。"
-            f"生成3场SceneContract，每场包含 scene_type/goal/required_beats(forbidden 不得让{knower}直接坦白)。输出JSON数组。"
-        )
-        expected = "json array with scene_type, goal, required_beats; no confession beat"
-        grader = "json_schema"
-        category = "scene_contract"
-    elif suite.suite_key.startswith("review"):
-        prompt = (
-            f"这段文字的问题是什么：\"他走进房间，门\"是\"咣\"一声关上了，他回头看了看，门又开了，他走了。\""
-            f"指出逻辑/因果错误，简短。"
-        )
-        expected = "door sequence contradiction"
-        grader = "constraint_checker"
-        category = "causal_detection"
-    elif suite.suite_key.startswith("state"):
-        prompt = (
-            f"提取JSON：人物={secret_holder}, 位置={site}, 物品={item}, "
-            f"状态=秘密未泄露, 知情者=[{secret_holder}]。"
-        )
-        expected = json.dumps(
-            {"person": secret_holder, "location": site, "item": item, "secret_leaked": False, "knowers": [secret_holder]},
-            ensure_ascii=False,
-        )
-        grader = "field_f1"
-        category = "state_extraction"
-    else:
-        prompt = (
-            f"读下文中{item}的最终位置并回答两个问题（只用上文信息）："
-            f"（1）{item}现在在哪？（2）{knower}是否知道确切位置？\n"
-            f"上下文将按 Context Ladder 注入。"
-        )
-        expected = json.dumps({"location": site, "knower_knows_exact": False}, ensure_ascii=False)
-        grader = "field_f1"
-        category = "multi_hop_boundary"
 
-    payload = {
-        "suite_key": suite.suite_key,
-        "index": index,
-        "expected": expected,
-    }
-    case = ModelEvalCase(
-        id=_case_id(suite.suite_key, str(index)),
-        suite_id=suite.id,
-        case_key=f"{suite.suite_key}-{index:02d}",
-        case_version="1",
-        role=suite.target_role,
-        category=category,
-        difficulty="medium",
-        prompt_template=prompt,
-        grader_type=grader,
-        grader_config={"json_fields": []},
-        expected_answer=expected,
-        max_output_tokens=1024,
-        temperature=0,
-        private_case=suite.is_private,
-        active=True,
-        case_hash=hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16],
+async def _context_suite_hash(db: AsyncSession) -> str | None:
+    suites = await _load_v98_suites(db, mode="context_ladder")
+    expected = sum(1 for suite in v98_suite_definitions() if suite["mode"] == "context_ladder")
+    return suite_aggregate_hash(suites) if len(suites) == expected else None
+
+
+def _provider_base_url(catalog: ModelCatalog) -> str | None:
+    metadata = dict(catalog.metadata_json or {})
+    explicit = metadata.get("routing_endpoint") or metadata.get("base_url") or metadata.get("provider_base_url")
+    if explicit:
+        return str(explicit)
+    provider_key = catalog.provider.upper().replace("-", "_")
+    if catalog.provider.lower() in {"new-api", "new_api", "newapi"}:
+        return os.environ.get("NEW_API_BASE_URL") or os.environ.get("PRIMARY_BASE_URL")
+    if catalog.provider.lower() == "openrouter":
+        return os.environ.get("OPENROUTER_BASE_URL") or os.environ.get("PRIMARY_BASE_URL")
+    return os.environ.get(f"{provider_key}_BASE_URL") or os.environ.get("PRIMARY_BASE_URL")
+
+
+def derive_endpoint_identity_hash(catalog: ModelCatalog) -> str:
+    base_url = _provider_base_url(catalog)
+    if base_url:
+        metadata = dict(catalog.metadata_json or {})
+        return compute_endpoint_identity_hash(
+            base_url=base_url,
+            routing_endpoint=metadata.get("routing_endpoint"),
+        )
+    return (
+        getattr(catalog, "endpoint_identity_hash", None)
+        or (catalog.metadata_json or {}).get("endpoint_identity_hash")
+        or compute_endpoint_identity_hash(base_url=None)
     )
-    return case
 
 
-# ── deterministic graders (spec §13.35) ──
+def refresh_endpoint_identity(catalog: ModelCatalog, *, base_url: str | None = None) -> str:
+    metadata = dict(catalog.metadata_json or {})
+    effective_base_url = base_url or _provider_base_url(catalog)
+    routing_endpoint = metadata.get("routing_endpoint")
+    if effective_base_url or routing_endpoint:
+        endpoint_hash = compute_endpoint_identity_hash(
+            base_url=effective_base_url,
+            routing_endpoint=routing_endpoint,
+        )
+    else:
+        # Catalog sync may have persisted only the safe one-way hash. Do not
+        # replace that real identity with the hash of an empty endpoint merely
+        # because this process lacks the provider URL environment variable.
+        endpoint_hash = (
+            getattr(catalog, "endpoint_identity_hash", None)
+            or metadata.get("endpoint_identity_hash")
+            or compute_endpoint_identity_hash(base_url=None)
+        )
+    catalog.endpoint_identity_hash = endpoint_hash
+    metadata["endpoint_identity_hash"] = endpoint_hash
+    if effective_base_url:
+        metadata["endpoint_normalized"] = normalize_endpoint(effective_base_url)
+    catalog.metadata_json = metadata
+    return endpoint_hash
 
 
-def grade_response(case: ModelEvalCase, response: str) -> tuple[float, dict]:
-    text = (response or "").strip()
-    grader = case.grader_type
-    expected = case.expected_answer or ""
+def refresh_upstream_identity(catalog: ModelCatalog) -> str:
+    metadata = dict(catalog.metadata_json or {})
+    upstream_hash = compute_upstream_identity_hash(
+        owned_by=metadata.get("owned_by"),
+        created=metadata.get("created"),
+        upstream_revision=metadata.get("upstream_revision"),
+    )
+    catalog.upstream_identity_hash = upstream_hash
+    metadata["upstream_identity_hash"] = upstream_hash
+    catalog.metadata_json = metadata
+    return upstream_hash
 
-    if grader == "exact_match":
-        ok = expected.strip().lower() in text.lower()
-        return (100.0 if ok else 0.0), {"match": ok}
 
-    if grader == "json_schema":
-        ok = ("[" in text or "{" in text) and ("scene_type" in text and "goal" in text)
-        return (100.0 if ok else 30.0), {"schema_ok": ok}
+def _identity_hash(catalog: ModelCatalog, endpoint_hash: str) -> str:
+    metadata = dict(catalog.metadata_json or {})
+    return model_identity_hash(
+        provider=catalog.provider,
+        model_id=catalog.model_id,
+        model_kind=catalog.model_kind,
+        endpoint_identity_hash=endpoint_hash,
+        owned_by=metadata.get("owned_by"),
+        created=metadata.get("created"),
+        upstream_revision=metadata.get("upstream_revision"),
+    )
 
-    if grader == "field_f1":
+
+def _catalog_payload(catalog: ModelCatalog) -> dict:
+    metadata = dict(catalog.metadata_json or {})
+    return {
+        "provider": catalog.provider,
+        "model_id": catalog.model_id,
+        "model_kind": catalog.model_kind,
+        "text_generation_eligible": catalog.text_generation_eligible,
+        "owned_by": metadata.get("owned_by"),
+        "created": metadata.get("created"),
+        "upstream_revision": metadata.get("upstream_revision"),
+    }
+
+
+async def _default_gateway(**kwargs):
+    from app.gateway.model_gateway import stream_completion_and_collect
+
+    return await stream_completion_and_collect(
+        system_prompt=kwargs["system_prompt"],
+        user_content=kwargs["user_content"],
+        model=kwargs["model"],
+        temperature=kwargs.get("temperature", 0),
+        max_tokens=kwargs.get("max_tokens", 512),
+        provider_role="primary",
+        provider=kwargs.get("provider"),
+    )
+
+
+def _latest(rows: list[ModelEvalRun]) -> ModelEvalRun | None:
+    floor = datetime.min.replace(tzinfo=timezone.utc)
+
+    def key(run: ModelEvalRun):
+        value = run.finished_at or getattr(run, "created_at", None) or floor
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value
+
+    return max(rows, key=key) if rows else None
+
+
+async def _latest_source_run(
+    db: AsyncSession,
+    *,
+    catalog_id: uuid.UUID,
+    mode: str,
+    current_run_id: uuid.UUID,
+    evaluation_key: str,
+) -> ModelEvalRun | None:
+    rows = (
+        await db.execute(
+            select(ModelEvalRun).where(
+                ModelEvalRun.model_catalog_id == catalog_id,
+                ModelEvalRun.mode == mode,
+                ModelEvalRun.status == "succeeded",
+            )
+        )
+    ).scalars().all()
+    source_field = "ability_source_run_id" if mode == "qualification" else "context_source_run_id"
+    key_field = "ability_evaluation_key" if mode == "qualification" else "context_evaluation_key"
+    originals = [
+        row
+        for row in rows
+        if row.id != current_run_id
+        and getattr(row, key_field, None)
+        and getattr(row, source_field, None) is None
+        and bool((row.result_summary or {}).get("execution_complete", True))
+    ]
+    # Evidence is content-addressed. If the endpoint/model identity later
+    # returns to a previously evaluated value, reuse that matching source even
+    # when a newer source exists for a different identity.
+    matching = [row for row in originals if getattr(row, key_field, None) == evaluation_key]
+    return _latest(matching) or _latest(originals)
+
+
+async def _claim_run(
+    db: AsyncSession,
+    *,
+    catalog_id: uuid.UUID,
+    mode: str,
+    run: ModelEvalRun,
+    stale_after: timedelta = timedelta(minutes=30),
+) -> uuid.UUID | None:
+    """Take a short catalog-row lock, claim, then commit before network I/O."""
+
+    await db.execute(
+        select(ModelCatalog).where(ModelCatalog.id == catalog_id).with_for_update()
+    )
+    now = datetime.now(timezone.utc)
+    active = (
+        await db.execute(
+            select(ModelEvalRun).where(
+                ModelEvalRun.model_catalog_id == catalog_id,
+                ModelEvalRun.mode == mode,
+                ModelEvalRun.status.in_(["running", "in_progress"]),
+            )
+        )
+    ).scalars().all()
+    for existing in active:
+        if existing.id == run.id:
+            continue
+        started = existing.started_at
+        if started is not None and started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        if started is None or started < now - stale_after:
+            existing.status = "failed"
+            existing.finished_at = now
+            existing.result_summary = {
+                **(existing.result_summary or {}),
+                "execution_complete": False,
+                "error": "abandoned_active_claim",
+            }
+            continue
+        run.status = "deduplicated"
+        run.reuse_reason = "concurrent_run_in_progress"
+        run.triggered_by = "dedup"
+        run.finished_at = now
+        run.result_summary = {
+            "execution_complete": False,
+            "source_run_id": str(existing.id),
+            "reason": "concurrent_run_in_progress",
+        }
+        await db.commit()
+        return existing.id
+    run.status = "running"
+    run.started_at = now
+    db.add(run)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        active = (
+            await db.execute(
+                select(ModelEvalRun).where(
+                    ModelEvalRun.model_catalog_id == catalog_id,
+                    ModelEvalRun.mode == mode,
+                    ModelEvalRun.status.in_(["running", "in_progress"]),
+                )
+            )
+        ).scalars().all()
+        other = next((item for item in active if item.id != run.id), None)
+        if other is None:
+            raise
+        run.status = "deduplicated"
+        run.reuse_reason = "concurrent_run_in_progress"
+        run.triggered_by = "dedup"
+        run.finished_at = now
+        run.result_summary = {
+            "execution_complete": False,
+            "source_run_id": str(other.id),
+            "reason": "concurrent_run_in_progress",
+        }
+        db.add(run)
+        await db.commit()
+        return other.id
+    return None
+
+
+async def _cancel_requested(db: AsyncSession, run: ModelEvalRun) -> bool:
+    refresh = getattr(db, "refresh", None)
+    if refresh is not None:
         try:
-            exp = json.loads(expected)
-        except Exception:
-            return 0.0, {"error": "bad expected json"}
-        got = {}
-        try:
-            got = json.loads(text[text.index("{"): text.rindex("}") + 1])
+            await refresh(run, attribute_names=["cancel_requested"])
         except Exception:
             pass
-        if not got:
-            return 0.0, {"fields": 0}
-        keys = set(exp) | set(got)
-        fields_hit = sum(1 for k in keys if exp.get(k) == got.get(k))
-        return round(100.0 * fields_hit / max(1, len(keys)), 1), {"fields_hit": fields_hit, "fields_total": len(keys)}
-
-    if grader == "constraint_checker":
-        hit = any(k in text for k in ("门", "因果", "矛盾", "顺序", "逻辑"))
-        return (100.0 if hit else 30.0), {"detected": hit}
-
-    return 50.0, {"grader": grader, "note": "default"}
+    return bool(run.cancel_requested)
 
 
-# ── qualification run (spec §13.11 Tier 1) ──
+async def _persist_case_results(
+    db: AsyncSession,
+    *,
+    run: ModelEvalRun,
+    suites: list[dict],
+    results: list[dict],
+) -> None:
+    case_ids = {
+        case["case_key"]: case["id"]
+        for suite in suites
+        for case in suite.get("cases") or []
+    }
+    for result in results:
+        case_id = case_ids.get(result.get("case_key"))
+        if case_id is None:
+            continue
+        db.add(
+            ModelEvalCaseResult(
+                id=uuid.uuid4(),
+                run_id=run.id,
+                case_id=case_id,
+                variant_seed=0,
+                context_target_tokens=result.get("context_target_tokens"),
+                provider_prompt_tokens=result.get("provider_prompt_tokens"),
+                response_hash=result.get("response_hash"),
+                score=result.get("score"),
+                passed=result.get("passed"),
+                grader_detail=result.get("grader_detail") or {},
+                latency_ms=result.get("latency_ms"),
+                first_token_ms=result.get("first_token_ms"),
+                completion_tokens=result.get("completion_tokens"),
+                tokens_per_second=result.get("tokens_per_second"),
+                error_code=result.get("error_code"),
+            )
+        )
 
 
-async def run_qualification(db: AsyncSession, run: ModelEvalRun) -> dict:
-    """Evaluate one model against active suites; update certification fields."""
+async def _persist_role_scores(
+    db: AsyncSession,
+    *,
+    catalog: ModelCatalog,
+    roles: dict[str, dict],
+    evidence_key: str,
+    source_run_id: uuid.UUID,
+) -> None:
+    rows = (
+        await db.execute(
+            select(ModelRoleScore).where(ModelRoleScore.model_catalog_id == catalog.id)
+        )
+    ).scalars().all()
+    by_role = {row.agent_role: row for row in rows}
+    for role in PRODUCTION_ROLES:
+        detail = roles.get(role) or {}
+        row = by_role.get(role)
+        if row is None:
+            row = ModelRoleScore(
+                id=uuid.uuid4(),
+                model_catalog_id=catalog.id,
+                agent_role=role,
+                score_version="v98",
+            )
+            db.add(row)
+        score = detail.get("score")
+        row.benchmark_score = float(score) if score is not None else None
+        row.benchmark_evidence_key = evidence_key
+        row.benchmark_source_run_id = source_run_id
+        row.benchmark_passed = bool(detail.get("passed"))
+        if row.composite_score is None and score is not None:
+            row.composite_score = float(score)
+        row.confidence = min(1.0, 0.5 + 0.05 * int(detail.get("sample_count") or 0))
+        row.score_version = "v98"
+        row.detail_json = {
+            **(row.detail_json or {}),
+            "qualification": {
+                **detail,
+                "evidence_key": evidence_key,
+                "source_run_id": str(source_run_id),
+                "evaluator_revision": ABILITY_EVALUATOR_REVISION,
+            },
+        }
+
+
+def _ability_prior(run: ModelEvalRun | None) -> dict | None:
+    if run is None:
+        return None
+    summary = run.result_summary or {}
+    return {
+        "identity_hash": run.ability_identity_hash,
+        "suite_hash": run.ability_suite_hash,
+        "evaluator_revision": run.ability_evaluator_revision,
+        "source_run_id": str(run.id),
+        "status": run.status,
+        "overall": run.overall_score,
+        "roles": summary.get("roles") or summary.get("role_scores") or {},
+        "level": summary.get("level") or "none",
+    }
+
+
+def _context_prior(run: ModelEvalRun | None) -> dict | None:
+    if run is None:
+        return None
+    summary = run.result_summary or {}
+    return {
+        "identity_hash": run.context_identity_hash,
+        "context_suite_hash": run.context_suite_hash,
+        "evaluator_revision": run.context_evaluator_revision,
+        "source_run_id": str(run.id),
+        "status": run.status,
+        "declared_context_window": summary.get("declared_context_window"),
+        "accepted_context_window": summary.get("accepted_context_window"),
+        "effective_context_window": summary.get("effective_context_window"),
+        "rung_results": summary.get("rung_results") or {},
+        "position_robustness_score": summary.get("position_robustness_score"),
+        "multi_hop_score": summary.get("multi_hop_score"),
+        "instruction_retention_score": summary.get("instruction_retention_score"),
+        "belief_boundary_score": summary.get("belief_boundary_score"),
+    }
+
+
+def _set_ability_run_fingerprint(
+    run: ModelEvalRun,
+    *,
+    identity_hash: str,
+    suite_hash: str,
+    evaluation_key: str,
+    force: bool,
+) -> None:
+    run.benchmark_revision = ABILITY_EVALUATOR_REVISION
+    run.ability_identity_hash = identity_hash
+    run.ability_suite_hash = suite_hash
+    run.ability_evaluator_revision = ABILITY_EVALUATOR_REVISION
+    run.ability_evaluation_key = evaluation_key
+    run.force_requested = force
+
+
+async def run_qualification(
+    db: AsyncSession,
+    run: ModelEvalRun,
+    *,
+    force: bool = False,
+    gateway=None,
+) -> dict:
+    """Run/reuse ability evidence; a low score is reusable, an incomplete run is not."""
+
+    gateway = gateway or _default_gateway
     catalog = (
         await db.execute(select(ModelCatalog).where(ModelCatalog.id == run.model_catalog_id))
     ).scalar_one_or_none()
     if catalog is None or not catalog.text_generation_eligible:
         run.status = "failed"
-        run.result_summary = {"error": "model not text-eligible"}
         run.finished_at = datetime.now(timezone.utc)
+        run.gateway_calls = 0
+        run.result_summary = {
+            "execution_complete": False,
+            "error": "catalog_missing" if catalog is None else "non_text_model",
+        }
         await db.commit()
-        return {"status": "failed"}
+        return {
+            "status": "failed",
+            "reason": run.result_summary["error"],
+            "gateway_calls": 0,
+            "reused": False,
+        }
 
-    from app.gateway.model_gateway import stream_completion_and_collect
-
-    suites = (
-        (await db.execute(select(ModelEvalSuite).where(ModelEvalSuite.is_active.is_(True))))
-        .scalars()
-        .all()
+    await ensure_v98_suites(db)
+    await db.flush()
+    suites = await _load_v98_suites(db, mode="qualification")
+    suite_hash = suite_aggregate_hash(suites)
+    endpoint_hash = refresh_endpoint_identity(catalog)
+    refresh_upstream_identity(catalog)
+    identity = _identity_hash(catalog, endpoint_hash)
+    evaluation_key = ability_evaluation_key(identity, suite_hash)
+    prior_run = await _latest_source_run(
+        db,
+        catalog_id=catalog.id,
+        mode="qualification",
+        current_run_id=run.id,
+        evaluation_key=evaluation_key,
     )
-    run.status = "running"
-    run.started_at = datetime.now(timezone.utc)
-    run.benchmark_revision = "v97-rev1"
-    await db.commit()
+    prior = _ability_prior(prior_run)
+    decision = decide_ability_reuse_with_parts(
+        prior_identity_hash=(prior or {}).get("identity_hash"),
+        prior_suite_hash=(prior or {}).get("suite_hash"),
+        prior_rev=(prior or {}).get("evaluator_revision"),
+        prior_source_run_id=(prior or {}).get("source_run_id"),
+        prior_status=(prior or {}).get("status"),
+        identity_hash=identity,
+        suite_hash=suite_hash,
+        force=force,
+    )
+    _set_ability_run_fingerprint(
+        run,
+        identity_hash=identity,
+        suite_hash=suite_hash,
+        evaluation_key=evaluation_key,
+        force=force,
+    )
 
-    total_scores = []
-    per_role: dict[str, list[float]] = {}
-
-    for suite in suites:
-        cases = (
-            (await db.execute(select(ModelEvalCase).where(ModelEvalCase.suite_id == suite.id, ModelEvalCase.active.is_(True))))
-            .scalars()
-            .all()
+    if decision.reuse and prior_run is not None:
+        now = datetime.now(timezone.utc)
+        roles = (prior_run.result_summary or {}).get("roles") or {}
+        level = (prior_run.result_summary or {}).get("level") or "none"
+        run.status = "succeeded"
+        run.started_at = now
+        run.finished_at = now
+        run.overall_score = prior_run.overall_score
+        run.confidence = prior_run.confidence
+        run.ability_source_run_id = prior_run.id
+        run.reuse_reason = "cache_hit"
+        run.triggered_by = "cache_hit"
+        run.gateway_calls = 0
+        run.result_summary = {
+            "execution_complete": True,
+            "reused": True,
+            "source_run_id": str(prior_run.id),
+            "overall": prior_run.overall_score,
+            "roles": roles,
+            "level": level,
+        }
+        catalog.ability_evaluation_key = evaluation_key
+        catalog.ability_identity_hash = identity
+        catalog.ability_suite_hash = suite_hash
+        catalog.ability_evaluator_revision = ABILITY_EVALUATOR_REVISION
+        catalog.ability_reuse_reason = "cache_hit"
+        catalog.ability_source_run_id = prior_run.id
+        await _persist_role_scores(
+            db,
+            catalog=catalog,
+            roles=roles,
+            evidence_key=evaluation_key,
+            source_run_id=prior_run.id,
         )
-        for case in cases:
-            if run.cancel_requested:
-                run.status = "cancelled"
-                run.finished_at = datetime.now(timezone.utc)
-                await db.commit()
-                return {"status": "cancelled"}
-            started = time.time()
-            result = await stream_completion_and_collect(
-                system_prompt=case.prompt_template,
-                user_content="",
-                model=catalog.model_id,
-                temperature=case.temperature,
-                max_tokens=case.max_output_tokens,
-                provider_role="primary",
-                provider=catalog.provider,
-            )
-            score, detail = grade_response(case, result.final_content)
-            total_scores.append(score)
-            if case.role:
-                per_role.setdefault(case.role, []).append(score)
-            db.add(
-                ModelEvalCaseResult(
-                    id=uuid.uuid4(),
-                    run_id=run.id,
-                    case_id=case.id,
-                    variant_seed=0,
-                    provider_prompt_tokens=result.prompt_tokens,
-                    response_hash=hashlib.sha256(result.final_content.encode()).hexdigest()[:16],
-                    score=score,
-                    passed=score >= (suite.pass_threshold * 100),
-                    grader_detail=detail,
-                    latency_ms=result.latency_ms,
-                    first_token_ms=result.first_token_ms,
-                    completion_tokens=result.completion_tokens,
-                    error_code=result.error,
-                )
-            )
-            await db.commit()
-
-    if not total_scores:
-        run.status = "failed"
-        run.finished_at = datetime.now(timezone.utc)
         await db.commit()
-        return {"status": "failed", "reason": "no cases"}
+        return {
+            "status": "succeeded",
+            "execution_complete": True,
+            "level": level,
+            "overall": prior_run.overall_score,
+            "roles": roles,
+            "reused": True,
+            "reuse_reason": "cache_hit",
+            "changed_fields": [],
+            "source_run_id": str(prior_run.id),
+            "ability_evaluation_key": evaluation_key,
+            "identity_hash": identity,
+            "suite_hash": suite_hash,
+            "evaluator_revision": ABILITY_EVALUATOR_REVISION,
+            "gateway_calls": 0,
+            "triggered_by": "cache_hit",
+        }
 
-    overall = round(sum(total_scores) / len(total_scores), 1)
-    run.overall_score = overall
-    run.status = "succeeded"
-    run.finished_at = datetime.now(timezone.utc)
-    # certification: basic level from overall; role_qualified when a role suite passes
-    level = "health_only" if overall >= 50 else "none"
-    role_ok = {role: round(sum(s) / len(s), 1) for role, s in per_role.items() if s}
-    qualified_roles = [
-        role for role, sc in role_ok.items() if sc >= 70 and role in (
-            "draft_writer", "chapter_planner", "review_agent", "state_extractor"
-        )
-    ]
-    if qualified_roles:
-        level = "role_qualified"
-    run.confidence = round(
-        min(1.0, 0.5 + len(total_scores) / 60 * 0.5), 2
+    run.reuse_reason = decision.reason
+    run.triggered_by = "force" if force else decision.reason
+    claimed_by = await _claim_run(
+        db,
+        catalog_id=catalog.id,
+        mode="qualification",
+        run=run,
     )
-    run.result_summary = {"overall": overall, "role_scores": role_ok, "cases": len(total_scores)}
-    catalog.evaluation_status = "role_benchmarked"
-    catalog.certification_level = level
-    catalog.certification_confidence = run.confidence
-    catalog.benchmark_revision = run.benchmark_revision
-    catalog.last_certified_at = datetime.now(timezone.utc)
-    if qualified_roles:
-        catalog.evaluation_status = "qualified"
+    if claimed_by is not None:
+        return {
+            "status": "in_progress",
+            "reused": False,
+            "reuse_reason": "concurrent_run_in_progress",
+            "changed_fields": decision.changed_fields,
+            "source_run_id": str(claimed_by),
+            "ability_evaluation_key": evaluation_key,
+            "gateway_calls": 0,
+            "triggered_by": "dedup",
+        }
+
+    try:
+        result = await run_qualification_core(
+            catalog=_catalog_payload(catalog),
+            suites=suites,
+            gateway=gateway,
+            prior=prior,
+            force=force,
+            endpoint_identity_hash=endpoint_hash,
+            cancel_check=lambda: _cancel_requested(db, run),
+        )
+    except Exception as exc:
+        result = {
+            "status": "failed",
+            "execution_complete": False,
+            "error": f"evaluator_exception:{type(exc).__name__}",
+            "reused": False,
+            "reuse_reason": decision.reason,
+            "changed_fields": decision.changed_fields,
+            "gateway_calls": 0,
+            "case_results": [],
+            "roles": {},
+            "overall": None,
+            "level": "none",
+            "triggered_by": "force" if force else decision.reason,
+        }
+
+    await _persist_case_results(db, run=run, suites=suites, results=result.get("case_results") or [])
+    now = datetime.now(timezone.utc)
+    run.status = result["status"]
+    run.finished_at = now
+    run.overall_score = result.get("overall")
+    run.gateway_calls = int(result.get("gateway_calls") or 0)
+    run.reuse_reason = result.get("reuse_reason") or decision.reason
+    run.triggered_by = result.get("triggered_by") or run.triggered_by
+    run.confidence = min(1.0, 0.5 + 0.03 * len(result.get("case_results") or []))
+    run.result_summary = {
+        "execution_complete": bool(result.get("execution_complete")),
+        "error": result.get("error"),
+        "reused": False,
+        "overall": result.get("overall"),
+        "roles": result.get("roles") or {},
+        "qualified_roles": result.get("qualified_roles") or [],
+        "level": result.get("level") or "none",
+        "case_count": len(result.get("case_results") or []),
+    }
+    if result["status"] == "succeeded" and result.get("execution_complete"):
+        run.ability_source_run_id = None
+        catalog.ability_evaluation_key = evaluation_key
+        catalog.ability_identity_hash = identity
+        catalog.ability_suite_hash = suite_hash
+        catalog.ability_evaluator_revision = ABILITY_EVALUATOR_REVISION
+        catalog.ability_reuse_reason = decision.reason
+        catalog.ability_source_run_id = run.id
+        catalog.ability_completed_at = now
+        catalog.last_certified_at = now
+        catalog.benchmark_revision = ABILITY_EVALUATOR_REVISION
+        catalog.certification_level = result.get("level") or "none"
+        catalog.certification_confidence = run.confidence
+        catalog.evaluation_status = (
+            "qualified" if result.get("qualified_roles") else "evaluated"
+        )
+        await _persist_role_scores(
+            db,
+            catalog=catalog,
+            roles=result.get("roles") or {},
+            evidence_key=evaluation_key,
+            source_run_id=run.id,
+        )
+        result["source_run_id"] = str(run.id)
+    else:
+        result["source_run_id"] = None
+    result["previous_source_run_id"] = decision.source_run_id
+    result["changed_fields"] = decision.changed_fields
+    result["ability_evaluation_key"] = evaluation_key
+    result["identity_hash"] = identity
+    result["suite_hash"] = suite_hash
+    result["evaluator_revision"] = ABILITY_EVALUATOR_REVISION
+    result.pop("case_results", None)
     await db.commit()
-    return {"status": "succeeded", "level": level, "overall": overall, "roles": role_ok}
+    return result
 
 
-# ── Context Ladder (spec §13.22–§13.27) ──
+async def _context_profile_for(
+    db: AsyncSession,
+    catalog_id: uuid.UUID,
+) -> ModelContextProfile | None:
+    return (
+        await db.execute(
+            select(ModelContextProfile).where(ModelContextProfile.model_catalog_id == catalog_id)
+        )
+    ).scalar_one_or_none()
 
 
-RUNG_TOKEN_ESTIMATE = (8_000, 16_000, 32_000, 64_000, 128_000, 256_000, 512_000, 1_000_000)
-
-
-def pick_ladder(declared: int | None) -> list[int]:
-    if not declared:
-        return [16_000, 32_000]
-    return [r for r in RUNG_TOKEN_ESTIMATE if r <= declared] or [RUNG_TOKEN_ESTIMATE[0]]
-
-
-async def run_context_ladder(
-    db: AsyncSession, run: ModelEvalRun, catalog: ModelCatalog, rounds: int = 2
-) -> dict:
-    """Measure accepted (no API error) vs effective (task accuracy ≥80%)."""
-    from app.gateway.model_gateway import stream_completion_and_collect
-
-    cap = (
+async def _capability_for(
+    db: AsyncSession,
+    catalog_id: uuid.UUID,
+) -> ModelCapabilityProfile | None:
+    return (
         await db.execute(
             select(ModelCapabilityProfile).where(
-                ModelCapabilityProfile.model_catalog_id == catalog.id
+                ModelCapabilityProfile.model_catalog_id == catalog_id
             )
         )
     ).scalar_one_or_none()
-    declared = cap.declared_context_window or cap.context_window
-    ladder = pick_ladder(declared)
 
-    # synthetic storyworld context block (deterministic seed — spec §13.29)
-    rng = random.Random(f"ctx:{catalog.provider}:{catalog.model_id}".encode())
-    facts = []
-    for i in range(40):
-        facts.append(
-            f"第{i+1}篇：人物{chr(0x4E00 + i)}把物品{dict(zip(range(9), ['铜镜','玉佩','钥匙','信笺','香囊','瓷瓶','墨砚','罗盘','棋盘']))[i % 9]}放在{rng.choice(['密室','阁楼','井底','庙里','渡口','柴房'])}。"
-        )
-    context_block = "\n".join(facts)
-    question = f"根据上文：在序号4的段落里，人物{chr(0x4E00 + 3)}把什么物品放在了哪里？只回答物品和地点。"
 
-    accepted = None
-    effective = None
-    acc_by_rung = {}
-    for rung in ladder:
-        if run.cancel_requested:
-            run.status = "cancelled"
-            await db.commit()
-            return {"status": "cancelled"}
-        repetitions = max(1, rounds if rung <= 64_000 else 1)
-        hits = 0
-        runnable = 0
-        for rep in range(repetitions):
-            result = await stream_completion_and_collect(
-                system_prompt=context_block + "\n\n" + question,
-                user_content="回答。",
-                model=catalog.model_id,
-                temperature=0,
-                max_tokens=256,
-                provider_role="primary",
-                provider=catalog.provider,
-            )
-            runnable += 1
-            if result.error:
-                # accepted = highest rung that did NOT raise context-length errors
-                if result.error in ("MODEL_NOT_FOUND", "HTTP_400", "HTTP_413"):
-                    accepted = acc_by_rung.get(rung - 1) if rung - 1 in acc_by_rung else None
-                    effective = _first_failing_rung(acc_by_rung, 0.8) or accepted
-                    break
-                continue
-            acc_by_rung[rung] = acc_by_rung.get(rung, 0.0)
-            if "铜镜" in result.final_content or "玉佩" in result.final_content:
-                hits += 1
-                acc_by_rung[rung] = round((acc_by_rung[rung] * (runnable - 1) + 100) / runnable, 1)
-            else:
-                acc_by_rung[rung] = round((acc_by_rung[rung] * (runnable - 1) + 0) / runnable, 1)
-        else:
-            continue
-        break
-
-    profile = (
-        await db.execute(
-            select(ModelContextProfile).where(
-                ModelContextProfile.model_catalog_id == catalog.id
-            )
-        )
-    ).scalar_one_or_none()
+async def _write_context_profile(
+    db: AsyncSession,
+    *,
+    catalog: ModelCatalog,
+    capability: ModelCapabilityProfile | None,
+    result: dict,
+    source_run_id: uuid.UUID,
+    completed_at: datetime,
+) -> ModelContextProfile:
+    profile = await _context_profile_for(db, catalog.id)
     if profile is None:
         profile = ModelContextProfile(id=uuid.uuid4(), model_catalog_id=catalog.id)
         db.add(profile)
-        await db.flush()
-    profile.declared_context_window = declared
-    profile.accepted_context_window = accepted or (max(ladder) if not acc_by_rung else accepted)
-    profile.effective_context_window = _first_failing_rung(acc_by_rung, 0.8)
-    if profile.effective_context_window is None:
-        profile.effective_context_window = max(ladder)
-    profile.last_verified_at = datetime.now(timezone.utc)
-    profile.benchmark_revision = run.benchmark_revision or "v97-rev1"
-    profile.confidence = 0.8
-    if profile.effective_context_window and profile.effective_context_window < 32_000:
-        profile.confidence = 0.6
+    profile.declared_context_window = result.get("declared_context_window")
+    profile.accepted_context_window = result.get("accepted_context_window")
+    profile.effective_context_window = result.get("effective_context_window")
+    profile.position_robustness_score = result.get("position_robustness_score")
+    profile.multi_hop_score = result.get("multi_hop_score")
+    profile.instruction_retention_score = result.get("instruction_retention_score")
+    profile.belief_boundary_score = result.get("belief_boundary_score")
+    profile.last_verified_at = completed_at
+    profile.benchmark_revision = CONTEXT_EVALUATOR_REVISION
+    profile.confidence = min(1.0, 0.5 + 0.08 * len(result.get("rung_results") or {}))
+    profile.context_evaluation_key = result["context_evaluation_key"]
+    profile.context_identity_hash = result["context_identity_hash"]
+    profile.context_suite_hash = result["context_suite_hash"]
+    profile.context_evaluator_revision = CONTEXT_EVALUATOR_REVISION
+    profile.context_source_run_id = source_run_id
+    if capability is None:
+        capability = ModelCapabilityProfile(
+            id=uuid.uuid4(),
+            model_catalog_id=catalog.id,
+            capability_source="benchmark",
+        )
+        db.add(capability)
+    if result.get("declared_context_window") is not None:
+        capability.declared_context_window = result.get("declared_context_window")
+    capability.accepted_context_window = result.get("accepted_context_window")
+    capability.effective_context_window = result.get("effective_context_window")
+    capability.context_measurement_confidence = profile.confidence
+    return profile
 
-    cap.effective_context_window = profile.effective_context_window
-    cap.accepted_context_window = profile.accepted_context_window
-    cap.declared_context_window = profile.declared_context_window
-    cap.context_measurement_confidence = profile.confidence
-    catalog.evaluation_status = "context_verified"
-    await db.commit()
-    return {
-        "declared": declared,
-        "accepted": profile.accepted_context_window,
-        "effective": profile.effective_context_window,
-        "by_rung": acc_by_rung,
+
+async def run_context_ladder(
+    db: AsyncSession,
+    run: ModelEvalRun,
+    catalog: ModelCatalog | None = None,
+    *,
+    force: bool = False,
+    gateway=None,
+) -> dict:
+    """Run/reuse the real context ladder; supports the legacy catalog argument."""
+
+    gateway = gateway or _default_gateway
+    if catalog is None:
+        catalog = (
+            await db.execute(select(ModelCatalog).where(ModelCatalog.id == run.model_catalog_id))
+        ).scalar_one_or_none()
+    if catalog is None or not catalog.text_generation_eligible:
+        run.status = "failed"
+        run.finished_at = datetime.now(timezone.utc)
+        run.gateway_calls = 0
+        run.result_summary = {
+            "execution_complete": False,
+            "error": "catalog_missing" if catalog is None else "non_text_model",
+        }
+        await db.commit()
+        return {
+            "status": "failed",
+            "reason": run.result_summary["error"],
+            "gateway_calls": 0,
+            "reused": False,
+        }
+
+    await ensure_v98_suites(db)
+    await db.flush()
+    suites = await _load_v98_suites(db, mode="context_ladder")
+    suite_hash = suite_aggregate_hash(suites)
+    endpoint_hash = refresh_endpoint_identity(catalog)
+    refresh_upstream_identity(catalog)
+    identity = _identity_hash(catalog, endpoint_hash)
+    evaluation_key = context_evaluation_key(identity, suite_hash)
+    capability = await _capability_for(db, catalog.id)
+    declared = None
+    if capability is not None:
+        declared = capability.declared_context_window or capability.context_window
+    prior_run = await _latest_source_run(
+        db,
+        catalog_id=catalog.id,
+        mode="context_ladder",
+        current_run_id=run.id,
+        evaluation_key=evaluation_key,
+    )
+    prior = _context_prior(prior_run)
+    decision = decide_context_reuse_with_parts(
+        prior_identity_hash=(prior or {}).get("identity_hash"),
+        prior_context_suite_hash=(prior or {}).get("context_suite_hash"),
+        prior_rev=(prior or {}).get("evaluator_revision"),
+        prior_source_run_id=(prior or {}).get("source_run_id"),
+        prior_status=(prior or {}).get("status"),
+        identity_hash=identity,
+        context_suite_hash=suite_hash,
+        force=force,
+    )
+    run.context_evaluation_key = evaluation_key
+    run.context_identity_hash = identity
+    run.context_suite_hash = suite_hash
+    run.context_evaluator_revision = CONTEXT_EVALUATOR_REVISION
+    run.force_requested = force
+
+    if decision.reuse and prior_run is not None:
+        now = datetime.now(timezone.utc)
+        summary = prior_run.result_summary or {}
+        run.status = "succeeded"
+        run.started_at = now
+        run.finished_at = now
+        run.context_source_run_id = prior_run.id
+        run.reuse_reason = "cache_hit"
+        run.triggered_by = "cache_hit"
+        run.gateway_calls = 0
+        run.confidence = prior_run.confidence
+        run.result_summary = {
+            **summary,
+            "execution_complete": True,
+            "reused": True,
+            "source_run_id": str(prior_run.id),
+        }
+        catalog.context_evaluation_key = evaluation_key
+        catalog.context_identity_hash = identity
+        catalog.context_suite_hash = suite_hash
+        catalog.context_evaluator_revision = CONTEXT_EVALUATOR_REVISION
+        catalog.context_source_run_id = prior_run.id
+        source_completed_at = prior_run.finished_at or catalog.context_completed_at or now
+        await _write_context_profile(
+            db,
+            catalog=catalog,
+            capability=capability,
+            result={
+                **summary,
+                "context_evaluation_key": evaluation_key,
+                "context_identity_hash": identity,
+                "context_suite_hash": suite_hash,
+            },
+            source_run_id=prior_run.id,
+            completed_at=source_completed_at,
+        )
+        if catalog.context_completed_at is None:
+            catalog.context_completed_at = source_completed_at
+        await db.commit()
+        return {
+            "status": "succeeded",
+            "execution_complete": True,
+            "declared": summary.get("declared_context_window"),
+            "accepted": summary.get("accepted_context_window"),
+            "effective": summary.get("effective_context_window"),
+            "declared_context_window": summary.get("declared_context_window"),
+            "accepted_context_window": summary.get("accepted_context_window"),
+            "effective_context_window": summary.get("effective_context_window"),
+            "rung_results": summary.get("rung_results") or {},
+            "reused": True,
+            "reuse_reason": "cache_hit",
+            "changed_fields": [],
+            "source_run_id": str(prior_run.id),
+            "context_evaluation_key": evaluation_key,
+            "context_identity_hash": identity,
+            "context_suite_hash": suite_hash,
+            "evaluator_revision": CONTEXT_EVALUATOR_REVISION,
+            "gateway_calls": 0,
+            "triggered_by": "cache_hit",
+        }
+
+    run.reuse_reason = decision.reason
+    run.triggered_by = "force" if force else decision.reason
+    claimed_by = await _claim_run(
+        db,
+        catalog_id=catalog.id,
+        mode="context_ladder",
+        run=run,
+    )
+    if claimed_by is not None:
+        return {
+            "status": "in_progress",
+            "reused": False,
+            "reuse_reason": "concurrent_run_in_progress",
+            "changed_fields": decision.changed_fields,
+            "source_run_id": str(claimed_by),
+            "context_evaluation_key": evaluation_key,
+            "gateway_calls": 0,
+            "triggered_by": "dedup",
+        }
+
+    try:
+        result = await run_context_ladder_core(
+            catalog=_catalog_payload(catalog),
+            suites=suites,
+            gateway=gateway,
+            prior=prior,
+            force=force,
+            declared_context_window=declared,
+            endpoint_identity_hash=endpoint_hash,
+            cancel_check=lambda: _cancel_requested(db, run),
+        )
+    except Exception as exc:
+        result = {
+            "status": "failed",
+            "execution_complete": False,
+            "error": f"evaluator_exception:{type(exc).__name__}",
+            "reused": False,
+            "reuse_reason": decision.reason,
+            "changed_fields": decision.changed_fields,
+            "gateway_calls": 0,
+            "rung_results": {},
+            "case_results": [],
+            "triggered_by": "force" if force else decision.reason,
+            "context_evaluation_key": evaluation_key,
+            "context_identity_hash": identity,
+            "context_suite_hash": suite_hash,
+        }
+
+    await _persist_case_results(db, run=run, suites=suites, results=result.get("case_results") or [])
+    now = datetime.now(timezone.utc)
+    run.status = result["status"]
+    run.finished_at = now
+    run.gateway_calls = int(result.get("gateway_calls") or 0)
+    run.reuse_reason = result.get("reuse_reason") or decision.reason
+    run.triggered_by = result.get("triggered_by") or run.triggered_by
+    rung_values = [
+        detail.get("accuracy")
+        for detail in (result.get("rung_results") or {}).values()
+        if detail.get("accuracy") is not None
+    ]
+    run.overall_score = round(sum(rung_values) / len(rung_values), 1) if rung_values else None
+    run.confidence = min(1.0, 0.5 + 0.08 * len(result.get("rung_results") or {}))
+    run.result_summary = {
+        "execution_complete": bool(result.get("execution_complete")),
+        "error": result.get("error"),
+        "reused": False,
+        "declared_context_window": result.get("declared_context_window"),
+        "accepted_context_window": result.get("accepted_context_window"),
+        "effective_context_window": result.get("effective_context_window"),
+        "rung_results": result.get("rung_results") or {},
+        "position_robustness_score": result.get("position_robustness_score"),
+        "multi_hop_score": result.get("multi_hop_score"),
+        "instruction_retention_score": result.get("instruction_retention_score"),
+        "belief_boundary_score": result.get("belief_boundary_score"),
+        "case_count": len(result.get("case_results") or []),
     }
+    if result["status"] == "succeeded" and result.get("execution_complete"):
+        run.context_source_run_id = None
+        await _write_context_profile(
+            db,
+            catalog=catalog,
+            capability=capability,
+            result=result,
+            source_run_id=run.id,
+            completed_at=now,
+        )
+        catalog.context_evaluation_key = evaluation_key
+        catalog.context_identity_hash = identity
+        catalog.context_suite_hash = suite_hash
+        catalog.context_evaluator_revision = CONTEXT_EVALUATOR_REVISION
+        catalog.context_source_run_id = run.id
+        catalog.context_completed_at = now
+        catalog.evaluation_status = (
+            "context_verified" if result.get("effective_context_window") else "context_failed"
+        )
+        result["source_run_id"] = str(run.id)
+    else:
+        result["source_run_id"] = None
+    result["previous_source_run_id"] = decision.source_run_id
+    result["changed_fields"] = decision.changed_fields
+    result["context_evaluation_key"] = evaluation_key
+    result["context_identity_hash"] = identity
+    result["context_suite_hash"] = suite_hash
+    result["evaluator_revision"] = CONTEXT_EVALUATOR_REVISION
+    result["declared"] = result.get("declared_context_window")
+    result["accepted"] = result.get("accepted_context_window")
+    result["effective"] = result.get("effective_context_window")
+    result["by_rung"] = result.get("rung_results") or {}
+    result.pop("case_results", None)
+    await db.commit()
+    return result
 
 
-def _first_failing_rung(acc: dict[int, float], threshold: float) -> int | None:
-    """Highest rung still >= threshold, scanning ascending."""
-    ok_on = []
-    for rung in sorted(acc):
-        if acc[rung] >= threshold * 100:
-            ok_on.append(rung)
-    return ok_on[-1] if ok_on else None
+async def get_catalog_evidence_state(
+    db: AsyncSession,
+    catalog: ModelCatalog,
+    *,
+    suite_hashes: tuple[str | None, str | None] | None = None,
+) -> dict:
+    """Compute live valid/stale/missing state and verify persisted source runs."""
 
+    endpoint_hash = derive_endpoint_identity_hash(catalog)
+    if suite_hashes is None:
+        ability_hash = await _ability_suite_hash(db)
+        context_hash = await _context_suite_hash(db)
+    else:
+        ability_hash, context_hash = suite_hashes
+    metadata = dict(catalog.metadata_json or {})
+    state = current_evidence_state(
+        provider=catalog.provider,
+        model_id=catalog.model_id,
+        model_kind=catalog.model_kind,
+        endpoint_identity_hash=endpoint_hash,
+        owned_by=metadata.get("owned_by"),
+        created=metadata.get("created"),
+        upstream_revision=metadata.get("upstream_revision"),
+        ability_suite_hash=ability_hash,
+        context_suite_hash=context_hash,
+        catalog_ability_evaluation_key=catalog.ability_evaluation_key,
+        catalog_ability_identity_hash=catalog.ability_identity_hash,
+        catalog_ability_suite_hash=catalog.ability_suite_hash,
+        catalog_ability_evaluator_revision=catalog.ability_evaluator_revision,
+        catalog_context_evaluation_key=catalog.context_evaluation_key,
+        catalog_context_identity_hash=catalog.context_identity_hash,
+        catalog_context_suite_hash=catalog.context_suite_hash,
+        catalog_context_evaluator_revision=catalog.context_evaluator_revision,
+    )
 
-def certification_gate(catalog: ModelCatalog, profile: ModelContextProfile | None, required_context: int) -> tuple[bool, list[str]]:
-    """Spec §13.39: hard gate for key-role Primary/Fallback selection."""
-    blockers = []
-    if not catalog.text_generation_eligible:
-        blockers.append("not_text_generation")
-    if catalog.certification_level not in ("role_qualified", "production_qualified"):
-        blockers.append(f"certification_level={catalog.certification_level or 'none'}")
-    effective = (profile.effective_context_window if profile else None) or None
-    if effective is None or effective < required_context:
-        blockers.append(f"effective_context={effective} < required={required_context}")
-    if (catalog.certification_confidence or 0) < 0.70:
-        blockers.append(f"confidence={catalog.certification_confidence}")
-    return len(blockers) == 0, blockers
+    async def verify_source(kind: str) -> None:
+        descriptor = state[kind]
+        if descriptor["state"] != "valid":
+            return
+        source_id = getattr(catalog, f"{kind}_source_run_id", None)
+        if source_id is None:
+            descriptor.update(state="missing", reason=f"{kind}_source_missing", changed_fields=["source_run"])
+            return
+        source = await db.get(ModelEvalRun, source_id)
+        key_attr = f"{kind}_evaluation_key"
+        if (
+            source is None
+            or source.status != "succeeded"
+            or not bool((source.result_summary or {}).get("execution_complete", True))
+            or getattr(source, key_attr, None) != state[key_attr]
+        ):
+            descriptor.update(state="stale", reason=f"{kind}_source_invalid", changed_fields=["source_run"])
+        descriptor["source_run_id"] = str(source_id)
+        descriptor["completed_at"] = getattr(catalog, f"{kind}_completed_at", None)
+
+    await verify_source("ability")
+    await verify_source("context")
+    role_rows = (
+        await db.execute(
+            select(ModelRoleScore).where(ModelRoleScore.model_catalog_id == catalog.id)
+        )
+    ).scalars().all()
+    role_evidence = {}
+    for role in PRODUCTION_ROLES:
+        row = next((item for item in role_rows if item.agent_role == role), None)
+        current = bool(
+            row
+            and state["ability"]["state"] == "valid"
+            and row.benchmark_evidence_key == state["ability_evaluation_key"]
+            and row.benchmark_source_run_id == catalog.ability_source_run_id
+        )
+        role_evidence[role] = {
+            "state": "valid" if current else "missing" if row is None else "stale",
+            "score": row.benchmark_score if row else None,
+            "passed": bool(row.benchmark_passed) if current else False,
+            "evidence_key": row.benchmark_evidence_key if row else None,
+            "source_run_id": str(row.benchmark_source_run_id) if row and row.benchmark_source_run_id else None,
+        }
+    profile = await _context_profile_for(db, catalog.id)
+    state["endpoint_identity_hash"] = endpoint_hash
+    state["ability_suite_hash"] = ability_hash
+    state["context_suite_hash"] = context_hash
+    state["role_evidence"] = role_evidence
+    state["context_profile"] = {
+        "declared": profile.declared_context_window if profile else None,
+        "accepted": profile.accepted_context_window if profile else None,
+        "effective": profile.effective_context_window if profile else None,
+        "position_robustness_score": profile.position_robustness_score if profile else None,
+        "multi_hop_score": profile.multi_hop_score if profile else None,
+        "instruction_retention_score": profile.instruction_retention_score if profile else None,
+        "belief_boundary_score": profile.belief_boundary_score if profile else None,
+    }
+    return state
+__all__ = [
+    "ABILITY_EVALUATOR_REVISION",
+    "CONTEXT_EVALUATOR_REVISION",
+    "SuiteDefinitionDriftError",
+    "_ability_suite_hash",
+    "_context_suite_hash",
+    "_suite_id",
+    "ability_evaluation_key",
+    "compute_endpoint_identity_hash",
+    "context_evaluation_key",
+    "current_evidence_state",
+    "decide_ability_reuse_with_parts",
+    "decide_context_reuse_with_parts",
+    "ensure_v98_suites",
+    "get_catalog_evidence_state",
+    "grade_response",
+    "model_identity_hash",
+    "normalize_suite",
+    "pick_ladder",
+    "refresh_endpoint_identity",
+    "refresh_upstream_identity",
+    "run_context_ladder",
+    "run_context_ladder_core",
+    "run_qualification",
+    "run_qualification_core",
+    "seed_suites",
+    "suite_aggregate_hash",
+]

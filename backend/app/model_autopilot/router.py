@@ -6,7 +6,9 @@ Hard eligibility first; provider-diverse fallbacks; draft writer floor.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from sqlalchemy import select
@@ -36,12 +38,12 @@ DEFAULT_WEIGHTS = {
 }
 
 
-def compute_performance_score(db: AsyncSession, catalog_id: UUID) -> float | None:
+async def compute_performance_score(db: AsyncSession, catalog_id: UUID) -> float | None:
     """v9.6 §57: TTFT 40% + tokens/s 40% + latency 20%. None when no data."""
     from app.models import ModelHealthProbe
 
     perf = (
-        db.execute(
+        await db.execute(
             select(ModelHealthProbe)
             .where(
                 ModelHealthProbe.model_catalog_id == catalog_id,
@@ -103,6 +105,11 @@ async def build_role_route(
     require_diversity = bool(policy.get("require_provider_diversity", True))
     min_health = float(policy.get("min_health_score", 0))
     min_quality = float(policy.get("min_quality_score", 0))
+    allow_degraded = bool(policy.get("allow_degraded", False))
+    health_ttl_seconds = int(
+        policy.get("prewrite_health_ttl_seconds")
+        or os.environ.get("MODEL_PREWRITE_HEALTH_TTL_SECONDS", "300")
+    )
     weights = {
         "quality": float(policy.get("quality_weight", DEFAULT_WEIGHTS["quality"])),
         "reliability": float(policy.get("reliability_weight", DEFAULT_WEIGHTS["reliability"])),
@@ -129,6 +136,46 @@ async def build_role_route(
             continue
         if allowed_ids and str(catalog.id) not in allowed_ids:
             continue
+        if not catalog.text_generation_eligible:
+            continue
+
+        from app.model_eval.engine import get_catalog_evidence_state
+
+        evidence = await get_catalog_evidence_state(db, catalog)
+        ability_state = evidence.get("ability") or {}
+        role_evidence = (evidence.get("role_evidence") or {}).get(agent_role) or {}
+        if ability_state.get("state") != "valid":
+            blockers.append(
+                {
+                    "model": catalog.model_id,
+                    "code": "MISSING_ABILITY_EVIDENCE",
+                    "reason": ability_state.get("reason") or "ability evidence is not current",
+                    "changed_fields": ability_state.get("changed_fields") or [],
+                }
+            )
+            continue
+        if role_evidence.get("state") != "valid" or not role_evidence.get("passed"):
+            blockers.append(
+                {
+                    "model": catalog.model_id,
+                    "code": "ROLE_QUALIFICATION_FAILED",
+                    "role": agent_role,
+                    "score": role_evidence.get("score"),
+                    "reason": "current role evidence is missing, stale, or below threshold",
+                }
+            )
+            continue
+        if requires_context and evidence.get("context", {}).get("state") != "valid":
+            context_state = evidence.get("context") or {}
+            blockers.append(
+                {
+                    "model": catalog.model_id,
+                    "code": "MISSING_CONTEXT_EVIDENCE",
+                    "reason": context_state.get("reason") or "context evidence is not current",
+                    "changed_fields": context_state.get("changed_fields") or [],
+                }
+            )
+            continue
 
         cap = (
             await db.execute(
@@ -140,7 +187,9 @@ async def build_role_route(
         # v9.7: effective context (measured) beats declared; unknown => reject for key roles
         ctx = None
         if cap is not None:
-            if cap.effective_context_window:
+            if requires_context:
+                ctx = cap.effective_context_window
+            elif cap.effective_context_window:
                 ctx = cap.effective_context_window
             elif cap.declared_context_window:
                 ctx = cap.declared_context_window
@@ -148,7 +197,7 @@ async def build_role_route(
                 ctx = cap.context_window
 
         context_fit = None
-        if requires_context or required_context:
+        if requires_context:
             context_fit = context_fit_score(ctx, required_context)
             if context_fit is None:
                 blockers.append(
@@ -183,18 +232,42 @@ async def build_role_route(
             )
         ).scalar_one_or_none()
         health_status = snap.health_status if snap else "unknown"
-        if min_health and (health_status == "unavailable" or (snap and snap.health_score is None)):
+        last_probe_at = snap.last_probe_at if snap else None
+        if last_probe_at is not None and last_probe_at.tzinfo is None:
+            last_probe_at = last_probe_at.replace(tzinfo=timezone.utc)
+        fresh_after = datetime.now(timezone.utc) - timedelta(seconds=health_ttl_seconds)
+        if last_probe_at is None or last_probe_at < fresh_after:
+            blockers.append(
+                {
+                    "model": catalog.model_id,
+                    "code": "MISSING_FRESH_HEALTH",
+                    "last_probe_at": last_probe_at.isoformat() if last_probe_at else None,
+                    "ttl_seconds": health_ttl_seconds,
+                }
+            )
             continue
-        if health_status in ("unavailable", "missing", "disabled"):
+        if health_status == "degraded" and not allow_degraded:
+            blockers.append(
+                {
+                    "model": catalog.model_id,
+                    "code": "MODEL_HEALTH_DEGRADED",
+                }
+            )
             continue
-        # v9.7 §13.39: certified text models only
-        if not catalog.text_generation_eligible:
+        if min_health and (health_status not in ("healthy", "degraded") or snap.health_score is None):
             continue
-        if catalog.certification_level not in ("role_qualified", "production_qualified") and requires_context:
+        if health_status not in ("healthy", "degraded"):
+            blockers.append(
+                {
+                    "model": catalog.model_id,
+                    "code": "MODEL_HEALTH_UNAVAILABLE",
+                    "health_status": health_status,
+                }
+            )
             continue
         reliability = (snap.success_rate_15m or 0) * 100 if snap and snap.success_rate_15m is not None else None
-        health_score = snap.health_score if snap and snap.health_score is not None else (100 if health_status == "healthy" else 70)
-        performance_score = compute_performance_score(db, catalog.id)
+        health_score = snap.health_score if snap.health_score is not None else (100 if health_status == "healthy" else 70)
+        performance_score = await compute_performance_score(db, catalog.id)
 
         # spec §36 + v9.6 §56 FinalScore
         route_score = (
@@ -239,9 +312,12 @@ async def build_role_route(
             ])
 
     if not scored:
-        return RoleRouteResult(assignment=None, blockers=[
-            {"role": agent_role, "code": "NO_ELIGIBLE_MODEL", "required_context": required_context}
-        ])
+        return RoleRouteResult(
+            assignment=None,
+            blockers=(blockers or []) + [
+                {"role": agent_role, "code": "NO_ELIGIBLE_MODEL", "required_context": required_context}
+            ],
+        )
 
     if not has_lock and scored[0][0] < floor:
         return RoleRouteResult(assignment=None, blockers=[
@@ -290,7 +366,7 @@ async def build_role_route(
     return RoleRouteResult(
         assignment=assignment,
         blockers=None,
-        candidates=[RouteTarget(*t[1][:2], t[1].route_score) for t in scored],
+        candidates=[item[1] for item in scored],
     )
 
 

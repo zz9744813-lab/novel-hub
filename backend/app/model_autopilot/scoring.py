@@ -182,11 +182,38 @@ async def compute_role_score(
     row.human_quality_score = human_score
     row.production_quality_score = prod_score
     row.sample_count = sample_count
-    row.benchmark_score = None  # benchmark suite PR-12/P1 hook
+    # v9.8: KEEP the benchmark (qualification) score — it is real ability
+    # evidence, NOT to be discarded. It is folded into the composite below.
+    # row.benchmark_score = None  # (removed — was discarding real signal, P0-2)
 
     human_w = _human_weight(sample_count)
     base = prod_score if (prod_score is not None and sample_count >= 10) else (row.static_prior_score or DEFAULT_TIER_SCORE)
     composite = round(human_w * (human_score or base) + (1 - human_w) * base, 1)
+    # v9.8 (P0-4): the one-time qualification benchmark score reaches routing,
+    # BUT only when its evidence key still matches the model's CURRENT valid
+    # ability key. After an identity/suite/evaluator change the old
+    # benchmark_score must NOT keep contributing to the composite.
+    benchmark_blended = None
+    benchmark_state = None
+    if row.benchmark_score is not None:
+        from app.model_eval.engine import get_catalog_evidence_state
+
+        evidence = await get_catalog_evidence_state(db, catalog)
+        role_evidence = (evidence.get("role_evidence") or {}).get(agent_role) or {}
+        benchmark_state = {
+            "ability": (evidence.get("ability") or {}).get("state"),
+            "role": role_evidence.get("state"),
+            "passed": role_evidence.get("passed"),
+        }
+        if (
+            evidence.get("ability", {}).get("state") == "valid"
+            and role_evidence.get("state") == "valid"
+            and row.benchmark_evidence_key == evidence.get("ability_evaluation_key")
+        ):
+            composite = round(0.25 * row.benchmark_score + 0.75 * composite, 1)
+            benchmark_blended = True
+        else:
+            benchmark_blended = False
     if reliability is not None:
         # reliability blends into composite lightly (±10%)
         composite = round(0.9 * composite + 0.1 * reliability, 1)
@@ -198,6 +225,9 @@ async def compute_role_score(
         "reliability": reliability,
         "production_quality": prod_score,
         "human_quality": human_score,
+        "benchmark_score": row.benchmark_score,
+        "benchmark_blended": benchmark_blended,
+        "benchmark_state": benchmark_state,
         "sample_count": sample_count,
         "computed_at": now.isoformat(),
     }

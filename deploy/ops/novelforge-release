@@ -29,7 +29,15 @@ compose() {
 }
 
 current_release() {
-  readlink -f "$CURRENT" 2>/dev/null || true
+  local release
+  if [ -L "$CURRENT" ]; then
+    release=$(readlink -f "$CURRENT" 2>/dev/null || true)
+    if [[ $release =~ ^${RELEASES}/[0-9a-f]{40}$ ]] \
+      && [ -f "$release/deploy/docker-compose.yml" ]; then
+      printf '%s\n' "$release"
+    fi
+  fi
+  return 0
 }
 
 current_sha() {
@@ -128,6 +136,19 @@ prepare_release() {
 
 switch_to() {
   local release=$1
+  local managed legacy stamp
+  managed=$(current_release)
+  if { [ -e "$CURRENT" ] || [ -L "$CURRENT" ]; } && [ -z "$managed" ]; then
+    stamp=$(date -u +%Y%m%dT%H%M%SZ)
+    install -d -m 0750 -o root -g root "$ROOT/legacy"
+    legacy="$ROOT/legacy/current-$stamp"
+    [ ! -e "$legacy" ] && [ ! -L "$legacy" ] \
+      || { echo "legacy archive path already exists: $legacy" >&2; exit 73; }
+    # Moving on the same filesystem is atomic and preserves the complete
+    # pre-managed tree (or symlink) instead of deleting or overwriting it.
+    mv -T "$CURRENT" "$legacy"
+    echo "legacy current archived: $legacy" >&2
+  fi
   ln -sfn "$release" "$CURRENT.next"
   mv -Tf "$CURRENT.next" "$CURRENT"
 }
@@ -198,12 +219,17 @@ rollback_sha() {
 }
 
 show_status() {
-  local release sha health=false
+  local release sha health=false current_kind=absent
   release=$(current_release)
   sha=$(current_sha)
+  if [ -n "$release" ]; then
+    current_kind=managed
+  elif [ -e "$CURRENT" ] || [ -L "$CURRENT" ]; then
+    current_kind=legacy
+  fi
   healthy && health=true || true
-  printf '{"ok":true,"sha":"%s","health":%s,"release":"%s"}\n' \
-    "$sha" "$health" "$release"
+  printf '{"ok":true,"sha":"%s","health":%s,"release":"%s","current_kind":"%s"}\n' \
+    "$sha" "$health" "$release" "$current_kind"
   if [ -n "$release" ] && [ -d "$release/deploy" ]; then
     compose "$release" ps --format json || true
   fi

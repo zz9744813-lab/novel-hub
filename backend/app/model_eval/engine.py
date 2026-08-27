@@ -365,12 +365,20 @@ def _catalog_payload(catalog: ModelCatalog) -> dict:
 async def _default_gateway(**kwargs):
     from app.gateway.model_gateway import stream_completion_and_collect
 
+    model = kwargs["model"]
+    max_tokens = kwargs.get("max_tokens", 512)
+    normalized = str(model).casefold()
+    if normalized.startswith("glm-") or "/glm-" in normalized:
+        # Some OpenAI-compatible relays ignore GLM's thinking toggle.  Give a
+        # one-time evidence case enough room to reach final content even then;
+        # lightweight recurring health probes keep their separate small cap.
+        max_tokens = max(2048, int(max_tokens or 0))
     return await stream_completion_and_collect(
         system_prompt=kwargs["system_prompt"],
         user_content=kwargs["user_content"],
-        model=kwargs["model"],
+        model=model,
         temperature=kwargs.get("temperature", 0),
-        max_tokens=kwargs.get("max_tokens", 512),
+        max_tokens=max_tokens,
         provider_role="primary",
         provider=kwargs.get("provider"),
         reasoning_mode="disabled",

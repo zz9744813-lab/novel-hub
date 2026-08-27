@@ -852,7 +852,10 @@ def test_provider_context_metadata_and_unknown_ladder_reach_production_size():
 def test_health_probe_budget_handles_reasoning_models_without_becoming_benchmark(
     monkeypatch,
 ):
-    from app.model_autopilot.probe import _health_probe_max_tokens
+    from app.model_autopilot.probe import (
+        _configured_handshake_max_tokens,
+        _health_probe_max_tokens,
+    )
 
     monkeypatch.delenv("MODEL_HEALTH_MAX_TOKENS", raising=False)
     assert _health_probe_max_tokens() == 128
@@ -860,6 +863,77 @@ def test_health_probe_budget_handles_reasoning_models_without_becoming_benchmark
     assert _health_probe_max_tokens() == 128
     monkeypatch.setenv("MODEL_HEALTH_MAX_TOKENS", "9999")
     assert _health_probe_max_tokens() == 512
+    monkeypatch.delenv("MODEL_HANDSHAKE_MAX_TOKENS", raising=False)
+    assert _configured_handshake_max_tokens() == 2048
+    monkeypatch.setenv("MODEL_HANDSHAKE_MAX_TOKENS", "99999")
+    assert _configured_handshake_max_tokens() == 4096
+
+
+@pytest.mark.asyncio
+async def test_configured_handshake_retries_reasoning_only_once_with_larger_budget():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+
+    from app.gateway.model_gateway import StreamResult
+    from app.model_autopilot.probe import probe_model_ping
+
+    catalog = make_catalog(model_id="glm-5.2")
+    gateway = AsyncMock(
+        side_effect=[
+            StreamResult(
+                reasoning_text="thinking",
+                error="final_content_empty",
+                finish_reason="length",
+                latency_ms=10,
+            ),
+            StreamResult(
+                final_content="OK",
+                finish_reason="stop",
+                latency_ms=20,
+            ),
+        ]
+    )
+    with patch(
+        "app.model_autopilot.probe.stream_completion_and_collect",
+        gateway,
+    ):
+        probe = await probe_model_ping(
+            SimpleNamespace(),
+            catalog,
+            allow_reasoning_retry=True,
+        )
+
+    assert probe.status == "ok"
+    assert probe.output_valid is True
+    assert probe.detail_json["adaptive_retry"] is True
+    assert probe.detail_json["first_finish_reason"] == "length"
+    assert gateway.await_count == 2
+    assert gateway.await_args_list[1].kwargs["max_tokens"] == 2048
+
+
+@pytest.mark.asyncio
+async def test_glm_evidence_gateway_has_room_for_final_content():
+    from unittest.mock import AsyncMock, patch
+
+    from app.gateway.model_gateway import StreamResult
+    from app.model_eval.engine import _default_gateway
+
+    gateway = AsyncMock(return_value=StreamResult(final_content="OK"))
+    with patch(
+        "app.gateway.model_gateway.stream_completion_and_collect",
+        gateway,
+    ):
+        await _default_gateway(
+            system_prompt="system",
+            user_content="user",
+            model="glm-5.2",
+            temperature=0,
+            max_tokens=128,
+            provider="new-api",
+        )
+
+    assert gateway.await_args.kwargs["max_tokens"] == 2048
+    assert gateway.await_args.kwargs["reasoning_mode"] == "disabled"
 
 
 @pytest.mark.asyncio

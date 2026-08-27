@@ -213,7 +213,11 @@ async def bootstrap_catalog_and_probes() -> dict:
                 report["skipped_fresh"] += 1
                 continue
             try:
-                probe = await probe_model_ping(db, catalog)
+                probe = await probe_model_ping(
+                    db,
+                    catalog,
+                    allow_reasoning_retry=configured,
+                )
                 db.add(probe)
                 if configured and probe.status == "ok" and probe.output_valid:
                     if not catalog.text_generation_eligible:

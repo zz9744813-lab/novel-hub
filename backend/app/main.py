@@ -42,6 +42,12 @@ def get_readiness() -> tuple[bool, dict]:
     return _READY, _READY_DETAIL
 
 
+async def get_runtime_readiness() -> tuple[bool, dict]:
+    from app.startup_checks import check_runtime_ready
+
+    return await check_runtime_ready(_READY_DETAIL)
+
+
 def _is_production() -> bool:
     return (os.environ.get("APP_ENV") or "").lower() in {"production", "prod"}
 
@@ -306,9 +312,13 @@ async def health_live():
 
 @app.get("/health/ready")
 async def health_ready():
-    if not _READY:
-        return JSONResponse(status_code=503, content={"status": "not_ready", "detail": _READY_DETAIL})
-    return {"status": "ready", "detail": _READY_DETAIL}
+    ready, detail = await get_runtime_readiness()
+    if not ready:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "detail": detail},
+        )
+    return {"status": "ready", "detail": detail}
 
 
 @app.get("/health")

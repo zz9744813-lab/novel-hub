@@ -76,7 +76,6 @@ services:
       - ../data/exports:/app/data/exports
       - ../data/references:/data/references
       - ../data/imports:/app/data/imports
-      - ./.env:/app/.env:ro
     networks:
       - internal
     mem_limit: 384m
@@ -119,7 +118,6 @@ services:
       - ../data/exports:/app/data/exports
       - ../data/references:/data/references
       - ../data/imports:/app/data/imports
-      - ./.env:/app/.env:ro
     networks:
       - internal
     mem_limit: 640m
@@ -129,7 +127,10 @@ services:
     logging: *default-logging
 
   postgres:
-    image: postgres:16-alpine
+    build:
+      context: ./postgres
+      dockerfile: Dockerfile
+    image: novelforge-postgres:16
     restart: unless-stopped
     env_file:
       - .env
@@ -140,8 +141,6 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-NovelForge2026Secure}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
-      - ./postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
       - ../data/backups:/backups
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
@@ -156,12 +155,14 @@ services:
     logging: *default-logging
 
   redis:
-    image: redis:7-alpine
+    build:
+      context: ./redis
+      dockerfile: Dockerfile
+    image: novelforge-redis:7
     restart: unless-stopped
     command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
     volumes:
       - redis_data:/data
-      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 15s

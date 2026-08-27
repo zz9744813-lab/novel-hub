@@ -189,9 +189,9 @@ async def health_live():
 @router.get("/health/ready")
 @router.get("/api/health/ready")
 async def health_ready():
-    from app.main import get_readiness
+    from app.main import get_runtime_readiness
 
-    ready, detail = get_readiness()
+    ready, detail = await get_runtime_readiness()
     if not ready:
         raise HTTPException(503, detail={"status": "not_ready", "detail": detail})
     return {"status": "ready", "detail": detail}
@@ -2916,7 +2916,9 @@ async def get_causal_graph(chapter_id: str, db: AsyncSession = Depends(get_db)):
         "stats": {
             "event_count": len(nodes),
             "edge_count": len(links),
-            "hard_edge_count": sum(1 for l in links if l["mode"] == "hard"),
+            "hard_edge_count": sum(
+                1 for link in links if link["mode"] == "hard"
+            ),
         },
     }
 
@@ -2993,10 +2995,7 @@ async def create_writing_session(book_id: str, request: Request, db: AsyncSessio
 async def get_current_writing_session(book_id: str, db: AsyncSession = Depends(get_db)):
     """Active session (or null) for a book, enriched with guard metrics."""
     from app.models import WritingSession
-    from app.services.writing_session_controller import (
-        ACTIVE_SESSION_STATUSES,
-        serialize_session,
-    )
+    from app.services.writing_session_controller import ACTIVE_SESSION_STATUSES
     from app.services.writing_session_service import session_current_view
 
     bid = _parse_uuid(book_id, field="book id")

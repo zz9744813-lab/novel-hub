@@ -53,6 +53,9 @@ PRODUCTION_PACK_SCRIPT = (
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 RELEASE_SCRIPT = REPOSITORY_ROOT / "deploy" / "ops" / "novelforge-release"
 FORCED_COMMAND_SCRIPT = REPOSITORY_ROOT / "deploy" / "ops" / "novelforge-ops"
+CONSOLE_BOOTSTRAP_SCRIPT = (
+    REPOSITORY_ROOT / "deploy" / "ops" / "bootstrap-console.sh"
+)
 
 
 def _pack():
@@ -154,6 +157,18 @@ def test_restricted_release_runs_model_evidence_before_switching():
     assert release.index(qualification) < release.index('switch_to "$release"')
     assert "validate|qualify|install|start" in release
     assert "validate|qualify|install|start" in forced
+
+
+def test_console_bootstrap_is_pinned_and_never_interprets_the_key_as_shell():
+    bootstrap = CONSOLE_BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
+
+    assert "OPS_COMMIT=7c5aaee1a1d5b4683248db8ef794b55c8d68dfe1" in bootstrap
+    assert "KEY_BODY=$1" in bootstrap
+    assert "printf 'ssh-ed25519 %s" in bootstrap
+    assert "/root/novelforge/deploy/.env /root/novelforge/.env" in bootstrap
+    assert "NOVELFORGE_BOOTSTRAP_OK" in bootstrap
+    assert "eval " not in bootstrap
+    assert "bash -c" not in bootstrap
 
 
 @pytest.mark.asyncio

@@ -1,9 +1,10 @@
 """Startup readiness checks (P0-07 / P0-09)."""
 from __future__ import annotations
 
+import asyncio
 import os
 import logging
-from typing import Tuple
+from typing import Any, Tuple
 
 logger = logging.getLogger("novelforge.startup")
 
@@ -82,6 +83,26 @@ async def check_db_ready() -> Tuple[bool, str]:
         return True, "ok"
     except Exception as e:
         return False, str(e)
+
+
+async def check_runtime_ready(
+    cached_detail: dict[str, Any], *, timeout_seconds: float = 3.0
+) -> Tuple[bool, dict[str, Any]]:
+    """Refresh the volatile DB signal without repeating provider probes."""
+    detail = dict(cached_detail)
+    try:
+        ok_db, message = await asyncio.wait_for(
+            check_db_ready(), timeout=timeout_seconds
+        )
+    except TimeoutError:
+        ok_db, message = False, "database readiness timed out"
+    detail["db"] = message
+    static_ready = (
+        "error" not in detail
+        and detail.get("provider") == "ok"
+        and detail.get("bindings") == "ok"
+    )
+    return static_ready and ok_db, detail
 
 
 async def run_all_checks() -> Tuple[bool, dict]:

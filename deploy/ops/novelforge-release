@@ -203,7 +203,7 @@ deploy_sha() {
   fi
   backup=$(backup_database "$backup_source" "$sha")
 
-  compose "$release" build api worker web
+  compose "$release" build postgres redis api worker web
   compose "$release" run --rm api alembic upgrade head
   compose "$release" run --rm api \
     python scripts/production_pack.py qualify --pack "$PACK"

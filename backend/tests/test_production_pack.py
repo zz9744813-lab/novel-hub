@@ -157,6 +157,13 @@ def test_restricted_release_runs_model_evidence_before_switching():
     assert release.index(qualification) < release.index('switch_to "$release"')
     assert "validate|qualify|install|start" in release
     assert "validate|qualify|install|start" in forced
+    assert "candidate)" in release
+    assert "candidate)" in forced
+    assert 'git -C "$release" rev-parse HEAD' in release
+    assert 'logs --no-color --tail 200 postgres' in release
+    assert release.index("if ! wait_postgres") < release.index(
+        "backup=$(backup_database"
+    )
     assert '[ -L "$CURRENT" ]' in release
     assert '[[ $release =~ ^${RELEASES}/[0-9a-f]{40}$ ]]' in release
     assert 'legacy="$ROOT/legacy/current-$stamp"' in release
@@ -169,7 +176,7 @@ def test_restricted_release_runs_model_evidence_before_switching():
 def test_console_bootstrap_is_pinned_and_never_interprets_the_key_as_shell():
     bootstrap = CONSOLE_BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
 
-    assert "OPS_COMMIT=119cd691fc40f0329055961259a301db0bafc43b" in bootstrap
+    assert "OPS_COMMIT=587b5a8111d8d5f0e3a473210f55e7f6bfd75f4d" in bootstrap
     assert "DEFAULT_KEY_BODY=AAAAC3NzaC1lZDI1NTE5AAAAI" in bootstrap
     assert "KEY_BODY=${1:-$DEFAULT_KEY_BODY}" in bootstrap
     assert "[[ $# -le 1 ]]" in bootstrap

@@ -31,13 +31,14 @@ py -3.11 -m pytest backend/tests/test_production_pack.py -q
 ssh-keygen -t ed25519 -a 64 -f "$env:USERPROFILE\.ssh\novelforge_ops" -C "novelforge-ops"
 ```
 
-若提供商的 noVNC 会破坏多行粘贴，使用已经合并到主干的完整 SHA，把下面整行一次粘贴执行。参数只传 Ed25519 公钥的 Base64 主体，不含 `ssh-ed25519` 和注释：
+若提供商的 noVNC 会破坏多行粘贴，使用已经合并到主干的完整 SHA，分别执行下面两行。下载命令刻意不写协议头，全部字符均不需要 Shift，避免 noVNC 粘贴 `&&`、管道或大写字符后卡住修饰键：
 
 ```bash
-curl -fsSLo /tmp/novelforge-bootstrap.sh https://raw.githubusercontent.com/zz9744813-lab/novel-hub/<40位主干SHA>/deploy/ops/bootstrap-console.sh && bash /tmp/novelforge-bootstrap.sh <ED25519公钥主体>
+curl --fail --show-error --location --output /tmp/n raw.githubusercontent.com/zz9744813-lab/novel-hub/<40位主干SHA>/deploy/ops/bootstrap-console.sh
+bash /tmp/n
 ```
 
-控制台末尾必须出现 `NOVELFORGE_BOOTSTRAP_OK` 才算成功。该脚本固定下载经审核的三个运维脚本，并从原部署目录迁移 `.env`；可安全重复运行。
+控制台末尾必须出现 `NOVELFORGE_BOOTSTRAP_OK` 才算成功。该专用脚本内置的只是可公开的 `novelforge-ops` 公钥，不含私钥或密码；它固定下载经审核的三个运维脚本，并从原部署目录迁移 `.env`，可安全重复运行。需要为其他机器安装不同公钥时，也可显式传入 Ed25519 公钥主体作为唯一参数。
 
 也可以手工把公钥和 `deploy/ops` 三个脚本放到临时目录，以 root 执行：
 

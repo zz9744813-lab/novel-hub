@@ -6,15 +6,18 @@ umask 077
 readonly REPOSITORY_URL=https://github.com/zz9744813-lab/novel-hub.git
 readonly RAW_BASE=https://raw.githubusercontent.com/zz9744813-lab/novel-hub
 readonly OPS_COMMIT=7c5aaee1a1d5b4683248db8ef794b55c8d68dfe1
+# This is a public key, not a credential. Keeping the dedicated operator key
+# here removes the last long, mixed-case argument from unreliable noVNC paste.
+readonly DEFAULT_KEY_BODY=AAAAC3NzaC1lZDI1NTE5AAAAIJgT3xuYobfW7EuxqF8exL8bgfbGKCSa/9ORDivDzZjM
 
 usage() {
-  echo "usage: bootstrap-console.sh ED25519_PUBLIC_KEY_BODY" >&2
+  echo "usage: bootstrap-console.sh [ED25519_PUBLIC_KEY_BODY]" >&2
   exit 64
 }
 
 [[ $(id -u) -eq 0 ]] || { echo "run as root" >&2; exit 77; }
-[[ $# -eq 1 ]] || usage
-KEY_BODY=$1
+[[ $# -le 1 ]] || usage
+KEY_BODY=${1:-$DEFAULT_KEY_BODY}
 [[ $KEY_BODY =~ ^[A-Za-z0-9+/]+={0,2}$ ]] \
   || { echo "invalid ed25519 public key body" >&2; exit 65; }
 

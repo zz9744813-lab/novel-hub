@@ -195,10 +195,28 @@ async def compute_role_score(
     # benchmark_score must NOT keep contributing to the composite.
     benchmark_blended = None
     benchmark_state = None
-    if row.benchmark_score is not None:
+    qualification_evidence_role = agent_role
+    evidence = None
+    from app.model_eval.suite_definitions import qualification_role_for
+
+    qualification_evidence_role = qualification_role_for(agent_role)
+    if qualification_evidence_role != agent_role:
         from app.model_eval.engine import get_catalog_evidence_state
 
         evidence = await get_catalog_evidence_state(db, catalog)
+        reused_evidence = (evidence.get("role_evidence") or {}).get(agent_role) or {}
+        if reused_evidence.get("state") == "valid":
+            # Hydrate the auxiliary row for a complete audit trail.  The source
+            # role row remains authoritative in get_catalog_evidence_state.
+            row.benchmark_score = reused_evidence.get("score")
+            row.benchmark_evidence_key = reused_evidence.get("evidence_key")
+            source_run_id = reused_evidence.get("source_run_id")
+            row.benchmark_source_run_id = uuid.UUID(source_run_id) if source_run_id else None
+            row.benchmark_passed = bool(reused_evidence.get("passed"))
+    if row.benchmark_score is not None:
+        from app.model_eval.engine import get_catalog_evidence_state
+
+        evidence = evidence or await get_catalog_evidence_state(db, catalog)
         role_evidence = (evidence.get("role_evidence") or {}).get(agent_role) or {}
         benchmark_state = {
             "ability": (evidence.get("ability") or {}).get("state"),
@@ -228,6 +246,8 @@ async def compute_role_score(
         "benchmark_score": row.benchmark_score,
         "benchmark_blended": benchmark_blended,
         "benchmark_state": benchmark_state,
+        "qualification_evidence_role": qualification_evidence_role,
+        "qualification_reused": qualification_evidence_role != agent_role,
         "sample_count": sample_count,
         "computed_at": now.isoformat(),
     }

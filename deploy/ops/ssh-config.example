@@ -1,0 +1,15 @@
+Host novel-hub
+    HostName 107.172.138.14
+    User novelops
+    IdentityFile ~/.ssh/novelforge_ops
+    IdentitiesOnly yes
+    PreferredAuthentications publickey
+    BatchMode yes
+    ConnectTimeout 12
+    ConnectionAttempts 3
+    ServerAliveInterval 20
+    ServerAliveCountMax 6
+    TCPKeepAlive yes
+    ControlMaster auto
+    ControlPersist 10m
+    ControlPath ~/.ssh/cm-%C

@@ -1,0 +1,408 @@
+{
+  "schema_version": "1.0",
+  "pack_id": "zhutian-hongyanlu",
+  "revision": 1,
+  "book": {
+    "title": "诸天红颜录",
+    "subtitle": "墟海盟约",
+    "logline": "被诸天判定为已经死亡的契录师，为保住一座收容破碎世界的漂泊城，必须与五位各怀国仇与私愿的成年界契者重写命运条款；每救下一界，他就失去一段证明自己是谁的记忆。",
+    "synopsis": "诸界并非自然衰亡，而是被名为天衡的古老秩序按既定结局裁撤。顾砚舟在一场坠界事故中启用禁书空白录，把濒死的雪原王城系在漂泊于墟海的泊界城上。契约要求所有承印者明示代价并保有撤回权，因此救亡从来不是单人征服，而是军权、商路、记忆、族群与情感的持续谈判。宁照霜、祝红翎、洛弥生、桑翡与赫连夜阑先后带着自己的世界进入同一张桌子；她们会结盟、相争、相爱，也会在顾砚舟越界时收回签名。随着空白录逐页恢复，众人发现顾砚舟体内保存的并非某个失落世界，而是所有被删去的选择。最终战争不再是谁成为万界唯一主人，而是谁有权书写结局、谁愿意为自由承担后果。",
+    "genre": "东方奇幻 / 诸天穿梭 / 群像经营 / 成熟多角关系 / 悬疑",
+    "tags": ["诸天", "经营", "群像", "命运契约", "宿命反转", "成年情感", "长线伏笔"],
+    "tone": "冷峻、绮丽而克制；高压场景短促，余波场景留白；成人亲密直接但以人物选择、关系后果和明确自愿为前提。",
+    "audience": "偏好东方幻想、世界经营、群像博弈、成熟多角关系与公平悬疑的成年读者",
+    "target_chapters": 96,
+    "target_chars": 480000,
+    "chapter_target_chars": [4200, 5800],
+    "theme_question": "当命运可以被重写时，自由究竟是没有代价，还是有权亲自选择代价？"
+  },
+  "reader_contract": {
+    "opening_promise": "前三章完成一座世界坠落、一次不对等谈判和一份会反噬签署者的临时界契；主角靠判断与让渡而非无代价神力救下第一批人。",
+    "recurring_payoffs": [
+      "每三到五章至少完成一次可见的城市、资源或航路升级，并明确谁支付了成本",
+      "每三到五章至少让一段关系因选择而升温、破裂或重新议价，不能只增加口头好感",
+      "每个世界篇同时兑现一个局部谜底并新增一个能从旧证据追溯的长线问题",
+      "每卷至少一次让女性核心角色的独立决策改变主线，而非只帮助或阻碍男主",
+      "亲密场景必须改变信任、权力、承诺或下一步选择，不能作为可删除福利"
+    ],
+    "long_questions": [
+      "谁建立了天衡，为什么它把偏离既定结局的世界视为错误",
+      "顾砚舟为何在所有官方记录中已经死亡",
+      "空白录每次收取的记忆去了哪里",
+      "赫连夜阑真正效忠的是校史院、秩序本身还是她自己的判断",
+      "诸天红颜录究竟是收容名单、猎杀名单，还是一份被污名化的共同契约"
+    ],
+    "must_answer_by_ending": [
+      "天衡的起源、运行代价与可替代机制",
+      "顾砚舟保存被删除选择的原因及其最后身份选择",
+      "五位界契者各自世界的去留与政治责任",
+      "主要亲密关系的边界、承诺与退出机制",
+      "空白录从私人权柄变为公共制度后的监督方式"
+    ],
+    "fairness_rules": [
+      "重大揭示至少有两个先行证据，证据首次出现时必须承担自然功能",
+      "偶然只制造问题，不能解决核心问题",
+      "新能力首次解决大问题前必须先展示限制或失败",
+      "任何被撤回的界契都保留已经发生的资源、政治与感情后果",
+      "客观事实、角色所知和读者所知分账维护，不允许角色凭作者视角得出正确答案"
+    ],
+    "emotional_temperature": "底色苍凉，人物关系有欲望、有嫉妒、有算计，也有清醒的选择；胜利总伴随不可逆损失，但不把苦难当作廉价装饰。",
+    "content_boundaries": [
+      "所有参与亲密关系的角色均为成年人",
+      "允许成熟、直接、合意的成人亲密描写",
+      "不把强迫、药物控制、精神改造或无法撤回的权力差包装成情趣",
+      "不写未成年人性内容、乱伦或以性暴力为爽点",
+      "可以描写战争、囚禁和政治压迫，但必须呈现主体性与持续后果"
+    ],
+    "must_not_become": [
+      "收集女性身体或摧毁人格的打卡文",
+      "每到一界重复俘获、征服、升级的同构副本",
+      "所有女性共享一个声音并围绕主角排队表态",
+      "用宏大设定替代人物选择和具体代价",
+      "照搬任何参考作品的专名、原句、角色关系或关键情节链"
+    ]
+  },
+  "candidates": [
+    {
+      "candidate_id": "CAND-A",
+      "name": "归墟盟约",
+      "premise": "漂泊城用可撤回的多方界契收容被裁撤的世界，救亡、经营、关系与宇宙悬疑由同一条规则驱动。",
+      "sustained_engine": "每一界都带来新的资源、制度与签署者冲突；旧契约会在后续世界遭遇兼容性测试，天然产生跨卷因果。",
+      "risk": "契约解释过多会拖慢节奏，必须让规则在行动和谈判后果中显形。",
+      "selected": true,
+      "scores": {"premise": 4, "sustained_engine": 4, "character_capacity": 4, "change_space": 4, "differentiation": 4, "scene_variety": 4, "delivery_cost": 3, "creator_necessity": 4}
+    },
+    {
+      "candidate_id": "CAND-B",
+      "name": "万界审判庭",
+      "premise": "七名末世幸存者审理每个世界是否值得续存，判决会把罪责和资源落到审判者自己身上。",
+      "sustained_engine": "案件结构稳定，能持续产出价值冲突与反转。",
+      "risk": "容易变成单元剧和观点辩论，经营线与亲密关系难形成同一发动机。",
+      "selected": false,
+      "scores": {"premise": 4, "sustained_engine": 3, "character_capacity": 4, "change_space": 3, "differentiation": 4, "scene_variety": 3, "delivery_cost": 3, "creator_necessity": 3}
+    },
+    {
+      "candidate_id": "CAND-C",
+      "name": "渡星商路",
+      "premise": "一支穿过将死世界的商队以交换记忆和寿命维持航路，沿途建立跨界城邦联盟。",
+      "sustained_engine": "贸易、护送、探索与城市升级都可重复变奏。",
+      "risk": "长线谜底较弱，女性群像容易退化为随队伙伴，终局聚焦不足。",
+      "selected": false,
+      "scores": {"premise": 3, "sustained_engine": 4, "character_capacity": 3, "change_space": 3, "differentiation": 3, "scene_variety": 4, "delivery_cost": 4, "creator_necessity": 3}
+    }
+  ],
+  "sources": [
+    {
+      "source_id": "SRC-QM-001",
+      "title": "琼明神女录精校版",
+      "rights_basis": "user_authorized",
+      "sha256": "57cfb4a872b5623daacc74d4ede0355e5f0aa601b86e129fcd7b9315baf4ed6c",
+      "allowed_use": ["私有统计分析", "抽象叙事机制观察", "非逐字风格参数标定"],
+      "forbidden_use": ["原文进入写作上下文", "复制原句或独特比喻", "复用专名、人物关系或可识别情节链"],
+      "raw_reference_in_drafting_context": false
+    },
+    {
+      "source_id": "SRC-LEGACY-001",
+      "title": "用户旧版归墟题材大纲（负面与偏好样本）",
+      "rights_basis": "user_owned",
+      "sha256": "b1d9d22d415c01e886e383dec723e670b27efbf883021cef722491a1d424d47c",
+      "allowed_use": ["识别用户题材偏好", "提炼失败模式", "保留诸天、经营、群像与成熟关系方向"],
+      "forbidden_use": ["复用强迫性性行为链", "复用旧专名和器具", "把人格摧毁作为成长或爱情"],
+      "raw_reference_in_drafting_context": false
+    }
+  ],
+  "mechanisms": [
+    {
+      "mechanism_id": "MECH-001",
+      "name": "多次变义的公平伏笔",
+      "reader_effect": "揭示发生后，旧物件、旧条款或旧称呼获得新解释，读者能回看而非只被告知。",
+      "preconditions": ["至少两个先行证据", "证据首次出现承担现实功能", "角色当时有合理误读"],
+      "procedure": ["先以工具或制度细节出现", "在第二情境扩大解释范围", "揭示时只连接关键证据", "紧接一个改变行动条件的余波"],
+      "failure_modes": ["刻意高亮伏笔", "揭示前没有证据", "揭示后逐条讲解", "谜底不改变任何选择"],
+      "evidence_source_ids": ["SRC-QM-001"],
+      "confidence": "medium"
+    },
+    {
+      "mechanism_id": "MECH-002",
+      "name": "身份谜题与价值选择绑定",
+      "reader_effect": "身份真相不是背景资料，而是迫使人物重新决定自己愿意成为什么。",
+      "preconditions": ["身份线有现实后果", "至少一名关系角色因不同答案受损", "人物可拒绝谜底赋予的角色"],
+      "procedure": ["用记录冲突建立疑问", "让能力与身份代价同步升级", "在真相揭晓前先逼近同类选择", "高潮用行动而非自述回答"],
+      "failure_modes": ["血统揭晓直接送能力", "身份只是换名", "所有人立即接受", "真相抹掉此前责任"],
+      "evidence_source_ids": ["SRC-QM-001"],
+      "confidence": "medium"
+    },
+    {
+      "mechanism_id": "MECH-003",
+      "name": "镜像场景回环",
+      "reader_effect": "相似空间、动作或句式在后段由不同权力与选择重演，形成情感结算。",
+      "preconditions": ["前景场景本身成立", "后景人物状态已改变", "镜像包含至少一处关键差异"],
+      "procedure": ["登记动作与空间锚点", "中段制造反向预演", "结算时保留锚点并更换主动者或代价", "不由旁白解释对应关系"],
+      "failure_modes": ["机械重复原句", "只有彩蛋没有状态变化", "过密回环显得自恋"],
+      "evidence_source_ids": ["SRC-QM-001"],
+      "confidence": "medium"
+    },
+    {
+      "mechanism_id": "MECH-004",
+      "name": "强者互相制约的群像推进",
+      "reader_effect": "核心角色不是主角功能件，联盟因为目标不同持续生成新问题。",
+      "preconditions": ["每人有独立资源与退出权", "冲突不靠误会拖延", "角色间存在不经主角的关系"],
+      "procedure": ["每次决策公开利益与不可说项", "让不同正确答案发生碰撞", "胜方也承担关系或制度债务", "后续世界重新测试旧妥协"],
+      "failure_modes": ["所有人最终都同意主角", "冲突只剩吃醋", "反对者突然失智", "能力只在介绍里存在"],
+      "evidence_source_ids": ["SRC-QM-001", "SRC-LEGACY-001"],
+      "confidence": "medium"
+    },
+    {
+      "mechanism_id": "MECH-005",
+      "name": "经营升级即权力重分配",
+      "reader_effect": "每次资源或城市升级都会改变谁能做决定，经营线因此与人物线同一。",
+      "preconditions": ["资源有稀缺约束", "升级有受益者与受损者", "制度变化持续到后续章节"],
+      "procedure": ["先暴露瓶颈", "给出至少两种互斥方案", "由角色谈判选择", "登记资源与权力状态增量", "在后续危机检验"],
+      "failure_modes": ["系统白送建筑", "升级只变数字", "付出的代价下一章消失", "居民没有主体性"],
+      "evidence_source_ids": ["SRC-LEGACY-001"],
+      "confidence": "low"
+    },
+    {
+      "mechanism_id": "MECH-006",
+      "name": "亲密关系中的可撤回承诺",
+      "reader_effect": "欲望、嫉妒与信任通过明确边界和真实风险推进，亲密不等于人物失去判断。",
+      "preconditions": ["角色均为成年人", "选择不受即时生存胁迫替代", "拒绝或撤回会被尊重并产生非惩罚性后果"],
+      "procedure": ["在非亲密场景先建立权力边界", "由双方提出需求与保留项", "亲密后改变关系账而非自动占有", "冲突时允许重新议价或退出"],
+      "failure_modes": ["把沉默当同意", "用药物或能力改写意愿", "拒绝后人格惩罚", "亲密场景可整体删除"],
+      "evidence_source_ids": ["SRC-QM-001", "SRC-LEGACY-001"],
+      "confidence": "low"
+    },
+    {
+      "mechanism_id": "MECH-007",
+      "name": "高压短句与余波长句分层",
+      "reader_effect": "句段节律随注意力和压力改变，不以统一华丽度覆盖所有场景。",
+      "preconditions": ["先按场景功能分类", "只用项目分布作参考", "统计旗标不直接裁决文学质量"],
+      "procedure": ["行动段提高短句比例", "揭示段允许长句承载重新解释", "余波段降低信息密度", "对白保持不完全回答"],
+      "failure_modes": ["全书都写成短段", "为达指标机械切句", "高潮仍大段说明", "把统计均值当硬模板"],
+      "evidence_source_ids": ["SRC-QM-001"],
+      "confidence": "medium"
+    },
+    {
+      "mechanism_id": "MECH-008",
+      "name": "苦难必须生成能动性与余波",
+      "reader_effect": "黑暗内容推动角色作出新选择并改变制度，而不是只消费受害状态。",
+      "preconditions": ["施害机制可定位", "受影响角色保有视角", "后续存在复原、清算或制度回应"],
+      "procedure": ["先写具体限制与损失", "让受害者做局部有效选择", "把后果写入身体、关系或权力账", "回收时保留伤痕和责任"],
+      "failure_modes": ["重复升级羞辱", "伤害后立即爱上施害者", "只靠复仇抹平创伤", "把不自愿内容色情化"],
+      "evidence_source_ids": ["SRC-QM-001", "SRC-LEGACY-001"],
+      "confidence": "medium"
+    }
+  ],
+  "style": {
+    "approved": true,
+    "source_ids": ["SRC-QM-001"],
+    "confidence": "medium",
+    "metric_vector": {
+      "surface": {"sentence_chars_mean": 23.4995, "sentence_chars_p50": 16.325, "sentence_chars_p90": 56.08, "sentence_chars_std": 24.81, "paragraph_chars_mean": 47.55, "paragraph_chars_p50": 38.125, "paragraph_chars_p90": 93.37, "paragraph_chars_std": 34.985, "commas_per_1000": 59.021, "periods_per_1000": 24.0665, "questions_per_1000": 4.009, "exclamations_per_1000": 1.1285, "ellipsis_ratio": 0.2327, "dash_ratio": 0.0023, "semicolon_ratio": 0.0, "lexical_diversity": 0.6606, "token_count": 5514.6},
+      "rhythm": {"sentence_length_cv": 1.0647, "short_sentence_ratio": 0.3857, "long_sentence_ratio": 0.2005, "paragraph_length_cv": 0.7473},
+      "dialogue": {"dialogue_ratio": 0.1706, "dialogue_turn_length_p50": 14.35, "dialogue_turn_length_p90": 44.63, "speaker_switch_rate": 0.1979},
+      "emotion": {"explicit_emotion_word_ratio": 0.7007, "body_signal_ratio": 0.8242, "internal_monologue_ratio": 0.2252},
+      "meta": {"char_count": 110312, "segment_count": 20}
+    },
+    "metric_ranges": {
+      "dialogue.dialogue_ratio": {"target": 0.17, "preferred_min": 0.10, "preferred_max": 0.27, "hard_min": 0.04, "hard_max": 0.42},
+      "surface.sentence_chars_mean": {"target": 23.5, "preferred_min": 17.0, "preferred_max": 31.0, "hard_min": 10.0, "hard_max": 45.0},
+      "surface.lexical_diversity": {"target": 0.66, "preferred_min": 0.58, "preferred_max": 0.74, "hard_min": 0.48, "hard_max": 0.84}
+    },
+    "narrative": {"person": "第三人称限知", "default_focalization": "单场景单焦点，卷内可轮换", "distance": "中近景；行动时贴近感官，制度信息通过受限选择释放", "allowed_shifts": ["场景切换后更换焦点", "极少数卷末以公共记录视角收束"], "forbidden_shifts": ["同段无标记跳入多人内心", "为解释谜底突然全知"]},
+    "dialogue": {"target_ratio_note": "常态约一成到三成，谈判章可提高，行动章可降低", "subtext": "优先回避、反问、条件句与不完全回答", "speaker_distinction": "用关注对象、证据标准和施压策略区分，不靠口头禅"},
+    "rhythm": {"sentence_mean_p25_p50_p75": [19.9625, 23.5, 26.5725], "paragraph_mean_p25_p50_p75": [40.8025, 43.635, 54.7775], "sentence_cv_p25_p50_p75": [0.914, 1.0111, 1.1761], "rule": "按场景压力选择区间，禁止把全书均值当逐段配额"},
+    "emotion_expression": {"preference": "动作、选择、触觉与空间距离先于抽象标签", "internal_monologue": "只保留会改变判断的念头", "aftershock": "重要伤害与亲密都必须在后续行为中留下痕迹"},
+    "techniques": [
+      {"name": "物件变义", "use": "同一契印、账页或城门在不同阶段承担不同解释", "limit": "每卷不超过两个主锚点"},
+      {"name": "镜像回环", "use": "以主动权或代价改变重演早期场景", "limit": "不复用原句"},
+      {"name": "严肃与日常并置", "use": "在宏大危机中保留具体吃住、修缮和私人尴尬", "limit": "不以插科打诨破坏余波"},
+      {"name": "延迟命名", "use": "先让制度或关系产生效果，再给出完整术语", "limit": "不能故意隐瞒焦点人物已知事实"}
+    ],
+    "scene_modes": {
+      "low_pressure": {"sentence_mean": [22, 32], "dialogue_ratio": [0.18, 0.34], "focus": "关系试探、生活细节、未说出口的条件"},
+      "revelation": {"sentence_mean": [20, 30], "dialogue_ratio": [0.08, 0.24], "focus": "旧证据重排后立即改变行动选项"},
+      "high_pressure": {"sentence_mean": [13, 24], "dialogue_ratio": [0.04, 0.18], "focus": "空间、时间和身体限制；减少解释"},
+      "aftermath": {"sentence_mean": [24, 38], "dialogue_ratio": [0.10, 0.28], "focus": "代价登记、关系重新议价、留白"}
+    },
+    "tone_anchor": {"narrative_pov": "第三人称限知，单场景单焦点", "narrative_distance": "中近景并随压力收紧", "emotional_temperature": "冷色底调中的强烈私人欲望与克制余波", "imagery_density": "中等；每场景只保留一到两个主意象", "description_density": "行动章低，揭示与余波章中高", "pacing": "短促危机、谈判拉扯、后果沉降交替", "humor_level": "低到中，仅来自人物差异和生活摩擦", "psychology_ratio": "约一成到两成，必须改变判断", "dialogue_narration_ratio": "对白约一成到三成，按场景功能变化", "adult_violence_expression": "直接但不色情化强迫；亲密只写成年、合意与可撤回选择", "forbidden_modern_expressions": ["作为一个AI", "综上所述", "命运的齿轮", "一切才刚刚开始"]},
+    "negative_fingerprint": ["对话后旁白复述潜台词", "所有人物完整礼貌地轮流发言", "连续使用眼神、嘴角和深呼吸代替选择", "每章末尾抽象升华", "设定问答式倾倒", "亲密后自动永久占有", "无代价升级", "章节删除后状态不变"]
+  },
+  "characters": [
+    {
+      "character_id": "CHAR-GU", "name": "顾砚舟", "aliases": ["顾录师"], "role": "男主角 / 被除名的契录师", "public_identity": "泊界城替人写契、修旧账的落魄录师", "self_story": "只要条款足够精确，任何背叛都能提前计价", "external_goal": "让泊界城在下一次墟潮前拥有三个稳定界锚", "internal_need": "承认有些承诺不能靠控制风险来替代信任", "false_belief": "可量化的代价比不可预测的人更可靠", "fear": "再次为了一个人改变方案并让整座城付出代价", "wound_or_origin": "十二年前的救城契约被校史院改写，他只记得自己签错了一页", "secret": "他的记忆空洞会对被删除的世界产生回声", "contradiction": "谈判时冷硬到近乎无情，却保存每位亡者留下的无价小物", "default_strategy": "拆分利益、设置退出条款、把情绪延后处理", "escalation_strategy": "把不可分摊的债务转移到自己身上", "line_they_will_not_cross": "不以能力改写他人的同意，也不伪造签名", "line_crossing_price": "若全城只剩一次呼吸，他会考虑隐瞒部分风险但仍不会伪造意愿", "competence": "能看见契约中的因果缺口，擅长谈判、记账与临场取舍", "blind_spot": "把别人主动承担风险误读为谈判策略", "agency_source": "空白录、旧城债权与对制度漏洞的理解", "arc_question": "他能否在不成为救世主或占有者的前提下接受被人选择", "behavior_evidence": ["每次许诺前先写退出条件", "从不丢弃无主遗物却拒绝解释原因", "压力越大话越少并开始替别人预设最坏选择"],
+      "voice": {"register": "短句、事实先行，常把问题改写成条件", "sentence_patterns": ["先报限制，再给选择", "被问感情时回答可执行事项", "真正动摇时省略主语"], "vocabulary_preferences": ["账", "余量", "撤回", "见证"], "addressing_rules": {"陌生人": "职衔或全名", "亲近者": "少用昵称，关键时直呼名字"}, "emotion_expression": "用反复核对纸页、收紧指节和过度准备表现不安", "taboo_phrases": ["我保证不会有代价", "你只能相信我"]},
+      "anchors": [{"code": "GU-CONSENT", "anchor_type": "boundary", "statement": "不得伪造、替代或通过能力制造同意", "priority": 1.0, "rigidity": 1.0}, {"code": "GU-ACCOUNT", "anchor_type": "belief", "statement": "任何获益都应能追溯到承担代价的人", "priority": 0.9, "rigidity": 0.85}, {"code": "GU-RELIC", "anchor_type": "contradiction", "statement": "口头否认怀旧，却保存所有无主遗物", "priority": 0.65, "rigidity": 0.7}]
+    },
+    {
+      "character_id": "CHAR-NING", "name": "宁照霜", "aliases": ["霜卫"], "role": "女主角 / 雪原王城末任统军", "public_identity": "在亡国之夜仍保持阵列的冷面统军", "self_story": "军令必须比个人愿望更长久", "external_goal": "保住三万名雪原遗民并重建可自卫的疆界", "internal_need": "区分责任与自我抹除，不再把所有欲望都判作失职", "false_belief": "只要她不需要任何人，就没人能拿遗民要挟她", "fear": "私人选择削弱她作为统军的公信力", "wound_or_origin": "父兄以护国之名牺牲她的婚约和继承权，她最终仍没守住旧都", "secret": "坠界前她曾主动放弃一道可救王室、却会牺牲平民的军令", "contradiction": "厌恶华饰却能准确记住每个士兵缝补甲胄的颜色", "default_strategy": "先夺取空间与时间，再逼对方在有限选项中表态", "escalation_strategy": "亲自承担最危险的位置并削减自己的退路", "line_they_will_not_cross": "不拿平民作诱饵，不以军纪干预成年人自愿关系", "line_crossing_price": "若敌人掌握坠界坐标，她可能暂时扣押知情者但会接受公开审判", "competence": "战场调度、识人、危机纪律", "blind_spot": "把照顾和爱意都当作可能腐蚀判断的软弱", "agency_source": "雪卫、遗民信任与界印中的寒潮控制权", "arc_question": "她能否既承担公共责任，也承认自己有权选择亲密与未来", "behavior_evidence": ["进入陌生房间先数出口", "越在意越使用正式称谓", "从不让部下替她做自己不敢承担的决定"],
+      "voice": {"register": "简洁、命令式，陈述后留出反对时间", "sentence_patterns": ["先给坐标和期限", "反对时指出后果而非评价人格", "情绪升高后句子更短"], "vocabulary_preferences": ["阵列", "缺口", "归队", "自领"], "addressing_rules": {"部下": "职务加姓名", "顾砚舟": "公开称顾录师，私下关键时直呼砚舟"}, "emotion_expression": "擦拭并不脏的剑鞘、重新排齐物件、在触碰前明确询问", "taboo_phrases": ["为了你好所以不必问你", "军令可以替你同意"]},
+      "anchors": [{"code": "NING-CIVILIAN", "anchor_type": "boundary", "statement": "不得主动牺牲无知情平民换取战术优势", "priority": 1.0, "rigidity": 0.98}, {"code": "NING-DUTY", "anchor_type": "belief", "statement": "责任必须由下令者首先承担", "priority": 0.95, "rigidity": 0.9}, {"code": "NING-DESIRE", "anchor_type": "need", "statement": "私人欲望不天然等于失职", "priority": 0.75, "rigidity": 0.55}]
+    },
+    {
+      "character_id": "CHAR-ZHU", "name": "祝红翎", "aliases": ["火港东家"], "role": "女主角 / 火港同盟商团首领", "public_identity": "把笑意、绯衣和报价都当武器的商团首领", "self_story": "任何关系只要肯开价就不会伤人", "external_goal": "夺回火港炉心并让工匠拥有商团份额", "internal_need": "承认无法定价的依恋并不必然等于失去自由", "false_belief": "先把自己变成交易对象，就没人能真正占有她", "fear": "被善意留下后失去离开的资格", "wound_or_origin": "幼年被债契转卖，她靠学习所有契约漏洞买回自己的名字", "secret": "她暗中持有校史院一条跨界走私航路的半枚印钥", "contradiction": "把奢华当盔甲，却亲手修补每件旧工具", "default_strategy": "制造竞价、交换情报、用玩笑逼人暴露底价", "escalation_strategy": "公开自己最不利的账本，让所有人一起承担真相", "line_they_will_not_cross": "不买卖人的身份、意愿或退出权", "line_crossing_price": "为救工匠她会操纵市场并隐瞒短期亏损，但不会制造人身债", "competence": "贸易网络、机械炉心、舆论与风险定价", "blind_spot": "把无条件帮助视作更高明的收购", "agency_source": "商团、火港技术、走私航图与公开账本", "arc_question": "她能否在保有离开权的同时主动选择长期共同体", "behavior_evidence": ["紧张时给所有东西报价唯独不谈自己", "对真正尊重的人反而少开玩笑", "争执后先修坏掉的物件再道歉"],
+      "voice": {"register": "轻快、带条件和反问，善用具体价格拆穿空话", "sentence_patterns": ["先夸一句再指出漏洞", "用三种报价逼出真实偏好", "真正生气时完全不笑"], "vocabulary_preferences": ["底价", "份额", "赎回", "亏本"], "addressing_rules": {"陌生人": "贵客", "宁照霜": "宁统军", "顾砚舟": "顾掌柜或砚舟，随亲疏变化"}, "emotion_expression": "转动戒圈、计算无关小数、突然改用全名", "taboo_phrases": ["你已经是我的货物", "只要价高就可以买到同意"]},
+      "anchors": [{"code": "ZHU-NOTRADEPERSON", "anchor_type": "boundary", "statement": "人的身份、意愿和退出权不得成为商品", "priority": 1.0, "rigidity": 1.0}, {"code": "ZHU-OPENLEDGER", "anchor_type": "strategy", "statement": "共同体危机最终必须用公开账本而非私人恩惠解决", "priority": 0.85, "rigidity": 0.78}, {"code": "ZHU-EXIT", "anchor_type": "fear", "statement": "保留离开权是她接受亲密的前提", "priority": 0.85, "rigidity": 0.7}]
+    },
+    {
+      "character_id": "CHAR-LUO", "name": "洛弥生", "aliases": ["梦潮见证人"], "role": "女主角 / 梦海世界的失明见证人", "public_identity": "从不说假话、却能让真相绕远路的梦潮见证人", "self_story": "只要不撒谎，她就不必为别人如何误解负责", "external_goal": "阻止梦海居民被天衡当作虚构记忆清除", "internal_need": "承担沉默与选择性真话造成的后果", "false_belief": "完整真相只会摧毁人，因此替别人决定知道多少是一种仁慈", "fear": "看见某个未来后因介入反而使它发生", "wound_or_origin": "童年预言引发逃亡，她从此用沉默控制因果", "secret": "她早已看见顾砚舟在终局有两个互斥结局，却删除了第三个自己的位置", "contradiction": "拒绝谎言，却擅长用精确真话制造错误印象", "default_strategy": "控制信息顺序、用问题迫使对方自行补全", "escalation_strategy": "把自己的记忆作为公共证据并接受他人质询", "line_they_will_not_cross": "不植入虚假记忆，不借预言否定当事人的当前选择", "line_crossing_price": "为阻止即时灭界，她可能暂缓关键情报但必须设定披露期限", "competence": "记忆辨伪、概率预见、审讯中的语义控制", "blind_spot": "低估被保护者对知情风险的承受能力", "agency_source": "梦潮、见证仪式与对空白录缺页的感知", "arc_question": "她能否从真相的管理员变成愿意与他人共同承担真相的人", "behavior_evidence": ["回答前先复述问题中最窄的词", "触碰杯沿判断别人是否说谎", "害怕时主动讲无关但真实的旧事"],
+      "voice": {"register": "温和、精确、常用窄定义和反问", "sentence_patterns": ["先确认词义", "只回答被问到的层级", "决定坦白时连续给出短事实不作解释"], "vocabulary_preferences": ["我看见的是", "可能", "见证", "遗漏"], "addressing_rules": {"所有人": "多直呼全名，避免亲昵称呼造成暗示"}, "emotion_expression": "指尖寻找固定边缘、在沉默中改变坐姿、坦白时不触碰任何东西", "taboo_phrases": ["未来已经决定所以你无需选择", "我没撒谎因此没有责任"]},
+      "anchors": [{"code": "LUO-NOFALSEMEM", "anchor_type": "boundary", "statement": "不得制造虚假记忆或用预言替代当前同意", "priority": 1.0, "rigidity": 1.0}, {"code": "LUO-TRUTHDEBT", "anchor_type": "need", "statement": "选择性真话同样会产生必须承担的债务", "priority": 0.88, "rigidity": 0.62}, {"code": "LUO-WITNESS", "anchor_type": "competence", "statement": "她以可复核证据而非神秘权威建立可信度", "priority": 0.8, "rigidity": 0.8}]
+    },
+    {
+      "character_id": "CHAR-SANG", "name": "桑翡", "aliases": ["百身女王"], "role": "女主角 / 群栖界共同意识的分离个体", "public_identity": "代表百万群栖者说话的百身女王", "self_story": "个体欲望只是共同体噪声", "external_goal": "为群栖界争取不被拆分出售的完整栖居地", "internal_need": "承认自己既能代表共同体，也有不可被共同体吞没的私人边界", "false_belief": "只要所有痛苦平均分担，就不存在不公", "fear": "拥有私愿会使她失去代表资格", "wound_or_origin": "她从诞生起就同时承受所有族人的饥饿与命令，从未拥有只属于自己的感官", "secret": "群栖核心里已有一批个体要求永久退出共同意识", "contradiction": "能同时听见万人，却对一对一沉默最无措", "default_strategy": "汇总多数意愿并压低个体异常", "escalation_strategy": "切断共感，冒险以单一个体承担决定", "line_they_will_not_cross": "不强迫退出者重新并网，不用多数票决定私人亲密", "line_crossing_price": "若族群即将灭绝，她可能临时共享恐惧信号但必须接受事后审议", "competence": "群体协调、生物工程、跨物种感知", "blind_spot": "把少数人的不可替代损失换算成平均数", "agency_source": "百万节点的知识、孢舟与群栖界核", "arc_question": "她能否在不背弃共同体的情况下成为一个可被单独爱与反对的人", "behavior_evidence": ["说我们时呼吸平稳，说我时会停顿", "独处仍给空房间留出多人座位", "第一次私人选择总先写成公共提案"],
+      "voice": {"register": "复数主语、统计化表达，个人情绪出现时转为极短单句", "sentence_patterns": ["先报群体分布", "把异议人数精确到个位", "真正想要某物时只说我想"], "vocabulary_preferences": ["节点", "共感", "分离", "保留意见"], "addressing_rules": {"公共场合": "按群体或职能称呼", "私下": "学习使用个人姓名"}, "emotion_expression": "复数与单数主语切换、同时整理多把椅子、共感断开后的迟钝", "taboo_phrases": ["多数同意就等于你同意", "个体没有不可替代性"]},
+      "anchors": [{"code": "SANG-EXITNODE", "anchor_type": "boundary", "statement": "退出共同意识的个体不得被强制重新并网", "priority": 1.0, "rigidity": 1.0}, {"code": "SANG-COLLECTIVE", "anchor_type": "belief", "statement": "共同体必须为最脆弱节点保留生存余量", "priority": 0.92, "rigidity": 0.85}, {"code": "SANG-I", "anchor_type": "need", "statement": "她的私人选择不能自动折算为全族意志", "priority": 0.82, "rigidity": 0.55}]
+    },
+    {
+      "character_id": "CHAR-HELIAN", "name": "赫连夜阑", "aliases": ["白页执校"], "role": "女主角 / 校史院追缉官与后期叛离者", "public_identity": "能用一纸裁定让一座城从历史中失效的白页执校", "self_story": "删去必败分支是最少残酷的慈悲", "external_goal": "回收空白录并阻止墟海连锁坍缩", "internal_need": "承认秩序不能替未被询问的人决定何种痛苦值得承受", "false_belief": "只要统计上减少总痛苦，具体被删除者的反对可以忽略", "fear": "失去天衡后看见所有世界同时重复她故乡的灾难", "wound_or_origin": "她的故乡因无数互斥选择崩解，校史院只救下她一人并替她删除悼念", "secret": "她每执行一次裁撤都会私藏一个被删者的名字，已构成死罪", "contradiction": "公开把记忆称为误差，私下却背诵所有被她裁撤的名字", "default_strategy": "冻结局势、限制选项、以总体损失证明命令合理", "escalation_strategy": "公开校史院原始数据并以自身真名担保", "line_they_will_not_cross": "不伪造统计，不亲手删除已证明拥有替代方案的世界", "line_crossing_price": "若连锁坍缩已不可逆，她会封锁一界但坚持留下复核窗口", "competence": "制度权限、追踪、逻辑审讯与白页武装", "blind_spot": "把不可计算的关系价值视为数据缺失而非真实变量", "agency_source": "执校权限、天衡接口、被删世界私名册", "arc_question": "她能否放弃替所有人做最优解，又不逃避自己曾执行的裁撤", "behavior_evidence": ["宣判前把所有数字读两遍", "独处时默念名字却不记录", "动摇时不再使用被动语态"],
+      "voice": {"register": "法令式、逻辑闭合、几乎不用感叹", "sentence_patterns": ["先给总量再给个案", "质询时要求定义可复核", "承认责任时改说我做了"], "vocabulary_preferences": ["裁撤", "复核", "误差", "总损失"], "addressing_rules": {"目标": "编号或全名", "叛离后": "主动询问对方希望被如何称呼"}, "emotion_expression": "重读数字、折平纸角、取消被动语态", "taboo_phrases": ["没有名字就没有受害者", "最优解天然正当"]},
+      "anchors": [{"code": "HELIAN-NOFORGE", "anchor_type": "boundary", "statement": "不得伪造统计或销毁存在可行替代方案的证据", "priority": 1.0, "rigidity": 0.98}, {"code": "HELIAN-MINHARM", "anchor_type": "belief", "statement": "她习惯以最小总损失裁决，但必须逐步纳入退出权与不可替代价值", "priority": 0.9, "rigidity": 0.82}, {"code": "HELIAN-NAMES", "anchor_type": "contradiction", "statement": "她私记每一个被制度抹去的名字", "priority": 0.88, "rigidity": 0.9}]
+    },
+    {
+      "character_id": "CHAR-HAN", "name": "韩灯", "aliases": ["老灯叔"], "role": "泊界城民议会召集人 / 普通居民视角", "public_identity": "修了二十年城墙也骂了二十年城主的老工头", "self_story": "大人物的理想最后都要普通人拿屋顶和口粮结账", "external_goal": "让泊界城居民拥有拒绝界契和审计公共账本的权力", "internal_need": "承认谨慎不等于永远只反对，普通人也要为选择负责", "false_belief": "任何宏大计划最终都会背叛底层，因此不承诺最安全", "fear": "再次带人投票支持一个吞掉家庭的工程", "wound_or_origin": "上一任城主用保密令征走他的伴侣，事故后拒绝公布名单", "secret": "他保存着那次事故唯一未公开的施工日志", "contradiction": "嘴上只认眼前饭碗，却能背出全城每条老管线", "default_strategy": "拖延表决、要求公开成本、用可维护性否决漂亮方案", "escalation_strategy": "亲自组织停工或公投并承担供给中断责任", "line_they_will_not_cross": "不替居民签字，不隐瞒工程死亡名单", "line_crossing_price": "若城墙即将崩塌，他会先抢修后补程序，但必须公开追责", "competence": "城市维护、群众组织、发现方案中的生活盲点", "blind_spot": "把所有不确定性都视为权贵欺骗", "agency_source": "工匠、居民信任与旧城基础设施知识", "arc_question": "他能否从监督者成长为愿意共同承担方案的人", "behavior_evidence": ["听宏大计划时先问厕所和粮仓", "每次投票都把反对意见抄进记录", "相信一个人后仍坚持查账"],
+      "voice": {"register": "粗粝、具体、常用生活成本打断抽象论证", "sentence_patterns": ["先问坏了谁修", "用旧事故作反例", "同意时仍列三条风险"], "vocabulary_preferences": ["屋顶", "工钱", "名单", "谁来修"], "addressing_rules": {"官员": "职务后加一句人话", "年轻人": "直呼名字"}, "emotion_expression": "敲烟杆、数铆钉、把悼念变成维修清单", "taboo_phrases": ["死几个是必要代价", "居民不懂所以不用知道"]},
+      "anchors": [{"code": "HAN-NOSIGN", "anchor_type": "boundary", "statement": "任何代表不得替居民放弃知情与退出权", "priority": 1.0, "rigidity": 1.0}, {"code": "HAN-PUBLICLEDGER", "anchor_type": "belief", "statement": "公共工程的成本与死亡名单必须公开", "priority": 0.95, "rigidity": 0.95}, {"code": "HAN-MAINTAIN", "anchor_type": "competence", "statement": "方案必须回答普通人如何长期维护", "priority": 0.8, "rigidity": 0.8}]
+    },
+    {
+      "character_id": "CHAR-WEN", "name": "闻观鹤", "aliases": ["总校史"], "role": "核心对手 / 天衡制度的维护者", "public_identity": "从未在任内发生大规模连锁坍缩的总校史", "self_story": "他只是替无法承受无限可能的众生关闭痛苦分支", "external_goal": "在空白录聚合足够异常前裁撤泊界城", "internal_need": "面对自己把控制欲包装成慈悲的事实", "false_belief": "稳定存在本身高于任何未经验证的自由", "fear": "所有世界因争夺选择权重演他亲手终止的第一次大崩塌", "wound_or_origin": "年轻时拒绝裁撤故乡，结果相邻九界被拖入坍缩", "secret": "天衡的统计基线由他删除过一次失败实验，从此最优解建立在缺失样本上", "contradiction": "愿意承担骂名与孤独，却不允许被救者判断自己的风险", "default_strategy": "控制资料、制造时间压力、让对手在坏与更坏间选择", "escalation_strategy": "启动全域归零并把自己写入最后的责任记录", "line_they_will_not_cross": "不伪造已存在的数据", "line_crossing_price": "他已经通过删除失败样本绕过了自己的底线，并拒绝承认那是伪造", "competence": "系统设计、战略耐心、对群体灾难的准确预测", "blind_spot": "无法模型化自愿协作产生的新能力", "agency_source": "天衡主控、校史院、世界裁撤权限", "arc_question": "他是否能承认承担责任不等于垄断选择", "behavior_evidence": ["从不提高音量只缩短截止时间", "保留所有反对意见却不给实施窗口", "谈及故乡时把我改成统计报告"],
+      "voice": {"register": "平静、完整、以概率和责任压迫对方", "sentence_patterns": ["先承认局部正确再封死实施条件", "把主动行为说成系统要求", "失控时第一次使用第一人称"], "vocabulary_preferences": ["稳定", "样本", "收敛", "必要"], "addressing_rules": {"所有人": "使用完整姓名以示程序尊重"}, "emotion_expression": "调整截止时间、删除形容词、反复确认记录是否完整", "taboo_phrases": ["我享受裁撤", "自由毫无价值"]},
+      "anchors": [{"code": "WEN-STABILITY", "anchor_type": "belief", "statement": "稳定存在高于未经验证的自由", "priority": 1.0, "rigidity": 0.98}, {"code": "WEN-DATA", "anchor_type": "boundary", "statement": "不得伪造既有数据，但他把删除样本误判为允许的制度修订", "priority": 0.92, "rigidity": 0.9}, {"code": "WEN-RESPONSIBILITY", "anchor_type": "strategy", "statement": "他愿承担最终责任，却拒绝分享决策权", "priority": 0.9, "rigidity": 0.95}]
+    }
+  ],
+  "relationships": [
+    {"relationship_id": "REL-GU-NING", "from_character_id": "CHAR-GU", "to_character_id": "CHAR-NING", "relation_type": "盟友到亲密伴侣", "surface_relation": "临时契约双方，彼此都保留否决权", "from_wants": "她在危机中仍能作出不被责任吞没的真实选择", "to_wants": "他停止替所有人预付代价并允许别人保护他", "mutual_misunderstanding": "他把她的承担当军纪，她把他的退让当风险控制", "power_sources": ["她掌握雪卫与界印", "他掌握契约解释但不能代签"], "debts_and_secrets": ["临时界契救城之债", "她隐瞒放弃王室的旧决定", "他隐瞒记忆空洞"], "trust": 0.05, "dependence": 0.2, "fear": 0.25, "desire": 0.1, "start_chapter_no": 1},
+    {"relationship_id": "REL-GU-ZHU", "from_character_id": "CHAR-GU", "to_character_id": "CHAR-ZHU", "relation_type": "商业对手到开放式亲密同盟", "surface_relation": "彼此试价的合作伙伴", "from_wants": "她把真正需求放上谈判桌", "to_wants": "他承认有些关系不以独占证明认真", "mutual_misunderstanding": "他以为她永远会留后手，她以为他的边界只是更高级的讨价还价", "power_sources": ["她控制商路与炉心", "他能让航路合法接入界契"], "debts_and_secrets": ["半枚走私印钥", "火港工匠份额", "双方未说明的吸引"], "trust": -0.05, "dependence": 0.05, "fear": 0.1, "desire": 0.25, "start_chapter_no": 17},
+    {"relationship_id": "REL-GU-LUO", "from_character_id": "CHAR-GU", "to_character_id": "CHAR-LUO", "relation_type": "互相审讯到记忆见证伴侣", "surface_relation": "一个需要完整证据，一个只给精确局部", "from_wants": "她公开与他相关的所有已知未来", "to_wants": "他在知道未来后仍作出不可预测的选择", "mutual_misunderstanding": "他把她的沉默当操纵，她把他的求真当控制恐惧", "power_sources": ["她掌握记忆真伪", "他决定哪些记忆可写入公共契约"], "debts_and_secrets": ["被暂缓的终局预言", "共同见证的失忆代价"], "trust": -0.1, "dependence": 0.0, "fear": 0.3, "desire": 0.05, "start_chapter_no": 33},
+    {"relationship_id": "REL-GU-SANG", "from_character_id": "CHAR-GU", "to_character_id": "CHAR-SANG", "relation_type": "制度谈判者到私人伴侣", "surface_relation": "个人签署权与集体代表权的正面冲突", "from_wants": "她给退出节点独立席位", "to_wants": "他承认共同体也能作出非个人主义的有效选择", "mutual_misunderstanding": "他先把她看成机构，她先把他看成单点故障", "power_sources": ["她拥有群栖界百万节点", "他控制跨界协议格式"], "debts_and_secrets": ["退出派名单", "一次未经授权的临时共感"], "trust": 0.0, "dependence": 0.1, "fear": 0.2, "desire": 0.0, "start_chapter_no": 49},
+    {"relationship_id": "REL-GU-HELIAN", "from_character_id": "CHAR-GU", "to_character_id": "CHAR-HELIAN", "relation_type": "追缉者与被追缉者到承担共同罪责的伴侣", "surface_relation": "彼此最了解规则漏洞的敌人", "from_wants": "她承认被裁撤者有权拒绝最优解", "to_wants": "他证明开放选择不会制造更大灾难", "mutual_misunderstanding": "他以为她只忠于机构，她以为他只会用个案逃避总量", "power_sources": ["她有裁撤权限", "他保存被删除选择的活证据"], "debts_and_secrets": ["她私藏的名字", "他可能是天衡异常核心", "双方造成过的真实死亡"], "trust": -0.75, "dependence": -0.1, "fear": 0.7, "desire": 0.1, "start_chapter_no": 9},
+    {"relationship_id": "REL-NING-ZHU", "from_character_id": "CHAR-NING", "to_character_id": "CHAR-ZHU", "relation_type": "军纪与市场的竞争同盟", "surface_relation": "互相认为对方会把城市带偏", "from_wants": "商团接受危机时的公共调度", "to_wants": "雪卫停止把资源征用当天然正当", "mutual_misunderstanding": "双方都把对方的保护方式看成控制", "power_sources": ["武装", "供给与工匠"], "debts_and_secrets": ["火港撤离优先级", "一次未公开的联合救援"], "trust": -0.15, "dependence": 0.25, "fear": 0.15, "desire": 0.12, "start_chapter_no": 18},
+    {"relationship_id": "REL-NING-HELIAN", "from_character_id": "CHAR-NING", "to_character_id": "CHAR-HELIAN", "relation_type": "战场宿敌到有限信任", "surface_relation": "一个守具体的人，一个守总体秩序", "from_wants": "她为每次裁撤逐案负责", "to_wants": "她承认有些防线必须放弃", "mutual_misunderstanding": "都认为对方用责任逃避私人痛苦", "power_sources": ["雪卫实战", "白页权限"], "debts_and_secrets": ["坠界追杀中的伤亡", "共同隐瞒的一次停火"], "trust": -0.6, "dependence": 0.0, "fear": 0.55, "desire": 0.0, "start_chapter_no": 10},
+    {"relationship_id": "REL-ZHU-LUO", "from_character_id": "CHAR-ZHU", "to_character_id": "CHAR-LUO", "relation_type": "价格与真相的互相拆穿", "surface_relation": "一个什么都标价，一个从不完整报价", "from_wants": "她给秘密设置明确披露期限", "to_wants": "她承认有些东西无法用交易免除情感责任", "mutual_misunderstanding": "双方都认为自己比对方更诚实", "power_sources": ["公开账本", "记忆见证"], "debts_and_secrets": ["一次伪装拍卖", "一段被共同保管的记忆"], "trust": 0.1, "dependence": 0.05, "fear": 0.1, "desire": 0.05, "start_chapter_no": 35},
+    {"relationship_id": "REL-LUO-SANG", "from_character_id": "CHAR-LUO", "to_character_id": "CHAR-SANG", "relation_type": "个体真相与群体记忆的盟友", "surface_relation": "共同研究记忆，却对谁有权保存意见相反", "from_wants": "她承认群体记忆可能压掉少数证词", "to_wants": "她停止把个人版本默认成唯一真实", "mutual_misunderstanding": "一个把群体当噪声，一个把个体当异常", "power_sources": ["梦潮辨伪", "群体样本"], "debts_and_secrets": ["退出派的匿名证词"], "trust": 0.15, "dependence": 0.1, "fear": 0.05, "desire": 0.0, "start_chapter_no": 51},
+    {"relationship_id": "REL-SANG-HELIAN", "from_character_id": "CHAR-SANG", "to_character_id": "CHAR-HELIAN", "relation_type": "总体统计的镜像对手", "surface_relation": "都计算总量，却对个体退出得出相反结论", "from_wants": "她把不可替代节点写入模型", "to_wants": "她承认群体意志也会压迫个体", "mutual_misunderstanding": "双方都把自己的聚合方式当作更少残酷", "power_sources": ["活体群体数据", "天衡历史数据"], "debts_and_secrets": ["一份被删去的退出样本"], "trust": -0.25, "dependence": 0.1, "fear": 0.25, "desire": 0.0, "start_chapter_no": 54},
+    {"relationship_id": "REL-HAN-GU", "from_character_id": "CHAR-HAN", "to_character_id": "CHAR-GU", "relation_type": "公民监督与行政合作", "surface_relation": "查账者与总被查的人", "from_wants": "所有契约都能被普通居民读懂和否决", "to_wants": "民议会不只反对，也能承担被选方案的成本", "mutual_misunderstanding": "韩灯以为顾砚舟会隐藏真相，顾砚舟以为韩灯只愿当局外裁判", "power_sources": ["居民合法性", "技术解释权"], "debts_and_secrets": ["旧事故日志", "应急越权记录"], "trust": 0.2, "dependence": 0.15, "fear": 0.1, "desire": 0.0, "start_chapter_no": 1},
+    {"relationship_id": "REL-HELIAN-WEN", "from_character_id": "CHAR-HELIAN", "to_character_id": "CHAR-WEN", "relation_type": "师徒与制度父女式依附", "surface_relation": "最可靠的执行者与唯一授业者", "from_wants": "他证明所有裁撤都经得起复核", "to_wants": "她继续替制度承担具体骂名而不追问基线", "mutual_misunderstanding": "她把栽培当信任，他把她的忠诚当可替换功能", "power_sources": ["授予权限", "掌握现场证据"], "debts_and_secrets": ["故乡救命之恩", "私名册", "被删除的失败实验"], "trust": 0.65, "dependence": 0.55, "fear": 0.35, "desire": 0.0, "start_chapter_no": 9}
+  ],
+  "world": {
+    "setting_summary": "墟海承接被天衡裁撤的世界碎片。泊界城靠三座可移动界锚维持人口、气候与因果连续性；每接入一界都会获得资源，也会引入一套不能被简单兼容的制度与历史债务。",
+    "resource_constraints": ["界锚同时最多承载三种高冲突法则", "潮砂只能延缓坠界不能逆转已发生死亡", "余火能保存文明技艺但不能复制人格", "公共界契必须经承印者、受影响共同体与见证人三方签署"],
+    "rules": [
+      {"rule_id": "RULE-TH-01", "category": "天衡", "statement": "天衡为每一世界维护一条允许的终局轨迹，偏离过大时启动裁撤。", "scope": "所有已登记世界", "cost": "稳定性来自删除未被允许的选择与相关记忆", "who_knows": ["CHAR-HELIAN", "CHAR-WEN"], "who_benefits": ["校史院", "仍在允许轨迹中的稳定世界"], "exceptions": "拥有多方界契的世界可申请短期复核，但必须证明替代轨迹不会连锁坍缩", "violation_block": "未通过复核的世界坐标会被白页封锁", "is_hard": true},
+      {"rule_id": "RULE-CONTRACT-01", "category": "界契", "statement": "界契只有在承印者、受影响共同体代表与独立见证人分别签署时生效。", "scope": "跨界锚定与大规模因果改写", "cost": "三方各自承担写明且不可转嫁的代价", "who_knows": ["CHAR-GU", "CHAR-NING", "CHAR-ZHU", "CHAR-LUO", "CHAR-SANG", "CHAR-HELIAN", "CHAR-HAN"], "who_benefits": ["被锚定世界", "泊界城"], "exceptions": "灾难中可启用十二时辰临时契，但到期必须公开复议", "violation_block": "缺少任一签名则界锚无法稳定，伪造签名会反噬执录人", "is_hard": true},
+      {"rule_id": "RULE-CONTRACT-02", "category": "退出", "statement": "任何签署者可撤回未来授权，但不能抹掉已经发生的物质、政治与关系后果。", "scope": "所有界契与私人附属条款", "cost": "撤回会失去尚未兑现的权利并触发公开结算", "who_knows": ["CHAR-GU", "CHAR-ZHU", "CHAR-HELIAN"], "who_benefits": ["所有签署者"], "exceptions": "正在执行的即时救援动作完成前只可暂停新增授权", "violation_block": "系统拒绝把撤回解释为从未同意", "is_hard": true},
+      {"rule_id": "RULE-BLANK-01", "category": "空白录", "statement": "空白录一次只能改写一条可定位的因果连接，不能凭空创造结果。", "scope": "顾砚舟持有的残缺契录", "cost": "每次改写永久抽走执录人一段与该选择同类的真实记忆", "who_knows": ["CHAR-GU", "CHAR-LUO", "CHAR-HELIAN", "CHAR-WEN"], "who_benefits": ["改写后的直接受益者"], "exceptions": "多人共同见证可分摊记忆损失，但必须逐人同意", "violation_block": "没有前因、对象或代价时页面保持空白", "is_hard": true},
+      {"rule_id": "RULE-ANCHOR-01", "category": "界锚", "statement": "界锚稳定的是规则兼容性，不是领土所有权；接入者保留自治但需共同承担冲突法则。", "scope": "泊界城及附属世界碎片", "cost": "每新增一界都会降低现有锚的安全余量", "who_knows": ["CHAR-GU", "CHAR-HAN", "CHAR-ZHU"], "who_benefits": ["附属居民", "泊界城"], "exceptions": "短期避难可不接入法则，但不得使用核心资源", "violation_block": "把界锚当所有权凭证会引发法则排斥", "is_hard": true},
+      {"rule_id": "RULE-MEMORY-01", "category": "记忆", "statement": "记忆可被保存、见证或封存，但复制品只具有证据价值，不自动等同于人格。", "scope": "梦海、余火库与空白录", "cost": "每次读取都会改变读取者对该记忆的情绪权重", "who_knows": ["CHAR-LUO", "CHAR-SANG", "CHAR-WEN"], "who_benefits": ["历史复核者", "失忆者"], "exceptions": "经本人持续确认的外置记忆可成为法律证言", "violation_block": "任何系统不得用记忆复制品替本人签署", "is_hard": true},
+      {"rule_id": "RULE-HIVE-01", "category": "群栖", "statement": "群栖界的共同意识是多主体协议，不是桑翡的扩展身体。", "scope": "群栖界所有节点", "cost": "共享能降低个体痛苦，也会稀释少数意见", "who_knows": ["CHAR-SANG", "CHAR-LUO"], "who_benefits": ["选择共感的节点"], "exceptions": "危机广播可共享纯警报信号，不能夹带命令或欲望", "violation_block": "退出节点拥有不可被多数票取消的断网权", "is_hard": true},
+      {"rule_id": "RULE-RESOURCE-01", "category": "资源", "statement": "潮砂、余火和炉心产能必须分别登记来源、受益者与维护人。", "scope": "泊界城公共资源", "cost": "公开账本会暴露战略弱点与既得利益", "who_knows": ["CHAR-ZHU", "CHAR-HAN", "CHAR-GU"], "who_benefits": ["居民", "工匠", "监督者"], "exceptions": "战时坐标可延迟公开三日，但资源总量不可隐瞒", "violation_block": "无维护人与来源记录的升级不得进入 canon", "is_hard": true}
+    ],
+    "locations": [
+      {"location_id": "LOC-PORT", "name": "泊界城", "description": "由三座旧界锚拖行的漂泊城，议事厅、工坊与避难层彼此争夺有限热源。", "environment": "昼夜随接入世界改变，外墙长期受墟潮侵蚀", "resources": ["三座界锚", "公共余火库", "旧航图"], "rules": ["所有新增世界须经民议会公开复议", "外墙红线外不得单人行动"]},
+      {"location_id": "LOC-SNOW", "name": "霜阙残城", "description": "第一座坠入墟海的雪原王城，只剩下半座宫墙和被冻结的三万名居民。", "environment": "寒潮会把未说出口的命令冻结成可见霜纹", "resources": ["寒潮界印", "雪卫", "冰下粮库"], "rules": ["军令离开霜纹范围即失效", "王室印只代表旧法不代表现居民"]},
+      {"location_id": "LOC-FIRE", "name": "赤炉港", "description": "依靠巨大炉心航行的工业港，商团与工匠共同维持却长期权责失衡。", "environment": "空中布满灼热索道与会吞噬潮砂的炉灰", "resources": ["赤炉心", "跨界索道", "工匠行会"], "rules": ["炉心份额决定生产权但不决定人身权", "停炉超过六时辰会失去航向"]},
+      {"location_id": "LOC-DREAM", "name": "镜潮海", "description": "海面反射的不是外貌，而是被观察者拒绝承认的记忆版本。", "environment": "方向由共同记忆维持，孤立者会在原地循环", "resources": ["记忆盐", "见证塔", "梦舟"], "rules": ["未经本人许可不得固定私人记忆", "预言只记录概率不构成命令"]},
+      {"location_id": "LOC-HIVE", "name": "百声庭", "description": "群栖界的移动孢舟，百万意识通过光脉交换感官与意见。", "environment": "静默被视为高风险异常，私人房间极少", "resources": ["共感网络", "生物工坊", "孢舟群"], "rules": ["每个节点可申请静默时段", "退出节点拥有独立物资配额"]},
+      {"location_id": "LOC-COURT", "name": "无名王庭", "description": "一座以剥夺姓名换取秩序的帝国中枢，官位越高可使用的私人称谓越少。", "environment": "所有门槛记录来者的法定身份，匿名者无法通过", "resources": ["名册库", "九重门", "帝国粮道"], "rules": ["公名与私名具有不同法律效力", "被除名者不会消失但失去制度接口"]},
+      {"location_id": "LOC-ARCHIVE", "name": "白页库", "description": "校史院存放被裁撤世界统计与残余坐标的无窗档案城。", "environment": "文字比物体更稳定，未登记之物会逐渐透明", "resources": ["天衡接口", "裁撤记录", "复核井"], "rules": ["任何修改留下版本差异", "删除样本必须有双人见证但旧制度允许总校史豁免"]},
+      {"location_id": "LOC-ZERO", "name": "零号校场", "description": "天衡最初试验多世界共存的废弃现场，也是被隐藏的失败样本。", "environment": "互斥因果同时显现，观察本身会选择一条路径", "resources": ["原始基线", "未收敛选择", "第一代界锚"], "rules": ["单人无法固定现实", "至少三种互斥见证并存才可离开"]},
+      {"location_id": "LOC-GARDEN", "name": "红页庭", "description": "众人把各界植物移栽在同一片失重庭院，后来成为私人谈判与公共纪念之地。", "environment": "法则冲突使花期和重力按签署者情绪轻微偏移", "resources": ["各界种子", "纪念墙", "非正式会谈空间"], "rules": ["不得把私人谈话自动写入公共契约", "纪念物只能由相关者增删"]},
+      {"location_id": "LOC-GATE", "name": "众签门", "description": "终局由所有世界共同建成的开放渡门，每次开启都会显示本次受益者与承担者。", "environment": "门后不是固定目的地，而是经多方签名临时稳定的航路", "resources": ["公共签名协议", "分布式界锚", "审计钟"], "rules": ["任何世界可拒绝加入", "开启记录永久公开", "无单人最高权限"]}
+    ]
+  },
+  "plot_threads": [
+    {"thread_id": "TH-IDENTITY", "name": "已死的顾砚舟", "description": "官方记录为何认定顾砚舟十二年前已经死亡，以及他体内异常回声的来源。", "plant_chapter": 2, "planned_payoff_chapter": 91},
+    {"thread_id": "TH-BLANK", "name": "空白录缺页", "description": "缺页由谁带走、每次失忆去了哪里、空白录原本为何不是私人神器。", "plant_chapter": 1, "planned_payoff_chapter": 88},
+    {"thread_id": "TH-TIANHENG", "name": "天衡基线", "description": "天衡所谓最优解隐藏了哪次失败实验与被删除样本。", "plant_chapter": 9, "planned_payoff_chapter": 86},
+    {"thread_id": "TH-NING", "name": "宁照霜的弃王军令", "description": "她曾放弃王室而救平民的决定如何改变其统军合法性与自我判断。", "plant_chapter": 4, "planned_payoff_chapter": 58},
+    {"thread_id": "TH-ZHU", "name": "火港半印", "description": "祝红翎持有的半枚走私印钥通向何处，她为何迟迟不公开。", "plant_chapter": 18, "planned_payoff_chapter": 70},
+    {"thread_id": "TH-LUO", "name": "被删去的第三未来", "description": "洛弥生公布两个终局却抹去自己位置的原因。", "plant_chapter": 36, "planned_payoff_chapter": 92},
+    {"thread_id": "TH-SANG", "name": "退出节点", "description": "群栖界内部要求永久退出的少数人如何挑战共同体代表制度。", "plant_chapter": 50, "planned_payoff_chapter": 78},
+    {"thread_id": "TH-HELIAN", "name": "私藏名册", "description": "赫连夜阑私记被裁撤者姓名的行为何时从悼念变为证据与背叛。", "plant_chapter": 11, "planned_payoff_chapter": 75},
+    {"thread_id": "TH-HAN", "name": "旧事故日志", "description": "韩灯保存的施工日志连接上一任城主、顾砚舟旧契约和零号校场。", "plant_chapter": 6, "planned_payoff_chapter": 83},
+    {"thread_id": "TH-RELATION", "name": "可撤回的亲密盟约", "description": "主要角色如何协商非独占关系、嫉妒、公共权力与私人退出，而不让关系替代政治主体性。", "plant_chapter": 14, "planned_payoff_chapter": 96}
+  ],
+  "volumes": [
+    {"volume_no": 1, "title": "坠界之夜", "chapter_from": 1, "chapter_to": 16, "question": "一座城是否能在无人被代签的前提下及时获救？", "primary_strategy": "顾砚舟用十二时辰临时契争取时间，宁照霜用军纪稳定现场", "strategy_failure": "临时契的权力集中引发居民反弹，军令也无法兼容泊界城自治", "midpoint_reframe": "追杀并非针对霜阙残城，而是针对顾砚舟这名已死之人", "irreversible_end_state": "霜阙残城以放弃旧王权为代价成为第一个自治界锚", "next_problem": "新界锚需要炉心供能，泊界城必须驶向被商团封锁的赤炉港", "themes": ["责任与代签", "救亡合法性", "身份记录"], "involved_character_ids": ["CHAR-GU", "CHAR-NING", "CHAR-HAN", "CHAR-HELIAN"]},
+    {"volume_no": 2, "title": "火港无主", "chapter_from": 17, "chapter_to": 32, "question": "自由市场能否救下一座把人也写进债契的港口？", "primary_strategy": "祝红翎以竞价和公开账本拆解商团垄断", "strategy_failure": "仅改变所有权仍会把旧工匠变成新股东的附庸", "midpoint_reframe": "半枚印钥既是走私证据，也是校史院故意留下的诱饵", "irreversible_end_state": "工匠议会取得炉心否决权，祝红翎烧毁自己独占航路的契印", "next_problem": "炉心启动唤醒镜潮海，泊界城开始出现互相矛盾的共同记忆", "themes": ["价格与价值", "退出权", "公共账本"], "involved_character_ids": ["CHAR-GU", "CHAR-NING", "CHAR-ZHU", "CHAR-HAN", "CHAR-HELIAN"]},
+    {"volume_no": 3, "title": "梦海倒城", "chapter_from": 33, "chapter_to": 48, "question": "知道真相的人是否有权替别人决定承受多少真相？", "primary_strategy": "洛弥生用分层披露控制恐慌，顾砚舟用见证链辨别记忆", "strategy_failure": "选择性真话制造的错误判断比谎言更难被发现", "midpoint_reframe": "空白录收走的记忆一直被天衡当作删去分支的样本", "irreversible_end_state": "顾砚舟自愿失去关于旧契背叛者的记忆，换取梦海居民的独立证言", "next_problem": "证言指向无名王庭，那里保存着顾砚舟十二年前的死亡公文", "themes": ["真相责任", "记忆与人格", "可知与可选"], "involved_character_ids": ["CHAR-GU", "CHAR-NING", "CHAR-ZHU", "CHAR-LUO", "CHAR-HAN", "CHAR-HELIAN"]},
+    {"volume_no": 4, "title": "王庭无名", "chapter_from": 49, "chapter_to": 64, "question": "共同体、国家和亲密关系各能代表一个人到什么程度？", "primary_strategy": "众人联合群栖界与无名者，以多重身份冲击王庭法定名册", "strategy_failure": "多数联盟同样会吞没退出节点与私人选择", "midpoint_reframe": "顾砚舟不是某一失落世界的化身，而是被删选择的活索引", "irreversible_end_state": "王庭九重门失去单一法名控制，桑翡以个人身份签下第一份私人条款", "next_problem": "天衡把泊界城判为全域异常，校史院开始封锁所有界契", "themes": ["代表权", "个体与共同体", "亲密边界"], "involved_character_ids": ["CHAR-GU", "CHAR-NING", "CHAR-ZHU", "CHAR-LUO", "CHAR-SANG", "CHAR-HELIAN", "CHAR-HAN"]},
+    {"volume_no": 5, "title": "白页审判", "chapter_from": 65, "chapter_to": 80, "question": "当敌人能强制利用既有承诺时，撤回是否等于背叛？", "primary_strategy": "五位界契者分别撤回未来授权，让空白录无法被校史院武器化", "strategy_failure": "契约解体也让泊界城失去法则兼容，居民承担真实崩坏", "midpoint_reframe": "闻观鹤的最优基线建立在被删除的失败实验上，赫连夜阑的私名册可证明样本存在", "irreversible_end_state": "赫连夜阑放弃执校真名，公开裁撤记录并加入分布式重签", "next_problem": "闻观鹤启动全域归零，众人必须让各世界自行选择是否参与高风险替代方案", "themes": ["撤回与责任", "制度共犯", "重签而非复原"], "involved_character_ids": ["CHAR-GU", "CHAR-NING", "CHAR-ZHU", "CHAR-LUO", "CHAR-SANG", "CHAR-HELIAN", "CHAR-HAN", "CHAR-WEN"]},
+    {"volume_no": 6, "title": "众生署名", "chapter_from": 81, "chapter_to": 96, "question": "谁有权写下世界的结局，选择自由的人又如何共同承担失败？", "primary_strategy": "泊界城公开所有代价，让各世界独立签署或拒绝分布式界锚", "strategy_failure": "自由选择产生互斥方案，不能靠一次表决获得完美统一", "midpoint_reframe": "零号校场证明失败不是多世界共存本身，而是闻观鹤删除异议样本后强行收敛", "irreversible_end_state": "天衡被改造为可审计、可退出、无单人最高权限的众签门", "next_problem": "世界获得继续争论和犯错的权利，主要角色选择各自责任与相互关系的长期形式", "themes": ["自由的代价", "分布式责任", "余波与新制度"], "involved_character_ids": ["CHAR-GU", "CHAR-NING", "CHAR-ZHU", "CHAR-LUO", "CHAR-SANG", "CHAR-HELIAN", "CHAR-HAN", "CHAR-WEN"]}
+  ],
+  "event_graph": {
+    "nodes": [
+      {"event_id": "EV-01", "name": "霜阙坠入墟海", "chapter_no": 1, "initiator": "CHAR-GU", "choice": "启用未经许可的空白录救援", "result": "泊界城获得十二时辰但暴露坐标", "state_delta": "临时界契开启，顾砚舟失去一段无关者的告别记忆", "new_debt": "必须在时限内取得三方签名", "opening": true, "key_event": true},
+      {"event_id": "EV-02", "name": "宁照霜签署临时界契", "chapter_no": 5, "initiator": "CHAR-NING", "choice": "以个人军权担保而不替遗民永久同意", "result": "霜阙获得临时界锚", "state_delta": "雪卫进入泊界城，军权与民议会冲突", "new_debt": "十二时辰后必须公开复议", "opening": false, "key_event": true},
+      {"event_id": "EV-03", "name": "居民否决旧王权续存", "chapter_no": 10, "initiator": "CHAR-HAN", "choice": "在追兵逼近时仍举行有限公投", "result": "王室印失去代表效力", "state_delta": "救援合法性转向居民与统军双重授权", "new_debt": "泊界城须承担自治界的维护成本", "opening": false, "key_event": true},
+      {"event_id": "EV-04", "name": "霜阙永久锚定", "chapter_no": 16, "initiator": "CHAR-NING", "choice": "焚毁继承印并公布弃王军令", "result": "寒潮界印成为公共锚", "state_delta": "宁照霜失去旧国法统却获得遗民重新授权", "new_debt": "新锚缺少持续炉心", "opening": false, "key_event": true},
+      {"event_id": "EV-05", "name": "赤炉港竞价开门", "chapter_no": 17, "initiator": "CHAR-ZHU", "choice": "把泊界城坐标押入公开拍卖", "result": "众人进入被封锁的火港", "state_delta": "祝红翎与顾砚舟形成高风险商业同盟", "new_debt": "坐标可能落入校史院", "opening": false, "key_event": true},
+      {"event_id": "EV-06", "name": "工匠停炉", "chapter_no": 22, "initiator": "CHAR-HAN", "choice": "支持工匠停工而非强征炉心", "result": "商团被迫公开人身债契", "state_delta": "泊界城短缺加剧，工匠取得谈判席位", "new_debt": "必须在停炉期限内重组所有权", "opening": false, "key_event": true},
+      {"event_id": "EV-07", "name": "白页招安", "chapter_no": 27, "initiator": "CHAR-HELIAN", "choice": "提供合法复核换取顾砚舟自首", "result": "团队首次出现公开分裂", "state_delta": "赫连夜阑暴露顾砚舟死亡记录", "new_debt": "半枚印钥被证明是追踪器", "opening": false, "key_event": true},
+      {"event_id": "EV-08", "name": "火港共治", "chapter_no": 32, "initiator": "CHAR-ZHU", "choice": "烧毁独占印并给工匠议会永久否决权", "result": "炉心接入泊界城", "state_delta": "祝红翎失去垄断利润，获得自愿同盟", "new_debt": "炉心唤醒镜潮海", "opening": false, "key_event": true},
+      {"event_id": "EV-09", "name": "镜潮倒映矛盾记忆", "chapter_no": 33, "initiator": "CHAR-LUO", "choice": "只公布可验证的局部真相", "result": "泊界城避免即时恐慌却形成两套历史", "state_delta": "洛弥生成为唯一见证接口", "new_debt": "她的选择性披露必须被审计", "opening": false, "key_event": true},
+      {"event_id": "EV-10", "name": "第三证词出现", "chapter_no": 38, "initiator": "CHAR-ZHU", "choice": "用公开交易诱出被封存的记忆持有人", "result": "证明空白录记忆进入天衡样本库", "state_delta": "顾砚舟失忆从私人代价变成制度证据", "new_debt": "需要进入梦海深层取回样本索引", "opening": false, "key_event": true},
+      {"event_id": "EV-11", "name": "拒绝善意删忆", "chapter_no": 43, "initiator": "CHAR-GU", "choice": "拒绝团队替他删除痛苦记忆并自行选择代价", "result": "梦海航路被打开", "state_delta": "顾砚舟失去背叛者面孔，关系信任重新分配", "new_debt": "洛弥生隐瞒的终局预言浮现", "opening": false, "key_event": true},
+      {"event_id": "EV-12", "name": "梦海独立证言", "chapter_no": 48, "initiator": "CHAR-LUO", "choice": "公开自己选择性真话造成的全部误判", "result": "梦海居民取得独立证言权", "state_delta": "洛弥生失去垄断见证资格", "new_debt": "证言指向无名王庭", "opening": false, "key_event": true},
+      {"event_id": "EV-13", "name": "群栖界申请整体接入", "chapter_no": 49, "initiator": "CHAR-SANG", "choice": "以共同体名义要求一个不可拆分席位", "result": "泊界城代表制度陷入冲突", "state_delta": "桑翡与退出节点的矛盾公开", "new_debt": "必须定义集体与个体的签署边界", "opening": false, "key_event": true},
+      {"event_id": "EV-14", "name": "无名者穿过第一重门", "chapter_no": 54, "initiator": "CHAR-NING", "choice": "放弃军职法名换取匿名者通行", "result": "王庭身份系统首次出现合法缺口", "state_delta": "宁照霜私人身份压过旧统军资格", "new_debt": "她的弃王决定将被公开审判", "opening": false, "key_event": true},
+      {"event_id": "EV-15", "name": "死亡公文复核", "chapter_no": 59, "initiator": "CHAR-HELIAN", "choice": "允许顾砚舟查看本不该存在的版本差异", "result": "证明他的死亡记录早于实际事故", "state_delta": "赫连夜阑首次违反执校命令", "new_debt": "版本差异指向零号校场", "opening": false, "key_event": true},
+      {"event_id": "EV-16", "name": "九门改名", "chapter_no": 64, "initiator": "CHAR-SANG", "choice": "以个人名字而非全族意志签署私人条款", "result": "王庭法名垄断失效", "state_delta": "顾砚舟被识别为被删选择的活索引", "new_debt": "天衡启动全域异常判定", "opening": false, "key_event": true},
+      {"event_id": "EV-17", "name": "五契同日撤回", "chapter_no": 65, "initiator": "CHAR-NING", "choice": "五位界契者分别撤回未来授权阻止空白录被夺用", "result": "校史院无法强制签署但泊界城开始解体", "state_delta": "关系与政治承诺进入真实结算", "new_debt": "必须在不复原旧权力的前提下重签", "opening": false, "key_event": true},
+      {"event_id": "EV-18", "name": "泊界城分裂", "chapter_no": 69, "initiator": "CHAR-HAN", "choice": "公开撤回造成的供给伤亡而不把责任推给签署者", "result": "居民同意承担一次有限重签实验", "state_delta": "民议会从监督者变为共同决策者", "new_debt": "实验需要校史院原始基线", "opening": false, "key_event": true},
+      {"event_id": "EV-19", "name": "私名册成为证据", "chapter_no": 75, "initiator": "CHAR-HELIAN", "choice": "公开私藏名册并放弃执校真名", "result": "被删样本获得法律存在", "state_delta": "赫连夜阑成为无名叛离者，闻观鹤失去最可靠执行者", "new_debt": "全域归零提前启动", "opening": false, "key_event": true},
+      {"event_id": "EV-20", "name": "分布式重签", "chapter_no": 80, "initiator": "CHAR-ZHU", "choice": "把印钥、炉心与账本拆成多方权限", "result": "泊界城恢复最低稳定", "state_delta": "无人可单独控制空白录或界锚", "new_debt": "必须说服其他世界自愿加入", "opening": false, "key_event": true},
+      {"event_id": "EV-21", "name": "各界独立署名", "chapter_no": 81, "initiator": "CHAR-SANG", "choice": "允许部分世界拒绝并承担失去公共航路的后果", "result": "替代天衡获得真实但不完整的样本", "state_delta": "自由选择第一次被系统记录为稳定变量", "new_debt": "拒绝者仍受归零波及", "opening": false, "key_event": true},
+      {"event_id": "EV-22", "name": "零号样本复原", "chapter_no": 86, "initiator": "CHAR-LUO", "choice": "同时保留三份互斥证词而不强行选一份真相", "result": "证明第一次实验因删除异议而失败", "state_delta": "闻观鹤的基线合法性崩塌", "new_debt": "顾砚舟必须决定是否释放体内全部被删选择", "opening": false, "key_event": true},
+      {"event_id": "EV-23", "name": "空白录公开化", "chapter_no": 92, "initiator": "CHAR-GU", "choice": "放弃私人执录权并让所有签署者共同见证被删选择", "result": "天衡失去唯一终局控制", "state_delta": "顾砚舟保住人格但永久失去部分个人记忆，洛弥生补回第三未来", "new_debt": "众人必须在不统一答案的情况下承受终局冲突", "opening": false, "key_event": true},
+      {"event_id": "EV-24", "name": "众签门开启", "chapter_no": 96, "initiator": "CHAR-HELIAN", "choice": "拒绝继承闻观鹤的最高权限并把复核权交给公共协议", "result": "全域归零停止，世界获得可审计的继续存在权", "state_delta": "诸天红颜录被重新定义为自愿署名者的历史，主要关系完成长期议价", "new_debt": "开放世界仍会犯错，但责任不再由单一救世主垄断", "opening": false, "key_event": true}
+    ],
+    "edges": [
+      {"source": "EV-01", "target": "EV-02", "relation_type": "enable", "mechanism": "空白录争取的时限让临时签署成为可能"},
+      {"source": "EV-02", "target": "EV-03", "relation_type": "cause", "mechanism": "临时契集中权力触发居民复议"},
+      {"source": "EV-03", "target": "EV-04", "relation_type": "motivate", "mechanism": "居民否决迫使宁照霜重新定义法统"},
+      {"source": "EV-04", "target": "EV-05", "relation_type": "cause", "mechanism": "永久锚定暴露炉心缺口"},
+      {"source": "EV-05", "target": "EV-06", "relation_type": "cause", "mechanism": "公开竞价把工匠债契带到台面"},
+      {"source": "EV-06", "target": "EV-07", "relation_type": "enable", "mechanism": "停炉危机给白页招安制造时间压力"},
+      {"source": "EV-07", "target": "EV-08", "relation_type": "motivate", "mechanism": "招安与追踪器迫使祝红翎放弃独占"},
+      {"source": "EV-08", "target": "EV-09", "relation_type": "cause", "mechanism": "新炉心唤醒镜潮法则"},
+      {"source": "EV-09", "target": "EV-10", "relation_type": "motivate", "mechanism": "矛盾记忆要求寻找独立第三证词"},
+      {"source": "EV-10", "target": "EV-11", "relation_type": "cause", "mechanism": "样本索引要求顾砚舟亲自选择记忆代价"},
+      {"source": "EV-11", "target": "EV-12", "relation_type": "motivate", "mechanism": "拒绝被代替选择迫使洛弥生承担披露责任"},
+      {"source": "EV-12", "target": "EV-13", "relation_type": "enable", "mechanism": "独立证言制度让群栖退出者得以发声"},
+      {"source": "EV-13", "target": "EV-14", "relation_type": "motivate", "mechanism": "代表权冲突促使宁照霜放弃法名示范"},
+      {"source": "EV-14", "target": "EV-15", "relation_type": "enable", "mechanism": "身份系统缺口开放死亡公文复核"},
+      {"source": "EV-15", "target": "EV-16", "relation_type": "reveal", "mechanism": "版本差异揭示活索引身份并改变九门方案"},
+      {"source": "EV-15", "target": "EV-16", "relation_type": "motivate", "mechanism": "赫连夜阑的违规复核促使桑翡以个人名签署"},
+      {"source": "EV-16", "target": "EV-17", "relation_type": "cause", "mechanism": "全域异常判定使既有界契成为可被夺用的目标"},
+      {"source": "EV-17", "target": "EV-18", "relation_type": "cause", "mechanism": "撤回未来授权直接造成城市法则分裂"},
+      {"source": "EV-18", "target": "EV-19", "relation_type": "enable", "mechanism": "公开伤亡与重签实验需要被删样本作证"},
+      {"source": "EV-19", "target": "EV-20", "relation_type": "enable", "mechanism": "私名册提供拆分权限的法律依据"},
+      {"source": "EV-20", "target": "EV-21", "relation_type": "cause", "mechanism": "分布式权限允许各世界独立选择"},
+      {"source": "EV-21", "target": "EV-22", "relation_type": "enable", "mechanism": "真实选择样本使零号实验可复核"},
+      {"source": "EV-22", "target": "EV-23", "relation_type": "motivate", "mechanism": "基线崩塌迫使顾砚舟放弃私人执录权"},
+      {"source": "EV-23", "target": "EV-24", "relation_type": "enable", "mechanism": "公开化空白录为无最高权限的众签门提供接口"},
+      {"source": "EV-01", "target": "EV-15", "relation_type": "payoff", "mechanism": "开篇异常死亡记录在王庭获得版本证据"},
+      {"source": "EV-04", "target": "EV-14", "relation_type": "echo", "mechanism": "两次放弃法统从公共责任转向私人身份"},
+      {"source": "EV-07", "target": "EV-19", "relation_type": "payoff", "mechanism": "追缉者的制度身份最终由私藏证据反转"},
+      {"source": "EV-11", "target": "EV-23", "relation_type": "echo", "mechanism": "两次记忆代价从私人承担升级为共同见证"},
+      {"source": "EV-13", "target": "EV-21", "relation_type": "payoff", "mechanism": "集体代表争议最终落实为每界独立署名"}
+    ]
+  },
+  "writing_constraints": [
+    {"constraint_id": "WC-001", "constraint_type": "copyright", "title": "参考原文隔离", "body": "任何参考原文、原句、专名、独特比喻和可识别情节链不得进入 DraftWriter 上下文；只能使用本生产包中的抽象机制与统计区间。", "priority": 1000, "is_hard": true},
+    {"constraint_id": "WC-002", "constraint_type": "consent", "title": "成年与合意", "body": "所有亲密参与者必须明确为成年人；同意需在当前情境有效、可撤回且不由生存胁迫、药物、精神能力或代签替代。", "priority": 1000, "is_hard": true},
+    {"constraint_id": "WC-003", "constraint_type": "causality", "title": "关键转折因果", "body": "重大转折必须能追溯到人物选择与 cause、enable 或 motivate 前因；偶然只能制造问题，不能无代价解决核心问题。", "priority": 980, "is_hard": true},
+    {"constraint_id": "WC-004", "constraint_type": "agency", "title": "核心人物能动性", "body": "每位核心女性角色每卷至少一次以独立目标改变主线；不得把其降为奖励、钥匙、信息接口或只会赞同主角的功能件。", "priority": 960, "is_hard": true},
+    {"constraint_id": "WC-005", "constraint_type": "continuity", "title": "认知分账", "body": "客观事实、读者已知与角色信念分开维护；角色结论必须有其可获得证据，误判需产生持续后果。", "priority": 950, "is_hard": true},
+    {"constraint_id": "WC-006", "constraint_type": "state", "title": "状态增量证据", "body": "canon、timeline、belief、relationship 与 thread 增量必须引用本章正文证据范围并经复核后提交，不得从计划直接伪造既成事实。", "priority": 940, "is_hard": true},
+    {"constraint_id": "WC-007", "constraint_type": "style", "title": "功能化节律", "body": "句长、段长与对白比例按场景功能选择区间；统计只生成候选旗标，不得为命中平均值机械切句或填充对白。", "priority": 800, "is_hard": false},
+    {"constraint_id": "WC-008", "constraint_type": "dialogue", "title": "人物声音", "body": "对话遮住姓名后仍应从证据标准、关注对象、施压策略、回避内容和句法节奏区分角色，不以单一口头禅代替。", "priority": 850, "is_hard": false},
+    {"constraint_id": "WC-009", "constraint_type": "relationship", "title": "多角关系不是排队", "body": "亲密关系允许非独占，但必须展示边界、嫉妒、协商、退出与公共权力冲突；角色之间必须存在不经主角的联盟和矛盾。", "priority": 900, "is_hard": true},
+    {"constraint_id": "WC-010", "constraint_type": "chapter", "title": "章节不可删除性", "body": "每章至少改变信息、关系、资源、位置、身体或可用选择中的一项，并登记兑现与新增义务；只增加气氛或字数的章节必须合并。", "priority": 930, "is_hard": true},
+    {"constraint_id": "WC-011", "constraint_type": "revision", "title": "六轮修订", "body": "固定按结构、人物、连续性、场景、语言、AI 痕迹与盲读顺序修订；结构失败时停止逐句润色并退回事件图或章节契约。", "priority": 900, "is_hard": true},
+    {"constraint_id": "WC-012", "constraint_type": "ending", "title": "终局与余波", "body": "高潮必须由多方选择共同导出，不能由主角获得唯一最高权限；终局之后至少保留制度、关系与个人损失三类余波。", "priority": 970, "is_hard": true},
+    {"constraint_id": "WC-013", "constraint_type": "meta", "title": "禁止生成过程泄漏", "body": "正文不得出现模型、提示词、字数统计、章节任务回应、作为一个AI或总结式元评论。", "priority": 1000, "is_hard": true}
+  ],
+  "reference_residue_denylist": ["琼明神女录", "林玄言", "叶临渊", "裴语涵", "陆嘉静", "季婵溪", "邵神韵", "南祈月", "失昼城", "浮屿", "三尺剑", "龙渊楼", "修罗宫", "不归墟", "云苍", "天命篡夺经", "囚龙桩", "映心镜", "育魔胎", "欲孽迷城"]
+}

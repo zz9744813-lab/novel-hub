@@ -16,18 +16,27 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 from urllib.parse import unquote, urlsplit
 
-from app.model_eval.suite_definitions import PRODUCTION_ROLES
+from app.model_eval.suite_definitions import (
+    PRODUCTION_ROLES,
+    ROUTABLE_ROLES,
+    qualification_role_for,
+)
 
 
 ABILITY_EVALUATOR_REVISION = "v98-ability-3"
 CONTEXT_EVALUATOR_REVISION = "v98-context-3"
-CONTEXT_REQUIRED_ROLES = {
+_DIRECT_CONTEXT_REQUIRED_ROLES = {
     "chapter_planner",
     "draft_writer",
     "review_agent",
     "state_extractor",
 }
-PREFLIGHT_ROLES = list(PRODUCTION_ROLES)
+CONTEXT_REQUIRED_ROLES = {
+    role
+    for role in ROUTABLE_ROLES
+    if qualification_role_for(role) in _DIRECT_CONTEXT_REQUIRED_ROLES
+}
+PREFLIGHT_ROLES = list(ROUTABLE_ROLES)
 RUNG_TOKEN_ESTIMATE = (
     8_000,
     16_000,

@@ -639,8 +639,13 @@ async def assemble_context(
         ).scalars().all()
         if locs:
             payload = [
-                {"id": str(l.id), "name": l.name, "description": l.description, "rules": l.rules}
-                for l in locs
+                {
+                    "id": str(location.id),
+                    "name": location.name,
+                    "description": location.description,
+                    "rules": location.rules,
+                }
+                for location in locs
             ]
             items.append(
                 _item(
@@ -853,16 +858,16 @@ async def assemble_context(
         .limit(3)
     )
     l1_ledgers = []
-    for l in l1s.scalars().all():
-        l1_ledgers.append(l.ledger_json)
+    for ledger in l1s.scalars().all():
+        l1_ledgers.append(ledger.ledger_json)
         items.append(
             _item(
                 kind="l1_ledger",
-                content=l.ledger_json,
+                content=ledger.ledger_json,
                 priority=600,
                 required=False,
                 reason="recent_l1",
-                source_id=str(l.id),
+                source_id=str(ledger.id),
                 agent_role=agent_role,
             )
         )
@@ -925,6 +930,7 @@ async def assemble_context(
 
     # ── v9.7 §5/§23: Experience & Technique cards really inject into production ──
     experience_refs: list = []
+    experience_cards_payload: list[dict] = []
     technique_refs: list = []
     try:
         from app.editorial.runtime_experience import build_experience_context
@@ -948,6 +954,13 @@ async def assemble_context(
                     "rule_type": card["rule_type"],
                     "scope_type": card["scope_type"],
                     "score": card["score"],
+                }
+            )
+            experience_cards_payload.append(
+                {
+                    "rule_type": card["rule_type"],
+                    "instruction": card["instruction"],
+                    "avoid_when": card.get("avoid_when") or [],
                 }
             )
             items.append(
@@ -1020,18 +1033,10 @@ async def assemble_context(
         except Exception as e:  # noqa: BLE001
             logger.warning("technique injection failed: %s", e)
 
-    context["experience_cards"] = [
-        {"rule_type": c["rule_type"], "instruction": c["instruction"], "avoid_when": c.get("avoid_when") or []}
-        for c in cards if "cards" in dir() and cards
-    ] if experience_refs else []
-    context["technique_cards"] = [t for t in technique_refs]
-    context["experience_refs"] = experience_refs
-    context["technique_refs"] = technique_refs
-    manifest["experience_refs"] = experience_refs
-    manifest["technique_refs"] = technique_refs
-
     budget = advisory_input_budget(context_window, max_output_tokens)
     manifest = build_manifest(items, input_budget=budget, agent_role=agent_role)
+    manifest["experience_refs"] = experience_refs
+    manifest["technique_refs"] = technique_refs
 
     # Legacy flat package for draft_writer prompts (unchanged shape)
     context = {
@@ -1074,6 +1079,10 @@ async def assemble_context(
         }
         if tone_anchor
         else {},
+        "experience_cards": experience_cards_payload,
+        "technique_cards": technique_refs,
+        "experience_refs": experience_refs,
+        "technique_refs": technique_refs,
         "retrieved_evidence": retrieved_evidence,
         "exclusions": [],  # record-only: never populated by budget
         "retrieval_meta": {

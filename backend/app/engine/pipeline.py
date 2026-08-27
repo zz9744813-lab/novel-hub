@@ -10,8 +10,13 @@ from sqlalchemy import select
 from app.database import async_session_factory
 from app.state_machine import ChapterState
 from app.models import (
-    Chapter, ChapterVersion, OutlineNode,
+    BookSetting, Chapter, ChapterVersion, OutlineNode, OutlineVersion, OutlineVolume,
     MemoryL4StateSnapshot, QueryPlan, RetrievalRun,
+)
+from app.engine.chapter_target import (
+    chapter_length_issues,
+    distribute_scene_targets,
+    parse_chapter_target_chars,
 )
 from app.engine.outline import check_required_dependencies
 from app.engine.retrieval import (
@@ -28,8 +33,8 @@ from app.agents.review_agent import review_chapter
 from app.agents.patch_editor import generate_patch, apply_patches, PatchStaleError
 from app.agents.state_extractor import extract_candidates
 from app.agents.drift_audit import run_drift_audit
-from app.engine.causal_compile import compile_chapter_contracts, load_chapter_contracts
-from app.engine.memory_compiler import generate_l2
+from app.engine.causal_compile import compile_chapter_contracts
+from app.engine.memory_compiler import generate_l2, generate_l3, volume_stage_window
 from app.engine.outcomes import PipelineOutcome, PipelineResult
 from app.engine.step_runner import (
     RunContext, run_step, content_hash,
@@ -110,6 +115,8 @@ async def execute_pipeline(
         worker_id=worker_id,
         pipeline_version=PIPELINE_VERSION,
     )
+    chapter_target = None
+    chapter_target_error = None
 
     # === Phase 1: Setup + DependencyGate ===
     async with async_session_factory() as db:
@@ -131,7 +138,34 @@ async def execute_pipeline(
         outline_node_id = outline_node.id
         outline_version_id = outline_node.outline_version_id
 
+        target_setting = (
+            await db.execute(
+                select(BookSetting.value).where(
+                    BookSetting.book_id == book_id,
+                    BookSetting.key == "chapter_target_chars",
+                )
+            )
+        ).scalar_one_or_none()
+        try:
+            chapter_target = parse_chapter_target_chars(target_setting)
+        except ValueError as exc:
+            chapter_target_error = str(exc)
+
         await db.commit()
+
+    if chapter_target is None:
+        logger.error("invalid chapter length contract for book %s: %s", book_id, chapter_target_error)
+        await _set_chapter_status(
+            chapter_id,
+            ChapterState.FAILED.value,
+            "invalid_chapter_length_contract",
+            chapter_run_id,
+        )
+        return _result(
+            PipelineOutcome.PERMANENT_FAILURE,
+            error_code="invalid_chapter_length_contract",
+            detail={"error": chapter_target_error},
+        )
 
     await _set_chapter_status(chapter_id, ChapterState.DEPENDENCY_CHECK.value, "enter dependency_check", chapter_run_id)
 
@@ -188,6 +222,10 @@ async def execute_pipeline(
             "depends_on": outline_node.depends_on,
             "expected_state_changes": getattr(outline_node, "expected_state_changes", None) or [],
             "title": outline_node.title,
+            "target_char_range": [
+                chapter_target.minimum_chars,
+                chapter_target.maximum_chars,
+            ],
         }
 
     # === Phase 2: QueryPlanner (checkpointed) ===
@@ -378,7 +416,7 @@ async def execute_pipeline(
             forced_dependencies=forced_deps,
             l4_states=l4_states,
             retrieved_evidence=retrieved_evidence,
-            target_word_count=3000,
+            target_word_count=chapter_target.target_chars,
         )
 
     try:
@@ -394,7 +432,7 @@ async def execute_pipeline(
                     for i, e in enumerate(retrieved_evidence[:16])
                     if isinstance(e, dict)
                 ],
-                "target_word_count": 3000,
+                "target_word_count": chapter_target.target_chars,
             },
             execute_fn=_do_plan,
         )
@@ -416,16 +454,32 @@ async def execute_pipeline(
 
     # Normalize scene_no to unique sequential 1..N (planner often returns all scene_no=1)
     raw_scenes = scene_plan.get("scenes") or []
-    if not raw_scenes:
+    valid_scenes = [dict(scene) for scene in raw_scenes if isinstance(scene, dict)]
+    if not valid_scenes:
         await _set_chapter_status(chapter_id, ChapterState.FAILED.value, "no scenes in plan")
         return _result(PipelineOutcome.PERMANENT_FAILURE, error_code="planner_no_scenes")
+    if len(valid_scenes) > 8:
+        await _set_chapter_status(
+            chapter_id,
+            ChapterState.FAILED.value,
+            "planner produced more than 8 scenes",
+        )
+        return _result(
+            PipelineOutcome.PERMANENT_FAILURE,
+            error_code="planner_too_many_scenes",
+            detail={"scene_count": len(valid_scenes)},
+        )
     normalized = []
-    for idx, sc in enumerate(raw_scenes, start=1):
-        if not isinstance(sc, dict):
-            continue
-        sc = dict(sc)
+    scene_targets = distribute_scene_targets(
+        chapter_target.target_chars,
+        [
+            scene.get("target_word_count")
+            for scene in valid_scenes
+        ],
+    )
+    for idx, sc in enumerate(valid_scenes, start=1):
         sc["scene_no"] = idx
-        sc.setdefault("target_word_count", max(800, int(3000 / max(len(raw_scenes), 1))))
+        sc["target_word_count"] = scene_targets[idx - 1]
         normalized.append(sc)
     scene_plan = {**scene_plan, "scenes": normalized}
 
@@ -566,18 +620,39 @@ async def execute_pipeline(
                 scene_contract=_sc,
                 scene_style_contract=scene_style,
             )
+            scene_min = max(1, int(_twc * 0.85))
+            scene_max = max(scene_min, int(_twc * 1.15))
+            actual_chars = len((content or "").strip())
+            if not error and not scene_min <= actual_chars <= scene_max:
+                error = (
+                    f"scene_length_contract:{actual_chars} outside "
+                    f"{scene_min}..{scene_max}"
+                )
             if error and not error.startswith("PIPELINE_BLOCKED"):
                 logger.warning(f"Scene failed, retrying: {error}")
+                retry_plan = {
+                    **_sd,
+                    "length_correction": (
+                        f"上一稿为 {actual_chars} 字；本次必须完整重写并落在 "
+                        f"{scene_min}..{scene_max} 字，不能续写、拼接或灌水。"
+                    ),
+                }
                 content, error = await write_scene(
                     book_id=book_id,
                     chapter_id=chapter_id,
-                    scene_plan=_sd,
+                    scene_plan=retry_plan,
                     context_package=scene_context,
                     previous_scene_tail=_pt,
                     target_word_count=_twc,
                     scene_contract=_sc,
                     scene_style_contract=scene_style,
                 )
+                actual_chars = len((content or "").strip())
+                if not error and not scene_min <= actual_chars <= scene_max:
+                    error = (
+                        f"scene_length_contract:{actual_chars} outside "
+                        f"{scene_min}..{scene_max} after retry"
+                    )
             if error and error.startswith("PIPELINE_BLOCKED"):
                 raise PermanentStepError("draft_blocked", {"error": error})
             if not content or error:
@@ -768,6 +843,15 @@ async def execute_pipeline(
         rev = rev_art.output if isinstance(rev_art.output, dict) else {}
         passed = bool(rev.get("passed"))
         issues = rev.get("issues") or []
+        length_issues = chapter_length_issues(chapter_content, chapter_target)
+        if length_issues:
+            passed = False
+            existing_issue_ids = {
+                issue.get("issue_id") for issue in issues if isinstance(issue, dict)
+            }
+            issues.extend(
+                issue for issue in length_issues if issue["issue_id"] not in existing_issue_ids
+            )
 
         # §51: StyleVerifier — deterministic style findings enter the patch loop
         try:
@@ -953,6 +1037,19 @@ async def execute_pipeline(
                 rev = rr_art.output if isinstance(rr_art.output, dict) else {}
                 passed = bool(rev.get("passed"))
                 remaining = rev.get("issues") or []
+                length_issues = chapter_length_issues(chapter_content, chapter_target)
+                if length_issues:
+                    passed = False
+                    existing_issue_ids = {
+                        issue.get("issue_id")
+                        for issue in remaining
+                        if isinstance(issue, dict)
+                    }
+                    remaining.extend(
+                        issue
+                        for issue in length_issues
+                        if issue["issue_id"] not in existing_issue_ids
+                    )
                 if passed or not remaining:
                     break
                 if _has_service_error(remaining):
@@ -1011,6 +1108,8 @@ async def execute_pipeline(
                 for anchors in (_anchors_by_char or {}).values()
                 for a in anchors
             ] if _anchors_by_char else None,
+            min_chars=chapter_target.minimum_chars,
+            max_chars=chapter_target.maximum_chars,
         )
         return res.as_dict()
 
@@ -1279,10 +1378,60 @@ async def execute_pipeline(
     )
 
     # === Phase 11: MilestoneTrigger ===
-    if chapter_no % 10 == 0:
-        chap_start = chapter_no - 9
-        async with async_session_factory() as db:
-            await generate_l2(db, book_id, chap_start, chapter_no)
+    # L2 windows are volume-local (10 chapters, with a shorter tail at volume
+    # end); L3 is generated exactly at the volume boundary.  This prevents a
+    # summary such as 11-20 from mixing two different volume strategies.
+    async with async_session_factory() as db:
+        volume = (
+            await db.execute(
+                select(OutlineVolume).where(
+                    OutlineVolume.book_id == book_id,
+                    OutlineVolume.outline_version_id == outline_version_id,
+                    OutlineVolume.chapter_from <= chapter_no,
+                    OutlineVolume.chapter_to >= chapter_no,
+                )
+            )
+        ).scalar_one_or_none()
+        outline_version_no = (
+            await db.execute(
+                select(OutlineVersion.version).where(OutlineVersion.id == outline_version_id)
+            )
+        ).scalar_one_or_none()
+        outline_version_no = int(outline_version_no or 1)
+        if volume is not None:
+            stage_start, stage_end = volume_stage_window(
+                chapter_no,
+                int(volume.chapter_from),
+                int(volume.chapter_to),
+            )
+            if chapter_no == stage_end:
+                await generate_l2(
+                    db,
+                    book_id,
+                    stage_start,
+                    stage_end,
+                    outline_version=outline_version_no,
+                )
+                await db.commit()
+            if chapter_no == int(volume.chapter_to):
+                await generate_l3(
+                    db,
+                    book_id,
+                    int(volume.volume_no),
+                    outline_version=outline_version_no,
+                    chapter_start=int(volume.chapter_from),
+                    chapter_end=int(volume.chapter_to),
+                )
+                await db.commit()
+        elif chapter_no % 10 == 0:
+            await generate_l2(
+                db,
+                book_id,
+                chapter_no - 9,
+                chapter_no,
+                outline_version=outline_version_no,
+            )
+            await db.commit()
 
     if chapter_no % 30 == 0:
         async with async_session_factory() as db:

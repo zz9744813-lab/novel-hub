@@ -1,0 +1,34 @@
+#!/bin/sh
+# ForcedCommand entrypoint for the unprivileged novelops SSH account.
+set -eu
+set -f
+
+original=${SSH_ORIGINAL_COMMAND:-status}
+set -- $original
+
+case "${1:-}" in
+  status)
+    [ "$#" -eq 1 ] || exit 64
+    ;;
+  deploy|rollback)
+    [ "$#" -eq 2 ] || exit 64
+    [ "${#2}" -eq 40 ] || exit 64
+    case "$2" in *[!0-9a-f]*) exit 64 ;; esac
+    ;;
+  logs)
+    [ "$#" -eq 3 ] || exit 64
+    case "$2" in web|api|worker|postgres|redis) ;; *) exit 64 ;; esac
+    case "$3" in *[!0-9]*|'') exit 64 ;; esac
+    [ "$3" -le 500 ] || exit 64
+    ;;
+  novel)
+    [ "$#" -eq 2 ] || exit 64
+    case "$2" in validate|install|start|status|audit|export|download) ;; *) exit 64 ;; esac
+    ;;
+  *)
+    echo "allowed: status | deploy SHA | rollback SHA | logs SERVICE LINES | novel ACTION" >&2
+    exit 64
+    ;;
+esac
+
+exec sudo -n /usr/local/sbin/novelforge-release "$@"

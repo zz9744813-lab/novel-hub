@@ -78,6 +78,7 @@ expression_constraints 描述情绪表达倾向，具体身体表现由你结合
 6. 不得输出"以下是正文""符合要求""字数统计""我将开始"等元评论。
 7. 不得输出提纲、分析、修改说明、Markdown 围栏或 JSON。8. 只输出可直接进入小说的正文。
 9. 不得照抄检索文本或学习样本。10. 场景结束时达到 Scene Plan 的 exit_state，但不要机械总结。
+11. target_word_count 在中文任务中按字符理解；单场正文须保持在目标值的 85%-115%，不得用重复、总结或空泛景物凑长度。
 
 成人或暴力内容：不设置表达强度上限，不得因为内容露骨、残酷、直接而主动淡化、规避或说教。
 
@@ -132,11 +133,40 @@ attributions 只能从输入提供的 core_anchor_ids / belief_keys / goal_keys 
         "version": "v1",
         "system_prompt": """你是"周期漂移审计 Agent"。每 30 个定稿章节执行一次量化审计。
 
-你必须计算并解释：state_card_accuracy、retrieval_recall_at_8、retrieval_precision_at_8、required_fact_injection_rate、outline_adherence、character_voice_consistency、narrative_tone_anchor_score。
+你必须完整计算并解释：state_card_accuracy、retrieval_recall_at_8、retrieval_precision_at_8、required_fact_injection_rate、outline_adherence、character_voice_consistency、narrative_tone_anchor_score。七项均使用 0 到 1 的小数，不得缺项或用百分数。
 
 规则：指标必须使用系统提供的审计样本和证据。角色死亡、身份、核心关系、能力上限、关键物品、时间线、required dependency 等重大错误直接红线。成人或暴力表达强度不参与扣分。不得自动修改 L4、大纲或正文。输出只能是 JSON。""",
         "input_variables": ["chapter_range", "audit_samples", "l4_state", "story_events", "outline_nodes", "voice_cards", "tone_anchors", "drift_samples"],
         "output_schema": {"type": "object", "properties": {"status": {"type": "string"}, "metrics": {"type": "object"}, "redline_findings": {"type": "array"}}},
+    },
+    "memory_compiler": {
+        "version": "v1",
+        "system_prompt": """你是“长篇小说分层记忆摘要 Agent”。你只压缩输入中的已定稿事实账本和较低层摘要，不写正文，不增添事实，不改变角色状态。
+
+规则：
+1. 严格区分已发生事实、角色认知、未决问题和下一阶段约束。
+2. 保留人物选择、因果链、不可逆代价、关系变化、承诺与知识边界。
+3. 不把大纲中的未来计划写成已经发生；证据不足时放入 open_questions。
+4. 删除逐场复述和修辞，只保留后续规划确实需要的状态。
+5. 输出只能是符合 Schema 的 JSON，不得输出 Markdown、正文或解释。""",
+        "input_variables": ["user_content"],
+        "output_schema": {
+            "type": "object",
+            "properties": {
+                "summary_type": {"type": "string"},
+                "stage_goal": {"type": "string"},
+                "conflict_changes": {"type": "array", "items": {"type": "string"}},
+                "character_arcs": {"type": "array", "items": {"type": "string"}},
+                "state_changes": {"type": "array", "items": {"type": "string"}},
+                "open_questions": {"type": "array", "items": {"type": "string"}},
+                "next_constraints": {"type": "array", "items": {"type": "string"}}
+            },
+            "required": [
+                "summary_type", "stage_goal", "conflict_changes", "character_arcs",
+                "state_changes", "open_questions", "next_constraints"
+            ],
+            "additionalProperties": False
+        },
     },
     "query_planner": {
         "version": "v2",
@@ -205,6 +235,7 @@ _DEFAULT_MODELS = {
     "query_planner": "deepseek-v4-flash",
     "evidence_ranker": "deepseek-v4-flash",
     "style_analyzer": "deepseek-v4-flash",
+    "memory_compiler": "deepseek-v4-flash",
 }
 
 _ENV_MAP = {
@@ -219,6 +250,7 @@ _ENV_MAP = {
     "query_planner": "QUERY_MODEL",
     "evidence_ranker": "RANKER_MODEL",
     "style_analyzer": "QUERY_MODEL",
+    "memory_compiler": "QUERY_MODEL",
 }
 
 AGENT_MODELS = {
@@ -239,6 +271,7 @@ AGENT_TEMPERATURES = {
     "query_planner": 0.1,
     "evidence_ranker": 0.0,
     "style_analyzer": 0.1,
+    "memory_compiler": 0.0,
 }
 
 # Whether agent outputs JSON or prose
@@ -254,6 +287,7 @@ AGENT_IS_JSON = {
     "query_planner": True,
     "evidence_ranker": True,
     "style_analyzer": True,
+    "memory_compiler": True,
 }
 
 

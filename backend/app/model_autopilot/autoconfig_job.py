@@ -44,13 +44,7 @@ REQUIRED_ROLES = sorted(
     role for role, spec in ROLE_REGISTRY.items() if spec.production and spec.model_required
 )
 
-ROLE_DISPLAY = {
-    "chapter_planner": "ChapterPlanner",
-    "draft_writer": "DraftWriter",
-    "review_agent": "ReviewAgent",
-    "state_extractor": "StateExtractor",
-    "style_analyzer": "StyleAnalyzer",
-}
+ROLE_DISPLAY = {role: ROLE_REGISTRY[role].display_name for role in REQUIRED_ROLES}
 
 VALID_MINUTES = 30
 POLICY = default_policy_for(

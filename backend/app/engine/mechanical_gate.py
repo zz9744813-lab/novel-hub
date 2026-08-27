@@ -88,6 +88,7 @@ def run_mechanical_consistency(
     post_state_candidates: list[Any] | None = None,
     core_anchors: list[dict] | None = None,
     min_chars: int = 200,
+    max_chars: int | None = None,
 ) -> ConsistencyResult:
     findings: list[dict] = []
     content = chapter_content or ""
@@ -102,6 +103,15 @@ def run_mechanical_consistency(
                 "code": "content_too_short",
                 "severity": "blocker",
                 "message": f"chapter content length {len(content.strip())} < {min_chars}",
+            }
+        )
+
+    if max_chars is not None and len(content.strip()) > max_chars:
+        findings.append(
+            {
+                "code": "content_too_long",
+                "severity": "major",
+                "message": f"chapter content length {len(content.strip())} > {max_chars}",
             }
         )
 

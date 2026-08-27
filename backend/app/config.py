@@ -1,6 +1,6 @@
 """Application configuration - all via env vars, no hardcoded secrets."""
-import os
 from pydantic_settings import BaseSettings
+from sqlalchemy.engine import URL
 
 
 class Settings(BaseSettings):
@@ -11,13 +11,19 @@ class Settings(BaseSettings):
     postgres_db: str = "novelforge"
     postgres_user: str = "novelforge"
     postgres_password: str = "novelforge"
+    postgres_host: str = "postgres"
+    postgres_port: int = 5432
 
     @property
     def database_url(self) -> str:
-        return (
-            f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}"
-            f"@postgres:5432/{self.postgres_db}"
-        )
+        return URL.create(
+            drivername="postgresql+asyncpg",
+            username=self.postgres_user,
+            password=self.postgres_password,
+            host=self.postgres_host,
+            port=self.postgres_port,
+            database=self.postgres_db,
+        ).render_as_string(hide_password=False)
 
     redis_url: str = "redis://redis:6379/0"
 

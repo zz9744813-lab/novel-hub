@@ -51,6 +51,16 @@ def classify_catalog_model(catalog: ModelCatalog) -> None:
         elif "text" in out:
             kind = "multimodal_text_generation" if inp else "text_generation"
 
+    # A prior successful configured text handshake is durable evidence when a
+    # later /models sync still provides no modality metadata.  Decisive new
+    # provider output metadata above is allowed to replace it.
+    if (
+        kind is None
+        and catalog.classification_source == "configured_text_handshake"
+        and catalog.text_generation_eligible
+    ):
+        return
+
     if kind is None:
         # 3/6: name heuristic — exclusions only
         if any(h in name for h in NON_TEXT_HINTS):
@@ -80,3 +90,30 @@ def classify_catalog_model(catalog: ModelCatalog) -> None:
 def eligible_text_candidates(catalogs: list[ModelCatalog]) -> list[ModelCatalog]:
     """Text-eligible only; everything else is excluded from LLM evaluation."""
     return [c for c in catalogs if c.text_generation_eligible]
+
+
+def promote_configured_text_model(catalog: ModelCatalog) -> None:
+    """Promote an explicitly configured model after a successful text ping.
+
+    Many OpenAI-compatible ``/models`` responses expose only an id and owner,
+    so metadata classification correctly leaves them unknown.  A successful
+    L1 request with non-empty text is stronger runtime evidence than a name
+    heuristic.  This promotion is intentionally available only to models that
+    an operator already selected in ``AgentModelBinding``; arbitrary unknown
+    catalog entries remain excluded.
+    """
+
+    inputs = list(catalog.input_modalities or [])
+    outputs = list(catalog.output_modalities or [])
+    if "text" not in outputs:
+        outputs.append("text")
+    catalog.model_kind = (
+        "multimodal_text_generation" if any(item != "text" for item in inputs)
+        else "text_generation"
+    )
+    catalog.output_modalities = outputs
+    catalog.text_generation_eligible = True
+    catalog.classification_source = "configured_text_handshake"
+    catalog.classification_confidence = 1.0
+    catalog.evaluation_exclusion_reason = None
+    catalog.auto_route_enabled = True

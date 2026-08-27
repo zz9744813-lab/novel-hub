@@ -24,7 +24,7 @@ from app.model_eval.suite_definitions import (
 
 
 ABILITY_EVALUATOR_REVISION = "v98-ability-3"
-CONTEXT_EVALUATOR_REVISION = "v98-context-3"
+CONTEXT_EVALUATOR_REVISION = "v98-context-4"
 _DIRECT_CONTEXT_REQUIRED_ROLES = {
     "chapter_planner",
     "draft_writer",
@@ -959,7 +959,10 @@ def pick_ladder(declared: int | None) -> list[int]:
     """Choose an ascending, bounded ladder with representative low/mid/top rungs."""
 
     if not declared or declared <= 0:
-        return [8_000, 16_000, 32_000]
+        # Unknown provider metadata must not silently cap evidence at 32K: the
+        # production draft route requires roughly 106K.  Measure up to 128K
+        # once, then reuse the content-addressed result on subsequent runs.
+        return [8_000, 32_000, 64_000, 128_000]
     eligible = [rung for rung in RUNG_TOKEN_ESTIMATE if rung <= declared]
     if declared not in eligible and declared >= 4_000:
         eligible.append(int(declared))

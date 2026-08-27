@@ -45,6 +45,7 @@ from app.model_eval.evidence import (
     describe_context_evidence,
     model_identity_hash,
     normalize_endpoint,
+    pick_ladder,
     run_context_ladder_core,
     run_qualification_core,
     suite_aggregate_hash,
@@ -66,6 +67,7 @@ from app.model_eval.suite_definitions import (
     qualification_role_for,
 )
 from app.models import (
+    AgentModelBinding,
     ModelCapabilityProfile,
     ModelCatalog,
     ModelContextProfile,
@@ -74,6 +76,7 @@ from app.models import (
     ModelEvalRun,
     ModelEvalSuite,
     ModelHealthSnapshot,
+    ModelHealthProbe,
     ModelRoleScore,
 )
 
@@ -91,6 +94,9 @@ class _Rows:
 
     def all(self):
         return list(self._rows)
+
+    def __iter__(self):
+        return iter(self._rows)
 
     def first(self):
         return self._rows[0] if self._rows else None
@@ -162,7 +168,8 @@ class FakeAsyncSession:
         m.__tablename__: m for m in (
             ModelCatalog, ModelCapabilityProfile, ModelContextProfile,
             ModelEvalCase, ModelEvalCaseResult, ModelEvalRun, ModelEvalSuite,
-            ModelHealthSnapshot, ModelRoleScore,
+            AgentModelBinding, ModelHealthProbe, ModelHealthSnapshot,
+            ModelRoleScore,
         )
     }
 
@@ -801,6 +808,123 @@ async def test_non_text_model_excluded_everywhere():
         catalog={"text_generation_eligible": False},
         requires_context=False, has_valid_ability_key=False, has_valid_context_key=False)
     assert ok is False and code == "NON_TEXT_MODEL"
+
+
+def test_configured_text_handshake_is_durable_but_provider_metadata_wins():
+    from app.model_autopilot.classification import (
+        classify_catalog_model,
+        promote_configured_text_model,
+    )
+
+    catalog = make_catalog(kind="unknown", eligible=False)
+    catalog.auto_route_enabled = False
+    catalog.classification_source = "unknown"
+    catalog.metadata_json = {}
+
+    promote_configured_text_model(catalog)
+    assert catalog.model_kind == "text_generation"
+    assert catalog.text_generation_eligible is True
+    assert catalog.auto_route_enabled is True
+    assert catalog.classification_source == "configured_text_handshake"
+
+    classify_catalog_model(catalog)
+    assert catalog.text_generation_eligible is True
+    assert catalog.classification_source == "configured_text_handshake"
+
+    catalog.metadata_json = {"output_modalities": ["image"]}
+    classify_catalog_model(catalog)
+    assert catalog.model_kind == "image_generation"
+    assert catalog.text_generation_eligible is False
+
+
+def test_provider_context_metadata_and_unknown_ladder_reach_production_size():
+    from app.model_autopilot.catalog import provider_declared_context_window
+
+    assert provider_declared_context_window({"context_length": "131072"}) == 131072
+    assert provider_declared_context_window(
+        {"capabilities": {"max_input_tokens": 200000}}
+    ) == 200000
+    assert provider_declared_context_window({"context_window": True}) is None
+    assert provider_declared_context_window({"context_window": 99_000_000}) is None
+    assert pick_ladder(None) == [8_000, 32_000, 64_000, 128_000]
+
+
+def test_health_probe_budget_handles_reasoning_models_without_becoming_benchmark(
+    monkeypatch,
+):
+    from app.model_autopilot.probe import _health_probe_max_tokens
+
+    monkeypatch.delenv("MODEL_HEALTH_MAX_TOKENS", raising=False)
+    assert _health_probe_max_tokens() == 128
+    monkeypatch.setenv("MODEL_HEALTH_MAX_TOKENS", "invalid")
+    assert _health_probe_max_tokens() == 128
+    monkeypatch.setenv("MODEL_HEALTH_MAX_TOKENS", "9999")
+    assert _health_probe_max_tokens() == 512
+
+
+@pytest.mark.asyncio
+async def test_prewrite_handshake_promotes_only_configured_unknown_text_model():
+    from unittest.mock import AsyncMock, patch
+
+    from app.model_autopilot.preflight import bootstrap_catalog_and_probes
+
+    db = FakeAsyncSession()
+    catalog = make_catalog(model_id="configured-text", kind="unknown", eligible=False)
+    catalog.auto_route_enabled = False
+    catalog.classification_source = "unknown"
+    db._table(ModelCatalog).append(catalog)
+    db._table(AgentModelBinding).append(
+        AgentModelBinding(
+            id=uuid.uuid4(),
+            scope_type="global",
+            scope_id=None,
+            agent_role="draft_writer",
+            provider="primary",
+            primary_model="configured-text",
+            fallback_model=None,
+            reasoning_mode="auto",
+            version=1,
+            updated_by="test",
+        )
+    )
+    now = datetime.now(timezone.utc)
+    ping = ModelHealthProbe(
+        id=uuid.uuid4(),
+        model_catalog_id=catalog.id,
+        probe_type="l1_ping",
+        status="ok",
+        started_at=now,
+        completed_at=now,
+        latency_ms=10,
+        output_valid=True,
+    )
+
+    class SessionContext:
+        async def __aenter__(self):
+            return db
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    with patch(
+        "app.database.async_session_factory", return_value=SessionContext()
+    ), patch(
+        "app.model_autopilot.preflight._provider_sync_list",
+        AsyncMock(return_value=[]),
+    ), patch(
+        "app.model_autopilot.preflight.probe_model_ping",
+        AsyncMock(return_value=ping),
+    ):
+        report = await bootstrap_catalog_and_probes()
+
+    assert report["configured_models"] == 1
+    assert report["promoted_text"] == 1
+    assert report["probed"] == 1
+    assert report["errors"] == []
+    assert catalog.text_generation_eligible is True
+    assert catalog.auto_route_enabled is True
+    snapshot = db._table(ModelHealthSnapshot)[0]
+    assert snapshot.health_status == "healthy"
 
 
 @pytest.mark.asyncio

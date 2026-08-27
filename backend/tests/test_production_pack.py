@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import uuid
 
 import pytest
 from pydantic import ValidationError
@@ -17,7 +18,14 @@ from app.engine.chapter_target import (
 )
 from app.engine.memory_compiler import volume_stage_window
 from app.agents.drift_audit import classify_drift_status, stratified_chapter_numbers
-from app.models import MemoryL4StateSnapshot, OutlineNode, StyleToneAnchor, StyleVoiceCard
+from app.models import (
+    MemoryL4StateSnapshot,
+    ModelCatalog,
+    ModelHealthSnapshot,
+    OutlineNode,
+    StyleToneAnchor,
+    StyleVoiceCard,
+)
 from app.production_pack import (
     ProductionPackValidationError,
     load_and_validate_pack,
@@ -42,6 +50,9 @@ PACK_MANIFEST = PACK_ROOT / "pack.json"
 PRODUCTION_PACK_SCRIPT = (
     Path(__file__).resolve().parents[1] / "scripts" / "production_pack.py"
 )
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+RELEASE_SCRIPT = REPOSITORY_ROOT / "deploy" / "ops" / "novelforge-release"
+FORCED_COMMAND_SCRIPT = REPOSITORY_ROOT / "deploy" / "ops" / "novelforge-ops"
 
 
 def _pack():
@@ -132,6 +143,123 @@ def test_cli_reference_file_must_match_a_declared_raw_sha256(tmp_path: Path):
     reference.write_text(content + "已变更", encoding="utf-8")
     with pytest.raises(ValueError, match="SHA-256 is not declared"):
         cli._verified_reference_texts(pack, [str(reference)])
+
+
+def test_restricted_release_runs_model_evidence_before_switching():
+    release = RELEASE_SCRIPT.read_text(encoding="utf-8")
+    forced = FORCED_COMMAND_SCRIPT.read_text(encoding="utf-8")
+
+    qualification = "production_pack.py qualify"
+    assert qualification in release
+    assert release.index(qualification) < release.index('switch_to "$release"')
+    assert "validate|qualify|install|start" in release
+    assert "validate|qualify|install|start" in forced
+
+
+@pytest.mark.asyncio
+async def test_production_qualification_reuses_current_evidence_without_calls():
+    from unittest.mock import AsyncMock, patch
+
+    from app.production_pack.model_evidence import ensure_configured_model_evidence
+
+    catalog = ModelCatalog(
+        id=uuid.uuid4(),
+        provider="primary",
+        model_id="configured-writer",
+        enabled=True,
+        auto_route_enabled=True,
+        availability_status="available",
+        model_kind="text_generation",
+        text_generation_eligible=True,
+        metadata_json={},
+    )
+    snapshot = ModelHealthSnapshot(
+        id=uuid.uuid4(),
+        model_catalog_id=catalog.id,
+        health_status="healthy",
+    )
+
+    class Rows:
+        def __init__(self, value):
+            self.value = value
+
+        def scalar_one_or_none(self):
+            return self.value
+
+    class Session:
+        def __init__(self):
+            self.added = []
+
+        async def execute(self, statement):
+            table = statement._raw_columns[0].name
+            return Rows(catalog if table == "model_catalog" else snapshot)
+
+        def add(self, value):
+            self.added.append(value)
+
+        async def commit(self):
+            return None
+
+        async def refresh(self, value):
+            return None
+
+    session = Session()
+
+    class SessionContext:
+        async def __aenter__(self):
+            return session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    cached = {
+        "status": "succeeded",
+        "execution_complete": True,
+        "reused": True,
+        "gateway_calls": 0,
+    }
+    evidence_state = {
+        "ability": {"state": "valid"},
+        "context": {"state": "valid"},
+        "role_evidence": {
+            "draft_writer": {"state": "valid", "passed": True},
+        },
+        "context_profile": {"effective": 128_000},
+    }
+
+    with patch(
+        "app.database.async_session_factory", return_value=SessionContext()
+    ), patch(
+        "app.main.ensure_required_bindings", AsyncMock()
+    ), patch(
+        "app.production_pack.model_evidence.bootstrap_catalog_and_probes",
+        AsyncMock(return_value={"probed": 0, "skipped_fresh": 1, "errors": []}),
+    ), patch(
+        "app.production_pack.model_evidence._effective_targets",
+        AsyncMock(
+            return_value=({("primary", "configured-writer"): {"draft_writer"}}, [])
+        ),
+    ), patch(
+        "app.model_eval.engine.run_qualification",
+        AsyncMock(return_value=cached),
+    ) as ability, patch(
+        "app.model_eval.engine.run_context_ladder",
+        AsyncMock(return_value=cached),
+    ) as context, patch(
+        "app.model_eval.engine.get_catalog_evidence_state",
+        AsyncMock(return_value=evidence_state),
+    ):
+        report = await ensure_configured_model_evidence(_pack())
+
+    assert report["passed"] is True
+    assert report["counts"] == {
+        "configured_models": 1,
+        "evaluated_models": 1,
+        "gateway_calls": 0,
+        "reused_models": 1,
+    }
+    ability.assert_awaited_once()
+    context.assert_awaited_once()
 
 
 def test_every_key_event_is_present_at_its_declared_chapter():

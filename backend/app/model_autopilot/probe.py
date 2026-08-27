@@ -22,6 +22,14 @@ logger = logging.getLogger("novelforge.model_autopilot.probe")
 MAX_CONCURRENCY = int(os.environ.get("MODEL_PROBE_CONCURRENCY", "1"))
 
 
+def _health_probe_max_tokens() -> int:
+    try:
+        configured = int(os.environ.get("MODEL_HEALTH_MAX_TOKENS", "128"))
+    except ValueError:
+        configured = 128
+    return max(8, min(512, configured))
+
+
 def _provider_config(provider: str):
     from app.gateway.model_gateway import _get_provider_config
 
@@ -57,7 +65,6 @@ async def probe_provider(db: AsyncSession, *, provider: str) -> ModelHealthProbe
 
 async def probe_model_ping(db: AsyncSession, catalog: ModelCatalog) -> ModelHealthProbe:
     """L1: tiny streaming ping (spec §20)."""
-    config = _provider_config(catalog.provider)
     started = datetime.now(timezone.utc)
     probe = ModelHealthProbe(
         id=uuid.uuid4(),
@@ -72,7 +79,11 @@ async def probe_model_ping(db: AsyncSession, catalog: ModelCatalog) -> ModelHeal
             user_content="ping",
             model=catalog.model_id,
             temperature=0,
-            max_tokens=8,
+            # Reasoning-capable OpenAI-compatible models may spend a tiny
+            # output budget before emitting final text.  The prompt still asks
+            # for only "OK", so this cap improves validity without turning an
+            # L1 connectivity probe into a benchmark.
+            max_tokens=_health_probe_max_tokens(),
             provider_role="primary",
             provider=catalog.provider,
         )
@@ -96,7 +107,6 @@ PERFORMANCE_PROMPT = (
 
 async def probe_model_performance(db: AsyncSession, catalog: ModelCatalog) -> ModelHealthProbe:
     """Real throughput probe: TTFT, latency, tokens/sec (spec §43, §47)."""
-    config = _provider_config(catalog.provider)
     started = datetime.now(timezone.utc)
     probe = ModelHealthProbe(
         id=uuid.uuid4(),

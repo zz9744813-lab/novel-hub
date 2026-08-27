@@ -92,8 +92,31 @@ async def bootstrap_catalog_and_probes() -> dict:
     """
     from app.database import async_session_factory
 
-    report = {"providers": 0, "probed": 0, "skipped_fresh": 0, "errors": []}
-    for provider, base_url, api_key in await _provider_sync_list_for_network():
+    report = {
+        "providers": 0,
+        "probed": 0,
+        "skipped_fresh": 0,
+        "promoted_text": 0,
+        "configured_models": 0,
+        "errors": [],
+    }
+    # Include logical providers from persisted bindings.  Production bindings
+    # commonly use ``new-api`` while PRIMARY_* is the credential source; env-
+    # only discovery would otherwise create a duplicate ``primary`` catalog
+    # and leave the approved binding without a catalog row.
+    async with async_session_factory() as db:
+        providers = await _provider_sync_list(db)
+
+    for provider, base_url, api_key in providers:
+        if not base_url or not api_key:
+            report["errors"].append(
+                {
+                    "provider": provider,
+                    "phase": "catalog_sync",
+                    "error": "provider_credentials_missing",
+                }
+            )
+            continue
         try:
             async with async_session_factory() as db:
                 await sync_catalog_from_provider(
@@ -105,26 +128,70 @@ async def bootstrap_catalog_and_probes() -> dict:
             logger.warning("catalog sync skipped for %s: %s", provider, e)
             report["errors"].append({"provider": provider, "phase": "catalog_sync", "error": type(e).__name__})
 
-    # Probe only due text-generation candidates.  The session remains valid for
-    # this phase even when no provider was configured above.
+    # Probe every explicitly configured model first, even when /models omitted
+    # modality metadata.  A successful non-empty text ping is the runtime
+    # handshake that may promote only that approved model.  Unknown unrelated
+    # catalog entries remain excluded from all text evaluation.
     ttl_seconds = int(os.environ.get("MODEL_PREWRITE_HEALTH_TTL_SECONDS", "300"))
     probe_limit = int(os.environ.get("MODEL_PREFLIGHT_PROBE_LIMIT", "12"))
     fresh_after = datetime.now(timezone.utc) - timedelta(seconds=ttl_seconds)
     async with async_session_factory() as db:
+        bindings = list(
+            (await db.execute(select(AgentModelBinding))).scalars().all()
+        )
+        configured_keys = {
+            (binding.provider, model)
+            for binding in bindings
+            if binding.agent_role in PREFLIGHT_ROLES
+            for model in (binding.primary_model, binding.fallback_model)
+            if model
+        }
+        report["configured_models"] = len(configured_keys)
         catalogs = list(
             (
                 await db.execute(
                     select(ModelCatalog).where(
                         ModelCatalog.enabled.is_(True),
                         ModelCatalog.availability_status == "available",
-                        ModelCatalog.text_generation_eligible.is_(True),
                     )
                 )
             ).scalars().all()
         )
-        candidates = [catalog for catalog in catalogs if catalog.auto_route_enabled]
-        candidates.sort(key=lambda catalog: (catalog.provider, catalog.model_id))
-        for catalog in candidates[:probe_limit]:
+        by_key = {(catalog.provider, catalog.model_id): catalog for catalog in catalogs}
+        configured_catalogs = [
+            by_key[key] for key in sorted(configured_keys) if key in by_key
+        ]
+        for provider, model in sorted(configured_keys - set(by_key)):
+            report["errors"].append(
+                {
+                    "provider": provider,
+                    "model": model,
+                    "phase": "configured_catalog",
+                    "error": "configured_model_not_discovered",
+                }
+            )
+
+        configured_ids = {catalog.id for catalog in configured_catalogs}
+        other_candidates = sorted(
+            (
+                catalog
+                for catalog in catalogs
+                if catalog.id not in configured_ids
+                and catalog.text_generation_eligible
+                and catalog.auto_route_enabled
+            ),
+            key=lambda catalog: (catalog.provider, catalog.model_id),
+        )
+        remaining = max(0, probe_limit - len(configured_catalogs))
+        candidates = [
+            *((catalog, True) for catalog in configured_catalogs),
+            *((catalog, False) for catalog in other_candidates[:remaining]),
+        ]
+
+        from app.model_autopilot.catalog import ensure_capability_for_catalog
+        from app.model_autopilot.classification import promote_configured_text_model
+
+        for catalog, configured in candidates:
             snapshot = (
                 await db.execute(
                     select(ModelHealthSnapshot).where(
@@ -135,16 +202,39 @@ async def bootstrap_catalog_and_probes() -> dict:
             last_probe = snapshot.last_probe_at if snapshot else None
             if last_probe is not None and last_probe.tzinfo is None:
                 last_probe = last_probe.replace(tzinfo=timezone.utc)
-            if last_probe is not None and last_probe >= fresh_after:
+            needs_handshake = configured and (
+                not catalog.text_generation_eligible or not catalog.auto_route_enabled
+            )
+            if (
+                not needs_handshake
+                and last_probe is not None
+                and last_probe >= fresh_after
+            ):
                 report["skipped_fresh"] += 1
                 continue
             try:
                 probe = await probe_model_ping(db, catalog)
                 db.add(probe)
+                if configured and probe.status == "ok" and probe.output_valid:
+                    if not catalog.text_generation_eligible:
+                        promote_configured_text_model(catalog)
+                        report["promoted_text"] += 1
+                    else:
+                        catalog.auto_route_enabled = True
+                    await ensure_capability_for_catalog(db, catalog)
                 await db.flush()
                 await upsert_health_snapshot(db, catalog.id)
                 await db.commit()
                 report["probed"] += 1
+                if configured and (probe.status != "ok" or not probe.output_valid):
+                    report["errors"].append(
+                        {
+                            "provider": catalog.provider,
+                            "model": catalog.model_id,
+                            "phase": "configured_text_handshake",
+                            "error": probe.error_code or "empty_text_output",
+                        }
+                    )
             except Exception as e:  # noqa: BLE001
                 await db.rollback()
                 logger.warning("prewrite probe failed %s/%s: %s", catalog.provider, catalog.model_id, e)
@@ -157,11 +247,6 @@ async def bootstrap_catalog_and_probes() -> dict:
                     }
                 )
     return report
-
-
-async def _provider_sync_list_for_network() -> list[tuple[str, str, str]]:
-    """Env-based provider list without a DB round-trip (used pre-catalog)."""
-    return _providers_from_env()
 
 
 async def run_model_preflight(

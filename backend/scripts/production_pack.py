@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate or install a versioned NovelForge production pack."""
+"""Validate, qualify models for, or operate a NovelForge production pack."""
 from __future__ import annotations
 
 import argparse
@@ -88,6 +88,18 @@ async def _install(path: str, references: list[str]) -> dict:
         result = await install_production_pack(db, pack)
         await db.commit()
     return {"validation": report.model_dump(mode="json"), "installation": result}
+
+
+async def _qualify(path: str, references: list[str]) -> dict:
+    from app.production_pack.model_evidence import ensure_configured_model_evidence
+
+    pack, report, _ = _load_with_verified_references(path, references)
+    evidence = await ensure_configured_model_evidence(pack)
+    return {
+        "validation": report.model_dump(mode="json"),
+        "model_evidence": evidence,
+        "passed": bool(report.passed and evidence.get("passed")),
+    }
 
 
 async def _start(path: str, references: list[str]) -> dict:
@@ -262,7 +274,14 @@ def main() -> int:
     parser.add_argument(
         "command",
         choices=(
-            "validate", "install", "start", "status", "audit", "export", "scan-output"
+            "validate",
+            "qualify",
+            "install",
+            "start",
+            "status",
+            "audit",
+            "export",
+            "scan-output",
         ),
     )
     parser.add_argument("--pack", default=str(DEFAULT_PACK))
@@ -295,6 +314,8 @@ def main() -> int:
         if args.command == "validate":
             _, report, _ = _load_with_verified_references(args.pack, args.reference)
             payload = report.model_dump(mode="json")
+        elif args.command == "qualify":
+            payload = asyncio.run(_qualify(args.pack, args.reference))
         elif args.command == "install":
             payload = asyncio.run(_install(args.pack, args.reference))
         elif args.command == "start":
@@ -334,6 +355,8 @@ def main() -> int:
         if not acceptable:
             return 1
     if args.command == "scan-output" and not payload.get("passed"):
+        return 1
+    if args.command == "qualify" and not payload.get("passed"):
         return 1
     return 0
 

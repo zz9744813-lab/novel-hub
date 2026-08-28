@@ -363,6 +363,26 @@ async def evaluate_session(db: AsyncSession, session: WritingSession) -> Session
         await _record_event(db, session.id, "cancelled", {}, dedupe_key="cancel_applied")
         return SessionDecision("cancel", "session cancelled")
 
+    # A failed model preflight is a hard gate.  It must hold even if an older
+    # control path accidentally changed the session itself back to ``running``.
+    # Only the explicit resume path may reset this marker and schedule a fresh
+    # preflight job.
+    if session.model_preflight_status == "blocked":
+        detail = session.model_preflight_detail or session.stop_detail or {}
+        session.status = "blocked"
+        session.stop_reason = "model_preflight_failed"
+        session.stop_detail = {
+            "blockers": detail.get("blockers", []) if isinstance(detail, dict) else []
+        }
+        await _record_event(
+            db,
+            session.id,
+            "model_preflight_blocked",
+            session.stop_detail,
+            dedupe_key=f"model_preflight_blocked:{session.id}",
+        )
+        return SessionDecision("block", "model preflight failed", session.stop_detail)
+
     # ── v9.6 preflight marker (spec §12): controller never runs network IO.
     # The session_preflight_job owns detection; it flips the status and
     # pokes the advance outbox when done. ──
@@ -405,6 +425,30 @@ async def evaluate_session(db: AsyncSession, session: WritingSession) -> Session
         ).scalar_one_or_none()
         if run is not None and run.status in ACTIVE_RUN_STATUSES:
             return SessionDecision("wait_current", f"current run {run.status}")
+        if (
+            run is not None
+            and run.status == "failed"
+            and run.error_code != "orphaned_chapter_run"
+        ):
+            await _handle_terminal_run(db, session, run, now)
+            session.status = "blocked"
+            session.stop_reason = "chapter_pipeline_failed"
+            session.stop_detail = {
+                "chapter_no": run.chapter_no,
+                "run_id": str(run.id),
+                "error_code": run.error_code,
+                "error_detail": run.error_detail or {},
+            }
+            await _record_event(
+                db,
+                session.id,
+                "chapter_pipeline_blocked",
+                session.stop_detail,
+                dedupe_key=f"chapter_pipeline_blocked:{run.id}",
+            )
+            return SessionDecision(
+                "block", "chapter pipeline failed", session.stop_detail
+            )
         if run is not None:
             await _handle_terminal_run(db, session, run, now)
         else:

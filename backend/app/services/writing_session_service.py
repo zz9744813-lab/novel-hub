@@ -234,11 +234,38 @@ async def control_writing_session(
                 409,
                 detail={"code": "SESSION_NOT_PAUSED", "message": "当前会话状态无需恢复"},
             )
-        session.status = "running"
+        retry_model_preflight = session.status == "blocked" and (
+            session.stop_reason == "model_preflight_failed"
+            or session.model_preflight_status == "blocked"
+        )
+        session.status = "created" if retry_model_preflight else "running"
         session.control_requested = "none"
         session.resumed_at = datetime.now(timezone.utc)
-        await _record_event(db, session.id, "session_resumed", {}, dedupe_key="session_resumed")
-        _touch_advance(db, session.id, dedupe_hint=f"session-resume:{session.id}")
+        if retry_model_preflight:
+            # A blocked preflight is a gate, not a pause.  Resume must rerun it
+            # before any chapter can start; stale route plans/details must not
+            # be mistaken for a new pass.
+            session.model_preflight_status = "running"
+            session.model_preflight_detail = None
+            session.model_route_plan_id = None
+            session.stop_reason = None
+            session.stop_detail = None
+        resume_token = uuid.uuid4().hex[:12]
+        await _record_event(
+            db,
+            session.id,
+            "session_resumed",
+            {"model_preflight_retry": retry_model_preflight},
+            dedupe_key=f"session_resumed:{resume_token}",
+        )
+        # A session can be paused/resumed more than once.  Each control action
+        # needs a fresh durable poke; a session-wide dedupe key drops later
+        # resumes and leaves the session inert.
+        _touch_advance(
+            db,
+            session.id,
+            dedupe_hint=f"session-resume:{session.id}:{resume_token}",
+        )
         return session
 
     raise HTTPException(422, detail={"code": "UNKNOWN_ACTION", "message": f"未知操作 {action}"})

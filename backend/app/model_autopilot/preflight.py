@@ -21,6 +21,7 @@ from app.model_autopilot.health import upsert_health_snapshot
 from app.model_autopilot.probe import probe_model_ping
 from app.model_autopilot.router import build_role_route, policy_from_db
 from app.model_autopilot.scoring import compute_role_score
+from app.v74_utils import ModelBindingService
 from app.models import (
     AgentModelBinding,
     ModelCatalog,
@@ -265,7 +266,7 @@ async def run_model_preflight(
 
     await ensure_v98_suites(db)
     await db.flush()
-    policy = await policy_from_db(db, binding.routing_policy_id if binding else None)
+    default_policy = await policy_from_db(db, binding.routing_policy_id if binding else None)
 
     catalog_rows = list(
         (
@@ -288,9 +289,45 @@ async def run_model_preflight(
         for role in PREFLIGHT_ROLES:
             await compute_role_score(db, catalog, role)
 
+    binding_service = ModelBindingService(db)
+    catalog_id_by_target = {
+        (catalog.provider, catalog.model_id): str(catalog.id) for catalog in catalog_rows
+    }
+    policy_cache = {
+        getattr(binding, "routing_policy_id", None): default_policy,
+    }
+
     roles_result = {}
     blockers = []
     for role in PREFLIGHT_ROLES:
+        # Binding constraints are role-scoped.  Applying the draft-writer
+        # allowlist/manual lock to every role can silently remove the model
+        # explicitly selected for planner/reviewer/etc. and deadlock startup.
+        role_binding = await binding_service.get_binding(role, getattr(session, "book_id", None))
+        if role_binding is None and binding is not None and getattr(binding, "agent_role", None) == role:
+            role_binding = binding
+
+        policy_id = getattr(role_binding, "routing_policy_id", None)
+        if policy_id not in policy_cache:
+            policy_cache[policy_id] = await policy_from_db(db, policy_id)
+        role_policy = policy_cache[policy_id]
+
+        allowed_ids = list(getattr(role_binding, "allowed_model_ids", None) or [])
+        blocked_ids = list(getattr(role_binding, "blocked_model_ids", None) or [])
+        if role_binding is not None and allowed_ids:
+            # Production release may replace the explicit primary while a
+            # historical candidate allowlist remains.  The chosen primary is
+            # part of its own role's candidate set unless explicitly blocked.
+            primary_catalog_id = catalog_id_by_target.get(
+                (role_binding.provider, role_binding.primary_model)
+            )
+            if (
+                primary_catalog_id
+                and primary_catalog_id not in allowed_ids
+                and primary_catalog_id not in blocked_ids
+            ):
+                allowed_ids.append(primary_catalog_id)
+
         expected = ROLE_REGISTRY[role].expected_context_tokens
         est_in, est_out = ROLE_CONTEXT_ESTIMATE.get(
             role,
@@ -301,11 +338,13 @@ async def run_model_preflight(
             db,
             agent_role=role,
             required_context=required_ctx,
-            policy=policy,
-            allowed_ids=(binding.allowed_model_ids if binding else None),
-            blocked_ids=(binding.blocked_model_ids if binding else None),
+            policy=role_policy,
+            allowed_ids=allowed_ids or None,
+            blocked_ids=blocked_ids or None,
             locked_primary=(
-                {"model": binding.primary_model, "provider": binding.provider} if binding and binding.manual_primary_locked else None
+                {"model": role_binding.primary_model, "provider": role_binding.provider}
+                if role_binding and role_binding.manual_primary_locked
+                else None
             ),
         )
         role_floor = DEFAULT_ROLE_QUALITY_FLOOR.get(role, 70)
@@ -338,7 +377,7 @@ async def run_model_preflight(
         policy_version=1,
         assignments_json=roles_result,
         health_snapshot_at=now,
-        reason_json={"mode": policy.get("mode", "hybrid")},
+        reason_json={"mode": default_policy.get("mode", "hybrid")},
         status="active",
     )
     db.add(plan)

@@ -29,6 +29,7 @@ from app.state_machine import ChapterState
 from app.models import Chapter, ChapterTask, ChapterRun
 from app.engine.pipeline import execute_pipeline
 from app.engine.outcomes import PipelineOutcome, PipelineResult
+from app.engine.state_transition import transition_chapter
 from app.engine.step_runner import acquire_run_lease, release_run_lease
 from app.workers.writing_session_jobs import advance_writing_session_job
 from app.model_autopilot.autoconfig_job import run_model_autoconfigure_job, run_model_detection_job
@@ -136,6 +137,89 @@ async def _insert_session_advance_outbox(db, session_id: uuid.UUID, run_id: uuid
         )
         .on_conflict_do_nothing(index_elements=["dedupe_key"])
     )
+
+
+async def _reset_chapter_for_retry(db, chapter: Chapter, run_id: uuid.UUID | None) -> bool:
+    """Put terminal retry states back at the pipeline's QUEUED entrypoint."""
+    if chapter.status not in {
+        ChapterState.FAILED.value,
+        ChapterState.RESOURCE_BLOCKED.value,
+    }:
+        return False
+    await transition_chapter(
+        chapter.id,
+        ChapterState.QUEUED,
+        expected_states={
+            ChapterState.FAILED.value,
+            ChapterState.RESOURCE_BLOCKED.value,
+        },
+        reason="worker retry reset",
+        actor="worker",
+        run_id=run_id,
+        db=db,
+    )
+    return True
+
+
+async def _record_pipeline_exception(
+    db,
+    *,
+    chapter_id: uuid.UUID,
+    chapter_no: int,
+    task_row_id: uuid.UUID | None,
+    chapter_run_id: uuid.UUID | None,
+    error: Exception,
+) -> None:
+    """Atomically terminalize an unhandled pipeline exception and wake its session."""
+    try:
+        await transition_chapter(
+            chapter_id,
+            ChapterState.FAILED,
+            reason="unhandled pipeline exception",
+            actor="worker",
+            run_id=chapter_run_id,
+            db=db,
+        )
+    except Exception as transition_err:  # noqa: BLE001
+        logger.warning(
+            "Could not transition chapter %s to failed: %s",
+            chapter_no,
+            transition_err,
+        )
+    if task_row_id:
+        await db.execute(
+            update(ChapterTask)
+            .where(ChapterTask.id == task_row_id)
+            .values(
+                status="failed",
+                last_error_code="pipeline_error",
+                last_error_detail=str(error)[:2000],
+                lease_owner=None,
+                lease_expires_at=None,
+            )
+        )
+    if chapter_run_id:
+        run_row = (
+            await db.execute(
+                select(ChapterRun)
+                .where(ChapterRun.id == chapter_run_id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if run_row is not None:
+            run_row.status = "failed"
+            run_row.error_code = "pipeline_error"
+            run_row.error_detail = {
+                "type": type(error).__name__,
+                "message": str(error)[:2000],
+            }
+            run_row.finished_at = datetime.now(timezone.utc)
+            run_row.lease_owner = None
+            run_row.lease_expires_at = None
+            if run_row.writing_session_id:
+                await _insert_session_advance_outbox(
+                    db, run_row.writing_session_id, run_row.id
+                )
 
 
 async def run_chapter_pipeline(ctx, chapter_id: str, book_id: str, chapter_no: int):
@@ -291,6 +375,11 @@ async def run_chapter_pipeline(ctx, chapter_id: str, book_id: str, chapter_no: i
                     await db.commit()
                     return
 
+                # Pipeline entry is QUEUED -> DEPENDENCY_CHECK.  A retry that
+                # starts directly from FAILED/RESOURCE_BLOCKED hits an illegal
+                # state transition before doing any work.
+                await _reset_chapter_for_retry(db, ch, chapter_run_id)
+
             task.status = "running"
             task.lease_owner = WORKER_ID
             task.lease_expires_at = now + timedelta(seconds=90)
@@ -397,7 +486,10 @@ async def run_chapter_pipeline(ctx, chapter_id: str, book_id: str, chapter_no: i
                     )
                     run_row.error_code = result.error_code
                     run_row.error_detail = result.detail or None
-                    if run_status == "succeeded" and run_row.writing_session_id:
+                    if (
+                        run_status in ("succeeded", "failed", "needs_human", "cancelled")
+                        and run_row.writing_session_id
+                    ):
                         await _insert_session_advance_outbox(
                             db, run_row.writing_session_id, run_row.id
                         )
@@ -432,23 +524,14 @@ async def run_chapter_pipeline(ctx, chapter_id: str, book_id: str, chapter_no: i
         logger.error(f"Pipeline failed for chapter {chapter_no}: {e}", exc_info=True)
         try:
             async with async_session_factory() as db:
-                await db.execute(
-                    update(Chapter)
-                    .where(Chapter.id == uuid.UUID(chapter_id))
-                    .values(status=ChapterState.FAILED.value)
+                await _record_pipeline_exception(
+                    db,
+                    chapter_id=uuid.UUID(chapter_id),
+                    chapter_no=chapter_no,
+                    task_row_id=task_row_id,
+                    chapter_run_id=chapter_run_id,
+                    error=e,
                 )
-                if task_row_id:
-                    await db.execute(
-                        update(ChapterTask)
-                        .where(ChapterTask.id == task_row_id)
-                        .values(
-                            status="failed",
-                            last_error_code="pipeline_error",
-                            last_error_detail=str(e)[:2000],
-                            lease_owner=None,
-                            lease_expires_at=None,
-                        )
-                    )
                 pass  # advisory no longer held across LLM (B-03)
                 await db.commit()
         except Exception as mark_err:

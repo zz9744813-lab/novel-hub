@@ -281,6 +281,9 @@ async def execute_pipeline(
         return _result(PipelineOutcome.PAUSED if e.control == "pause" else PipelineOutcome.PERMANENT_FAILURE, error_code=f"control_{e.control}")
     except LeaseLostError:
         return _result(PipelineOutcome.RETRYABLE_FAILURE, error_code="lease_lost")
+    except PermanentStepError as e:
+        await _set_chapter_status(chapter_id, ChapterState.FAILED.value, e.code, chapter_run_id)
+        return _result(PipelineOutcome.PERMANENT_FAILURE, error_code=e.code, detail=e.detail)
     except RetryableStepError as e:
         await _set_chapter_status(chapter_id, ChapterState.FAILED.value, e.code, chapter_run_id)
         return _result(PipelineOutcome.RETRYABLE_FAILURE, error_code=e.code, detail=e.detail)
@@ -444,6 +447,9 @@ async def execute_pipeline(
         return _result(PipelineOutcome.PAUSED if e.control == "pause" else PipelineOutcome.PERMANENT_FAILURE, error_code=f"control_{e.control}")
     except LeaseLostError:
         return _result(PipelineOutcome.RETRYABLE_FAILURE, error_code="lease_lost")
+    except PermanentStepError as e:
+        await _set_chapter_status(chapter_id, ChapterState.FAILED.value, e.code, chapter_run_id)
+        return _result(PipelineOutcome.PERMANENT_FAILURE, error_code=e.code, detail=e.detail)
     except RetryableStepError as e:
         await _set_chapter_status(chapter_id, ChapterState.FAILED.value, e.code, chapter_run_id)
         return _result(PipelineOutcome.RETRYABLE_FAILURE, error_code=e.code)
@@ -871,6 +877,9 @@ async def execute_pipeline(
         return _result(PipelineOutcome.PAUSED if e.control == "pause" else PipelineOutcome.PERMANENT_FAILURE, error_code=f"control_{e.control}")
     except LeaseLostError:
         return _result(PipelineOutcome.RETRYABLE_FAILURE, error_code="lease_lost")
+    except PermanentStepError as e:
+        await _set_chapter_status(chapter_id, ChapterState.FAILED.value, e.code, chapter_run_id)
+        return _result(PipelineOutcome.PERMANENT_FAILURE, error_code=e.code, detail=e.detail)
     except RetryableStepError as e:
         await _set_chapter_status(chapter_id, ChapterState.FAILED.value, e.code, chapter_run_id)
         return _result(PipelineOutcome.RETRYABLE_FAILURE, error_code=e.code)
@@ -1033,6 +1042,12 @@ async def execute_pipeline(
                     )
                 except LeaseLostError:
                     return _result(PipelineOutcome.RETRYABLE_FAILURE, error_code="lease_lost")
+                except PermanentStepError as e:
+                    await _set_chapter_status(chapter_id, ChapterState.FAILED.value, e.code, chapter_run_id)
+                    return _result(PipelineOutcome.PERMANENT_FAILURE, error_code=e.code, detail=e.detail)
+                except RetryableStepError as e:
+                    await _set_chapter_status(chapter_id, ChapterState.FAILED.value, e.code, chapter_run_id)
+                    return _result(PipelineOutcome.RETRYABLE_FAILURE, error_code=e.code)
 
                 rev = rr_art.output if isinstance(rr_art.output, dict) else {}
                 passed = bool(rev.get("passed"))

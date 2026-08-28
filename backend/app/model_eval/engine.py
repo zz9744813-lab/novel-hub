@@ -123,7 +123,7 @@ def _desired_case_payload(case: dict, *, private_case: bool) -> dict:
 
 
 async def seed_suites(db: AsyncSession) -> int:
-    """Create the immutable v2 suites or fail closed on same-version drift."""
+    """Create immutable versioned suites or fail closed on same-version drift."""
 
     created = 0
     for definition in v98_suite_definitions():

@@ -10,7 +10,11 @@ from __future__ import annotations
 from copy import deepcopy
 
 
-SUITE_VERSION = "2"
+# Ability prompts are versioned independently from the context ladder.  A
+# qualification-contract correction must not invalidate an already measured
+# 128K context profile (and trigger four unrelated long-context calls).
+SUITE_VERSION = "3"
+CONTEXT_SUITE_VERSION = "2"
 PRODUCTION_ROLES = (
     "chapter_planner",
     "draft_writer",
@@ -62,9 +66,14 @@ _SUITES: tuple[dict, ...] = (
                 "role": None,
                 "category": "causal_chain",
                 "prompt_template": (
-                    "档案规则：只有持有青印和白签的人能从内侧开启档案室；青印仍在室内，"
-                    "白签昨夜被取走；门封完好。请只输出 JSON："
-                    '{"outcome":"...","chain":["...","...","..."]}。'
+                    "档案规则：从内侧开启档案室必须同时持有青印和白签。记录显示：白签昨夜"
+                    "被人取走；今晨青印仍在室内；外侧门封完好，但内门已经开启。请判断最"
+                    "合理的进入路径，并只输出 JSON。outcome 只能从 inside_access_required"
+                    "（必须有室内进入）或 outside_entry_supported（证据支持从外侧进入）中选择；"
+                    "chain 必须按因果顺序使用以下三个事实代码且不得翻译（下列说明顺序已打乱）："
+                    "opened_from_inside（从内侧开启）、white_token_removed（白签被取走）、"
+                    'seal_intact（外侧门封完好）。格式：{"outcome":"...",'
+                    '"chain":["...","...","..."]}。'
                 ),
                 "expected_answer": (
                     '{"outcome":"inside_access_required",'
@@ -87,7 +96,8 @@ _SUITES: tuple[dict, ...] = (
                 "prompt_template": (
                     "规则：门仅在青印和白签同时存在时开启。现实中白签缺失，所以门未开。"
                     "反事实问题：若白签没有缺失且青印仍在，门是否开启？"
-                    '只输出 JSON：{"opens":true或false,"because":[...] }。'
+                    "because 只能填写已满足的前提代码 blue_seal（青印）和 white_token（白签），"
+                    '不得翻译。只输出 JSON：{"opens":true或false,"because":[...] }。'
                 ),
                 "expected_answer": '{"opens":true,"because":["blue_seal","white_token"]}',
                 "grader_type": "json_exact_fields",
@@ -151,6 +161,7 @@ _SUITES: tuple[dict, ...] = (
                     ],
                     "required_order": ["湿脚印", "核对门锁", "怀疑守夜人"],
                     "forbidden_substrings": ["守夜人认罪", "打开密函", "拆开密函"],
+                    "required_forbidden_anchors": ["认罪", "密函"],
                 },
                 "temperature": 0.1,
                 "max_output_tokens": 900,
@@ -328,7 +339,10 @@ _SUITES: tuple[dict, ...] = (
                 "category": "event_delta",
                 "prompt_template": (
                     "旧状态：门=锁、灯=亮、知情者=[姜遥]。事件：姜遥开门后熄灯；陆简在门外只听见门响。"
-                    "只输出 JSON：new_state、events、knowledge_delta 三个字段。"
+                    "只输出 JSON：new_state、events、knowledge_delta 三个字段。new_state 必须使用"
+                    '英文键值 {"door":"open","lamp":"off"}；events 必须使用事件代码 '
+                    "door_opened、lamp_extinguished；knowledge_delta 以人物名为键，且不得把"
+                    "陆简未观察到的灯熄灭写入他的知识。"
                 ),
                 "expected_answer": "",
                 "grader_type": "state_delta",
@@ -362,7 +376,10 @@ _SUITES: tuple[dict, ...] = (
                 "category": "style_metrics",
                 "prompt_template": (
                     "样本文本以第三人称限知叙述；共 10 句，其中 4 句对白；多数句子短于 20 字；"
-                    "仅 1 处明喻。只输出 JSON：pov、dialogue_ratio、sentence_length_band、metaphor_density。"
+                    "仅 1 处明喻。只输出 JSON：pov、dialogue_ratio、sentence_length_band、"
+                    "metaphor_density。枚举代码不得翻译：pov 使用 first、third_limited 或"
+                    "third_omniscient；sentence_length_band 使用 short、medium 或 long；"
+                    "metaphor_density 使用 low、medium 或 high。"
                 ),
                 "expected_answer": (
                     '{"pov":"third_limited","dialogue_ratio":0.4,'
@@ -389,7 +406,8 @@ _SUITES: tuple[dict, ...] = (
                 "prompt_template": (
                     "基准：第三人称限知、短句、克制比喻。候选 A 改为第一人称长段抒情；"
                     "候选 B 保持第三人称限知与短句。只输出 JSON："
-                    '{"more_consistent":"A或B","reasons":["..."]}。'
+                    '{"more_consistent":"A或B","reasons":["..."]}。reasons 只能从 '
+                    "pov、sentence_length、metaphor_density 中选择实际相关的代码，不得翻译。"
                 ),
                 "expected_answer": '{"more_consistent":"B","reasons":["pov","sentence_length"]}',
                 "grader_type": "json_exact_fields",
@@ -404,7 +422,7 @@ _SUITES: tuple[dict, ...] = (
     },
     {
         "suite_key": "context-v2",
-        "version": SUITE_VERSION,
+        "version": CONTEXT_SUITE_VERSION,
         "name": "Adaptive context robustness ladder",
         "purpose": "Position, multi-hop, instruction-retention, and belief-boundary checks",
         "target_role": None,
@@ -416,7 +434,7 @@ _SUITES: tuple[dict, ...] = (
         "cases": [
             {
                 "case_key": "context-position-v2",
-                "case_version": SUITE_VERSION,
+                "case_version": CONTEXT_SUITE_VERSION,
                 "role": None,
                 "category": "position",
                 "prompt_template": "Recall a planted four-digit archive code at the requested context position.",
@@ -428,7 +446,7 @@ _SUITES: tuple[dict, ...] = (
             },
             {
                 "case_key": "context-multihop-v2",
-                "case_version": SUITE_VERSION,
+                "case_version": CONTEXT_SUITE_VERSION,
                 "role": None,
                 "category": "multihop",
                 "prompt_template": "Combine the planted original code with the later reset event.",
@@ -440,7 +458,7 @@ _SUITES: tuple[dict, ...] = (
             },
             {
                 "case_key": "context-instruction-v2",
-                "case_version": SUITE_VERSION,
+                "case_version": CONTEXT_SUITE_VERSION,
                 "role": None,
                 "category": "instruction",
                 "prompt_template": "Retain the output-only JSON instruction across the synthetic context.",
@@ -452,7 +470,7 @@ _SUITES: tuple[dict, ...] = (
             },
             {
                 "case_key": "context-belief-v2",
-                "case_version": SUITE_VERSION,
+                "case_version": CONTEXT_SUITE_VERSION,
                 "role": None,
                 "category": "belief",
                 "prompt_template": "Prefer documented facts over a later unsupported distractor claim.",

@@ -43,6 +43,7 @@ from app.model_eval.evidence import (
     decide_context_reuse_with_parts,
     describe_ability_evidence,
     describe_context_evidence,
+    grade_response,
     model_identity_hash,
     normalize_endpoint,
     pick_ladder,
@@ -62,9 +63,12 @@ from app.model_eval.engine import (
 )
 from app.model_eval.engine import _ability_suite_hash, _context_suite_hash
 from app.model_eval.suite_definitions import (
+    CONTEXT_SUITE_VERSION,
     ROLE_EVIDENCE_ALIASES,
     ROUTABLE_ROLES,
+    SUITE_VERSION,
     qualification_role_for,
+    v98_suite_definitions,
 )
 from app.models import (
     AgentModelBinding,
@@ -292,6 +296,205 @@ def passing_responder():
         )
 
     return _resp
+
+
+def _defined_case(case_key: str) -> dict:
+    for suite in v98_suite_definitions():
+        for case in suite["cases"]:
+            if case["case_key"] == case_key:
+                return case
+    raise AssertionError(f"missing synthetic case: {case_key}")
+
+
+def test_v3_ability_contract_exposes_every_machine_graded_label_without_invalidating_context():
+    definitions = v98_suite_definitions()
+    ability = [suite for suite in definitions if suite["mode"] == "qualification"]
+    context = [suite for suite in definitions if suite["mode"] == "context_ladder"]
+    assert SUITE_VERSION == "3"
+    assert {suite["version"] for suite in ability} == {"3"}
+    assert CONTEXT_SUITE_VERSION == "2"
+    assert {suite["version"] for suite in context} == {"2"}
+    assert {case["case_version"] for suite in context for case in suite["cases"]} == {"2"}
+
+    required_labels = {
+        "core-causal-chain-v2": [
+            "inside_access_required",
+            "white_token_removed",
+            "seal_intact",
+            "opened_from_inside",
+        ],
+        "core-counterfactual-v2": ["blue_seal", "white_token"],
+        "state-event-delta-v2": ["door", "open", "lamp", "off", "door_opened", "lamp_extinguished"],
+        "style-metrics-v2": ["third_limited", "short", "low"],
+        "style-consistency-v2": ["pov", "sentence_length"],
+    }
+    for case_key, labels in required_labels.items():
+        prompt = _defined_case(case_key)["prompt_template"]
+        assert all(label in prompt for label in labels), case_key
+
+
+def test_every_v3_ability_case_has_a_contract_compliant_passing_response():
+    responses = {
+        "core-causal-chain-v2": (
+            '{"outcome":"inside_access_required","chain":['
+            '"white_token_removed","seal_intact","opened_from_inside"]}'
+        ),
+        "core-counterfactual-v2": (
+            '{"opens":true,"because":["blue_seal","white_token"]}'
+        ),
+        "core-knowledge-boundary-v2": (
+            '{"answer":"unknown","may_infer":false}'
+        ),
+        "planner-contract-chain-v2": """[
+          {"scene_type":"发现","goal":"发现湿脚印","required_beats":["发现湿脚印"],
+           "forbidden_beats":["守夜人认罪","打开密函"],"knowledge_delta":[],"exit_state":"留下疑问"},
+          {"scene_type":"核验","goal":"核对门锁","required_beats":["核对门锁"],
+           "forbidden_beats":["守夜人认罪","打开密函"],"knowledge_delta":[],"exit_state":"锁况明确"},
+          {"scene_type":"推断","goal":"怀疑守夜人","required_beats":["怀疑守夜人"],
+           "forbidden_beats":["守夜人认罪","打开密函"],"knowledge_delta":[],"exit_state":"嫌疑成立"}
+        ]""",
+        "planner-knowledge-delta-v2": (
+            '{"姜遥":{"can":["依据水痕检查柜门"],"cannot":[]},'
+            '"陆简":{"can":["依据钟声追查"],"cannot":["不得依据水痕"]}}'
+        ),
+        "draft-subtext-scene-v2": (
+            "姜遥用袖口擦去水痕，指尖却在桌沿停了一瞬。窗纸上映着陆简的影子，她没有抬头，"
+            "只把信封推回原位，封蜡依旧完整。陆简问：“昨夜守夜人去了哪边？”她将湿袖口"
+            "藏进掌心：“我只听见更鼓，没见他经过。”屋里静了片刻，陆简把目光落到桌角："
+            "“那这摊水是谁留下的？”姜遥没有回答，只挪开茶盏，露出木纹上浅淡的一圈痕迹。"
+            "两个人都盯着那圈痕迹，谁也没有再追问去向。门外风声擦过石阶，像有人停下又走远，"
+            "姜遥把双手收回膝上，仍让那只完整的信封留在他们之间。"
+        ),
+        "draft-continuity-v2": (
+            "铜灯早已熄灭，宋霁借窗缝漏进的月光摸到墙边。她先看见窗闩仍从内侧扣着，"
+            "便俯身检查地上的灰，又用指节轻敲木框。“昨夜没人从窗户出去。”她回头说道。"
+            "同伴压低声音问她凭什么断定，她指了指完好的闩槽，又沿着门边寻找可见的鞋印。"
+            "屋里没有回应，她便停在原地，把每一道能看清的刮痕记下。"
+        ),
+        "review-gold-f1-v2": (
+            '{"issues":["time_order","knowledge_leak"],'
+            '"non_issues":["red_clothes"]}'
+        ),
+        "review-clean-control-v2": (
+            '{"issues":[],"non_issues":["ordered_actions","knowledge_boundary"]}'
+        ),
+        "state-snapshot-v2": (
+            '{"location":"北柜","item":"湿钥匙","letter_opened":false,'
+            '"knowledge":{"姜遥":["钥匙在北柜"],"陆简":["钥匙存在"]}}'
+        ),
+        "state-event-delta-v2": (
+            '{"new_state":{"door":"open","lamp":"off"},'
+            '"events":["door_opened","lamp_extinguished"],'
+            '"knowledge_delta":{"姜遥":["灯熄灭"],"陆简":["听见门响"]}}'
+        ),
+        "style-metrics-v2": (
+            '{"pov":"third_limited","dialogue_ratio":0.4,'
+            '"sentence_length_band":"short","metaphor_density":"low"}'
+        ),
+        "style-consistency-v2": (
+            '{"more_consistent":"B","reasons":["pov","sentence_length"]}'
+        ),
+    }
+    ability_suites = [
+        suite
+        for suite in v98_suite_definitions()
+        if suite["mode"] == "qualification"
+    ]
+    seen = set()
+    for suite in ability_suites:
+        floor = float(suite["pass_threshold"]) * 100
+        for case in suite["cases"]:
+            response = responses[case["case_key"]]
+            score, detail = grade_response(case, response)
+            assert score >= floor, (case["case_key"], score, detail)
+            seen.add(case["case_key"])
+    assert seen == set(responses)
+
+
+def test_scene_contract_records_prohibitions_without_being_penalized_as_violations():
+    case = _defined_case("planner-contract-chain-v2")
+    response = """[
+      {"scene_type":"发现","goal":"发现湿脚印","required_beats":["发现湿脚印"],
+       "forbidden_beats":["守夜人认罪","打开密函"],"knowledge_delta":[],"exit_state":"留下疑问"},
+      {"scene_type":"核验","goal":"核对门锁","required_beats":["核对门锁"],
+       "forbidden_beats":["守夜人认罪","打开密函"],"knowledge_delta":[],"exit_state":"锁况明确"},
+      {"scene_type":"推断","goal":"怀疑守夜人","required_beats":["怀疑守夜人"],
+       "forbidden_beats":["守夜人认罪","打开密函"],"knowledge_delta":[],"exit_state":"嫌疑成立"}
+    ]"""
+    score, detail = grade_response(case, response)
+    assert score == 100.0
+    assert detail["forbidden_hits"] == []
+    assert all(detail["forbidden_ack"].values())
+
+
+def test_scene_contract_still_detects_a_prohibited_beat_in_executable_fields():
+    case = _defined_case("planner-contract-chain-v2")
+    response = """[
+      {"scene_type":"发现","goal":"发现湿脚印","required_beats":["发现湿脚印"],
+       "forbidden_beats":["认罪","密函"],"knowledge_delta":[],"exit_state":"留下疑问"},
+      {"scene_type":"核验","goal":"核对门锁","required_beats":["核对门锁","打开密函"],
+       "forbidden_beats":["认罪","密函"],"knowledge_delta":[],"exit_state":"锁况明确"},
+      {"scene_type":"推断","goal":"怀疑守夜人","required_beats":["怀疑守夜人"],
+       "forbidden_beats":["认罪","密函"],"knowledge_delta":[],"exit_state":"嫌疑成立"}
+    ]"""
+    score, detail = grade_response(case, response)
+    assert score < 72.0
+    assert "打开密函" in detail["forbidden_hits"]
+
+
+@pytest.mark.asyncio
+async def test_role_qualification_requires_every_mandatory_case_to_clear_its_floor():
+    def suite(key, target, prompts):
+        return {
+            "suite_key": key,
+            "version": "test",
+            "target_role": target,
+            "difficulty": "test",
+            "mode": "qualification",
+            "pass_threshold": 0.70,
+            "is_active": True,
+            "is_private": True,
+            "cases": [
+                {
+                    "case_key": prompt,
+                    "case_version": "test",
+                    "role": target,
+                    "category": "test",
+                    "prompt_template": prompt,
+                    "expected_answer": "yes",
+                    "grader_type": "exact_match",
+                    "grader_config": {},
+                    "temperature": 0,
+                    "max_output_tokens": 8,
+                    "active": True,
+                }
+                for prompt in prompts
+            ],
+        }
+
+    async def gateway(**kwargs):
+        return ("no" if kwargs["user_content"] == "role-fail" else "yes"), None
+
+    result = await run_qualification_core(
+        catalog={
+            "provider": "test",
+            "model_id": "test-model",
+            "model_kind": "text_generation",
+            "text_generation_eligible": True,
+        },
+        suites=[
+            suite("core-test", None, ["core-pass"]),
+            suite("draft-test", "draft_writer", ["role-pass", "role-fail"]),
+        ],
+        gateway=gateway,
+        force=True,
+    )
+    draft = result["roles"]["draft_writer"]
+    assert draft["core_floor_passed"] is True
+    assert draft["case_floor_passed"] is False
+    assert draft["passed_cases"] == 1
+    assert draft["total_cases"] == 2
+    assert draft["passed"] is False
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1139,15 +1342,18 @@ async def test_async_seed_deterministic_idempotent():
     db = FakeAsyncSession()
     n1 = await seed_suites(db)
     assert n1 == 7, n1
-    assert _suite_id("draft-v2", "2") == _suite_id("draft-v2", "2")
+    assert _suite_id("draft-v2", "3") == _suite_id("draft-v2", "3")
+    assert _suite_id("context-v2", "2") == _suite_id("context-v2", "2")
     n2 = await seed_suites(db)
     assert n2 == 0, "seed must be idempotent"
     draft = [s for s in db._table(ModelEvalSuite) if s.suite_key == "draft-v2"]
     assert draft and draft[0].target_role == "draft_writer" and draft[0].mode == "qualification"
     ctx = [s for s in db._table(ModelEvalSuite) if s.suite_key == "context-v2"]
     assert ctx and ctx[0].mode == "context_ladder"
-    # no v1 drift: only version "2" suites exist
-    assert all(s.version == "2" for s in db._table(ModelEvalSuite))
+    # Ability contract v3 is independent from the still-valid context v2 bank.
+    versions = {s.suite_key: s.version for s in db._table(ModelEvalSuite)}
+    assert versions["draft-v2"] == "3"
+    assert versions["context-v2"] == "2"
 
 
 @pytest.mark.asyncio

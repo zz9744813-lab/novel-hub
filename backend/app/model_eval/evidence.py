@@ -23,7 +23,7 @@ from app.model_eval.suite_definitions import (
 )
 
 
-ABILITY_EVALUATOR_REVISION = "v98-ability-4"
+ABILITY_EVALUATOR_REVISION = "v98-ability-5"
 CONTEXT_EVALUATOR_REVISION = "v98-context-5"
 _DIRECT_CONTEXT_REQUIRED_ROLES = {
     "chapter_planner",
@@ -574,15 +574,58 @@ def grade_response(case: dict, response: str) -> tuple[float, dict]:
         schema_ok = bool(parsed) and all(isinstance(item, dict) and required_keys <= set(item) for item in parsed)
         expected_count = cfg.get("exact_contracts")
         count_ok = len(parsed) == expected_count if expected_count is not None else bool(parsed)
-        serialized = _canon(parsed)
-        order_ok = _text_contains_in_order(serialized, cfg.get("required_order") or [])
-        forbidden_hits = [item for item in cfg.get("forbidden_substrings") or [] if item in serialized]
-        checks = [schema_ok, count_ok, order_ok, not forbidden_hits]
-        return round(100.0 * sum(checks) / len(checks), 1), {
+        # Prohibited beats belong in ``forbidden_beats``.  The old grader
+        # searched the entire JSON and therefore punished a correct planner
+        # for explicitly recording the prohibition.  Only executable fields
+        # are scanned for violations, while the forbidden field is checked for
+        # acknowledgement of every required constraint.
+        active_fields = []
+        forbidden_fields = []
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            active_fields.append(
+                {
+                    key: value
+                    for key, value in item.items()
+                    if key != "forbidden_beats"
+                }
+            )
+            forbidden_fields.append(item.get("forbidden_beats") or [])
+        active_serialized = _canon(active_fields)
+        forbidden_serialized = _canon(forbidden_fields)
+        order_ok = _text_contains_in_order(
+            active_serialized,
+            cfg.get("required_order") or [],
+        )
+        forbidden_hits = [
+            item
+            for item in cfg.get("forbidden_substrings") or []
+            if item in active_serialized
+        ]
+        forbidden_ack = {
+            anchor: anchor in forbidden_serialized
+            for anchor in cfg.get("required_forbidden_anchors") or []
+        }
+        checks = [
+            schema_ok,
+            count_ok,
+            order_ok,
+            not forbidden_hits,
+            all(forbidden_ack.values()),
+        ]
+        score = round(100.0 * sum(checks) / len(checks), 1)
+        # Schema, count, causal order and explicit prohibitions are contract
+        # requirements, not bonus points.  Any miss must stay below the
+        # suite's 72-point case floor even if the other fields look plausible.
+        if not all(checks):
+            score = min(score, 60.0)
+        return score, {
             "schema_ok": schema_ok,
             "count_ok": count_ok,
             "order_ok": order_ok,
             "forbidden_hits": forbidden_hits,
+            "forbidden_ack": forbidden_ack,
         }
 
     if grader == "planner_knowledge":
@@ -844,8 +887,10 @@ async def run_qualification_core(
     gateway_calls = 0
     case_results = []
     scores_by_role: dict[str, list[float]] = {}
+    case_passes_by_role: dict[str, list[bool]] = {}
     thresholds_by_role: dict[str, float] = {}
     core_scores: list[float] = []
+    core_case_passes: list[bool] = []
     execution_error = None
 
     for suite in ability_suites:
@@ -881,16 +926,19 @@ async def run_qualification_core(
             gateway_calls += 1
             score, detail = grade_response(case, content) if not error else (0.0, {"error": error})
             role = case.get("role") or target_role
+            case_passed = not error and score >= suite_threshold
             if role:
                 scores_by_role.setdefault(role, []).append(score)
+                case_passes_by_role.setdefault(role, []).append(case_passed)
             else:
                 core_scores.append(score)
+                core_case_passes.append(case_passed)
             case_results.append(
                 {
                     "case_key": case.get("case_key"),
                     "role": role,
                     "score": score,
-                    "passed": not error and score >= suite_threshold,
+                    "passed": case_passed,
                     "grader_detail": detail,
                     "error_code": error,
                     "response_hash": _sha256(content),
@@ -908,11 +956,14 @@ async def run_qualification_core(
             break
 
     core_score = round(sum(core_scores) / len(core_scores), 1) if core_scores else None
+    core_floor_passed = bool(core_case_passes) and all(core_case_passes)
     roles: dict[str, dict] = {}
     for role in PRODUCTION_ROLES:
         role_scores = scores_by_role.get(role) or []
         role_score = round(sum(role_scores) / len(role_scores), 1) if role_scores else None
         threshold = thresholds_by_role.get(role, 70.0)
+        role_case_passes = case_passes_by_role.get(role) or []
+        role_floor_passed = bool(role_case_passes) and all(role_case_passes)
         combined = None
         if role_score is not None:
             combined = role_score if core_score is None else round(0.25 * core_score + 0.75 * role_score, 1)
@@ -921,6 +972,8 @@ async def run_qualification_core(
             and combined is not None
             and combined >= threshold
             and (core_score is None or core_score >= 60.0)
+            and core_floor_passed
+            and role_floor_passed
         )
         roles[role] = {
             "score": combined,
@@ -929,8 +982,10 @@ async def run_qualification_core(
             "threshold": threshold,
             "passed": passed,
             "sample_count": len(role_scores) + len(core_scores),
-            "passed_cases": sum(1 for value in role_scores if value >= threshold),
+            "passed_cases": sum(role_case_passes),
             "total_cases": len(role_scores),
+            "case_floor_passed": role_floor_passed,
+            "core_floor_passed": core_floor_passed,
             "status": "qualified" if passed else "evaluated",
             "level": "role_qualified" if passed else "none",
         }

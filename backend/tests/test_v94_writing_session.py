@@ -69,6 +69,50 @@ requires_db = pytest.mark.skipif(not DB_AVAILABLE, reason="PostgreSQL not reacha
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def test_session_advance_arq_function_is_registered():
+    from app.workers.arq_worker import WorkerSettings
+    from app.workers.session_outbox_dispatcher import SESSION_ADVANCE_ARQ_FUNCTION
+
+    registered = {getattr(function, "__name__", None) for function in WorkerSettings.functions}
+    assert SESSION_ADVANCE_ARQ_FUNCTION in registered
+
+
+@pytest.mark.asyncio
+async def test_session_advance_enqueue_uses_registered_function(monkeypatch):
+    import arq
+
+    from app.workers.session_outbox_dispatcher import (
+        SESSION_ADVANCE_ARQ_FUNCTION,
+        enqueue_advance_arq,
+    )
+
+    calls = []
+
+    class _Pool:
+        async def enqueue_job(self, *args, **kwargs):
+            calls.append((args, kwargs))
+
+        async def close(self):
+            return None
+
+    async def _create_pool(_settings):
+        return _Pool()
+
+    monkeypatch.setattr(arq, "create_pool", _create_pool)
+    session_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+
+    job_id = await enqueue_advance_arq(session_id, run_id)
+
+    assert job_id == f"session-advance:{session_id}:{run_id}"
+    assert calls == [
+        (
+            (SESSION_ADVANCE_ARQ_FUNCTION, str(session_id), str(run_id)),
+            {"_job_id": job_id},
+        )
+    ]
+
+
 class _Scalar:
     def __init__(self, value):
         self.value = value

@@ -1938,6 +1938,20 @@ async def test_router_uses_current_evidence_and_fresh_health_only():
     assert route.assignment["primary"]["model"] == "glm-5.2"
     assert route.blockers is None  # unrelated bad catalog must not block a valid route
 
+    excluded = await build_role_route(
+        db,
+        agent_role="draft_writer",
+        required_context=50000,
+        policy=policy,
+        blocked_ids=[str(good.id)],
+    )
+    assert excluded.assignment is None
+    assert any(
+        item.get("model") == good.model_id
+        and item.get("code") == "MODEL_BLOCKED_BY_BINDING"
+        for item in excluded.blockers or []
+    )
+
     snapshot.last_probe_at = datetime.now(timezone.utc) - timedelta(minutes=6)
     stale = await build_role_route(
         db,

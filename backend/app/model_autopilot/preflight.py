@@ -358,6 +358,11 @@ async def run_model_preflight(
             blockers.extend(result.blockers)
 
     if blockers:
+        logger.warning(
+            "model preflight blocked session=%s blockers=%s",
+            getattr(session, "id", None),
+            blockers,
+        )
         session.status = "blocked"
         session.stop_reason = "model_preflight_failed"
         session.stop_detail = {"blockers": blockers}

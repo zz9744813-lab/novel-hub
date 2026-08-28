@@ -134,8 +134,16 @@ async def _start(path: str, references: list[str]) -> dict:
             (item for item in sessions if item.status in ACTIVE_SESSION_STATUSES),
             None,
         )
+        recovery_from = None
         if active is not None:
             if active.status in {"paused", "waiting_editorial", "blocked"}:
+                recovery_from = {
+                    "status": active.status,
+                    "stop_reason": active.stop_reason,
+                    "stop_detail": active.stop_detail,
+                    "model_preflight_status": active.model_preflight_status,
+                    "model_preflight_detail": active.model_preflight_detail,
+                }
                 session = await control_writing_session(
                     db,
                     session_id=active.id,
@@ -176,6 +184,7 @@ async def _start(path: str, references: list[str]) -> dict:
         "validation": report.model_dump(mode="json"),
         "installation": installation,
         "writing_session": serialize_session(session),
+        "recovery_from": recovery_from,
     }
 
 

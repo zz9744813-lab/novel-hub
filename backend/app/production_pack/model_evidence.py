@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 
@@ -128,27 +129,78 @@ async def _apply_role_assignments(
     book_id: uuid.UUID,
     assignments: dict[str, tuple[str, str]],
 ) -> list[dict]:
+    if not assignments:
+        return []
     service = ModelBindingService(db)
     changed: list[dict] = []
+    catalogs = list(
+        (
+            await db.execute(
+                select(ModelCatalog).where(
+                    ModelCatalog.enabled.is_(True),
+                    ModelCatalog.availability_status == "available",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    catalog_ids = {
+        (catalog.provider, catalog.model_id): str(catalog.id) for catalog in catalogs
+    }
     for role, (provider, model_id) in sorted(assignments.items()):
         binding = await service.get_binding(role, book_id)
         if binding is None:
             continue
         current = (binding.provider, binding.primary_model)
-        if current == (provider, model_id):
+        selected_catalog_id = catalog_ids.get((provider, model_id))
+        allowed_before = list(binding.allowed_model_ids or [])
+        blocked_before = list(binding.blocked_model_ids or [])
+        allowed_after = list(allowed_before)
+        blocked_after = list(blocked_before)
+        if selected_catalog_id and allowed_after and selected_catalog_id not in allowed_after:
+            allowed_after.append(selected_catalog_id)
+        if selected_catalog_id and selected_catalog_id in blocked_after:
+            blocked_after = [item for item in blocked_after if item != selected_catalog_id]
+
+        model_changed = current != (provider, model_id)
+        constraints_changed = (
+            allowed_after != allowed_before or blocked_after != blocked_before
+        )
+        if not model_changed and not constraints_changed:
             continue
-        await service.update_binding(
+        reason = (
+            "replace unqualified production model using reusable evidence"
+            if model_changed
+            else "reconcile selected production model with routing constraints"
+        )
+        binding = await service.update_binding(
             binding.id,
             new_provider=provider,
             new_model=model_id,
-            reason="replace unqualified production model using reusable evidence",
+            reason=reason,
             changed_by="production_release",
         )
+        binding.allowed_model_ids = allowed_after
+        binding.blocked_model_ids = blocked_after
+        binding.updated_by = "production_release"
+        binding.updated_at = datetime.now(timezone.utc)
         changed.append(
             {
                 "role": role,
                 "from": {"provider": current[0], "model": current[1]},
                 "to": {"provider": provider, "model": model_id},
+                "constraints": {
+                    "selected_catalog_id": selected_catalog_id,
+                    "added_to_allowed": bool(
+                        selected_catalog_id
+                        and selected_catalog_id not in allowed_before
+                        and selected_catalog_id in allowed_after
+                    ),
+                    "removed_from_blocked": bool(
+                        selected_catalog_id and selected_catalog_id in blocked_before
+                    ),
+                },
             }
         )
     return changed
@@ -334,21 +386,11 @@ async def ensure_configured_model_evidence(pack: ProductionPack) -> dict:
         evaluations,
         initial_targets,
     )
-    current_by_role = {
-        role: target
-        for target, roles in initial_targets.items()
-        for role in roles
-    }
-    changed_assignments = {
-        role: target
-        for role, target in assignments.items()
-        if current_by_role.get(role) != target
-    }
     async with async_session_factory() as db:
         routing_changed = await _apply_role_assignments(
             db,
             book_id,
-            changed_assignments,
+            assignments,
         )
         await db.commit()
     async with async_session_factory() as db:

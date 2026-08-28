@@ -497,6 +497,154 @@ async def test_role_qualification_requires_every_mandatory_case_to_clear_its_flo
     assert draft["passed"] is False
 
 
+@pytest.mark.asyncio
+async def test_partial_shared_core_does_not_globally_veto_strong_role_evidence():
+    core = {
+        "suite_key": "core-partial",
+        "version": "test",
+        "target_role": None,
+        "difficulty": "test",
+        "mode": "qualification",
+        "pass_threshold": 0.70,
+        "is_active": True,
+        "is_private": True,
+        "cases": [
+            {
+                "case_key": "core-exact",
+                "case_version": "test",
+                "role": None,
+                "prompt_template": "core-exact",
+                "expected_answer": "yes",
+                "grader_type": "exact_match",
+                "grader_config": {},
+                "temperature": 0,
+                "max_output_tokens": 8,
+                "active": True,
+            },
+            {
+                "case_key": "core-partial",
+                "case_version": "test",
+                "role": None,
+                "prompt_template": "core-partial",
+                "expected_answer": '{"a":1,"b":2}',
+                "grader_type": "json_exact_fields",
+                "grader_config": {"exact_fields": {"a": 1, "b": 2}},
+                "temperature": 0,
+                "max_output_tokens": 32,
+                "active": True,
+            },
+        ],
+    }
+    role = {
+        "suite_key": "draft-strong",
+        "version": "test",
+        "target_role": "draft_writer",
+        "difficulty": "test",
+        "mode": "qualification",
+        "pass_threshold": 0.70,
+        "is_active": True,
+        "is_private": True,
+        "cases": [
+            {
+                "case_key": key,
+                "case_version": "test",
+                "role": "draft_writer",
+                "prompt_template": key,
+                "expected_answer": "yes",
+                "grader_type": "exact_match",
+                "grader_config": {},
+                "temperature": 0,
+                "max_output_tokens": 8,
+                "active": True,
+            }
+            for key in ("role-one", "role-two")
+        ],
+    }
+
+    async def gateway(**kwargs):
+        if kwargs["user_content"] == "core-partial":
+            return '{"a":1,"b":0}', None
+        return "yes", None
+
+    result = await run_qualification_core(
+        catalog={
+            "provider": "test",
+            "model_id": "test-model",
+            "model_kind": "text_generation",
+            "text_generation_eligible": True,
+        },
+        suites=[core, role],
+        gateway=gateway,
+        force=True,
+    )
+    draft = result["roles"]["draft_writer"]
+    assert draft["core_score"] == 75.0
+    assert draft["core_floor_passed"] is True
+    assert draft["case_floor_passed"] is True
+    assert draft["passed"] is True
+
+
+@pytest.mark.asyncio
+async def test_v5_to_v6_aggregation_reuses_persisted_case_scores_with_zero_calls():
+    db = FakeAsyncSession()
+    catalog = make_catalog()
+    db._table(ModelCatalog).append(catalog)
+    source = make_run(catalog=catalog)
+    db._table(ModelEvalRun).append(source)
+    await db.commit()
+    await run_qualification(
+        db,
+        source,
+        gateway=CountingGateway(responder=passing_responder()),
+        force=True,
+    )
+
+    v5_key = ability_evaluation_key(
+        source.ability_identity_hash,
+        source.ability_suite_hash,
+        "v98-ability-5",
+    )
+    source.ability_evaluator_revision = "v98-ability-5"
+    source.ability_evaluation_key = v5_key
+    source.benchmark_revision = "v98-ability-5"
+    source.result_summary = {
+        "execution_complete": True,
+        "overall": 90.0,
+        "roles": {
+            "draft_writer": {
+                "score": 95.0,
+                "role_score": 99.0,
+                "core_score": 83.3,
+                "threshold": 70.0,
+                "passed": False,
+                "passed_cases": 2,
+                "total_cases": 2,
+                "case_floor_passed": True,
+                "core_floor_passed": False,
+                "sample_count": 5,
+            }
+        },
+        "level": "none",
+        "case_count": len(db._table(ModelEvalCaseResult)),
+    }
+    catalog.ability_evaluation_key = v5_key
+    catalog.ability_evaluator_revision = "v98-ability-5"
+    catalog.ability_source_run_id = source.id
+
+    derived = make_run(catalog=catalog)
+    db._table(ModelEvalRun).append(derived)
+    await db.commit()
+    no_call = CountingGateway()
+    result = await run_qualification(db, derived, gateway=no_call, force=False)
+
+    assert no_call.calls == 0
+    assert result["gateway_calls"] == 0
+    assert result["reuse_reason"] == "aggregation_reuse"
+    assert result["roles"]["draft_writer"]["passed"] is True
+    assert catalog.ability_source_run_id == derived.id
+    assert derived.ability_source_run_id is None
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # 1. ORDINARY second ability qualify → 0 LLM calls, NO source id injected
 #    (engine auto-reuses by current key; P0-1)

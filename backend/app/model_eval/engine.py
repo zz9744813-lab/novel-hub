@@ -30,6 +30,7 @@ from app.model_eval.evidence import (
     normalize_endpoint,
     normalize_suite,
     pick_ladder,
+    reaggregate_qualification_roles,
     run_context_ladder_core,
     run_qualification_core,
     suite_aggregate_hash,
@@ -786,6 +787,114 @@ async def run_qualification(
             "evaluator_revision": ABILITY_EVALUATOR_REVISION,
             "gateway_calls": 0,
             "triggered_by": "cache_hit",
+        }
+
+    # v6 changes only the aggregation of already persisted deterministic case
+    # scores: role cases remain mandatory, while the shared core uses an
+    # aggregate floor.  No prompt, case grader, model identity or suite content
+    # changed from v5, so derive a new immutable source run without another LLM
+    # call and clone the case-result audit trail to that source.
+    if (
+        not force
+        and prior_run is not None
+        and prior_run.ability_evaluator_revision == "v98-ability-5"
+        and ABILITY_EVALUATOR_REVISION == "v98-ability-6"
+        and decision.changed_fields == ["evaluator_revision"]
+    ):
+        now = datetime.now(timezone.utc)
+        prior_summary = prior_run.result_summary or {}
+        roles = reaggregate_qualification_roles(
+            prior_summary.get("roles") or {},
+            execution_complete=True,
+        )
+        qualified_roles = [
+            role for role, detail in roles.items() if detail.get("passed")
+        ]
+        prior_cases = (
+            await db.execute(
+                select(ModelEvalCaseResult).where(
+                    ModelEvalCaseResult.run_id == prior_run.id
+                )
+            )
+        ).scalars().all()
+        for item in prior_cases:
+            db.add(
+                ModelEvalCaseResult(
+                    id=uuid.uuid4(),
+                    run_id=run.id,
+                    case_id=item.case_id,
+                    variant_seed=item.variant_seed,
+                    context_target_tokens=item.context_target_tokens,
+                    provider_prompt_tokens=item.provider_prompt_tokens,
+                    response_hash=item.response_hash,
+                    score=item.score,
+                    passed=item.passed,
+                    grader_detail=item.grader_detail,
+                    latency_ms=item.latency_ms,
+                    first_token_ms=item.first_token_ms,
+                    completion_tokens=item.completion_tokens,
+                    tokens_per_second=item.tokens_per_second,
+                    error_code=item.error_code,
+                )
+            )
+        level = "role_qualified" if qualified_roles else "none"
+        run.status = "succeeded"
+        run.started_at = now
+        run.finished_at = now
+        run.overall_score = prior_run.overall_score
+        run.confidence = prior_run.confidence
+        run.ability_source_run_id = None
+        run.reuse_reason = "aggregation_reuse"
+        run.triggered_by = "evaluator_aggregation"
+        run.gateway_calls = 0
+        run.result_summary = {
+            "execution_complete": True,
+            "reused": True,
+            "derived_from_source_run_id": str(prior_run.id),
+            "overall": prior_run.overall_score,
+            "roles": roles,
+            "qualified_roles": qualified_roles,
+            "level": level,
+            "case_count": len(prior_cases),
+        }
+        catalog.ability_evaluation_key = evaluation_key
+        catalog.ability_identity_hash = identity
+        catalog.ability_suite_hash = suite_hash
+        catalog.ability_evaluator_revision = ABILITY_EVALUATOR_REVISION
+        catalog.ability_reuse_reason = "aggregation_reuse"
+        catalog.ability_source_run_id = run.id
+        catalog.ability_completed_at = now
+        catalog.last_certified_at = now
+        catalog.benchmark_revision = ABILITY_EVALUATOR_REVISION
+        catalog.certification_level = level
+        catalog.certification_confidence = run.confidence
+        catalog.evaluation_status = "qualified" if qualified_roles else "evaluated"
+        await _persist_role_scores(
+            db,
+            catalog=catalog,
+            roles=roles,
+            evidence_key=evaluation_key,
+            source_run_id=run.id,
+        )
+        await db.commit()
+        return {
+            "status": "succeeded",
+            "execution_complete": True,
+            "level": level,
+            "overall": prior_run.overall_score,
+            "roles": roles,
+            "qualified_roles": qualified_roles,
+            "reused": True,
+            "reuse_reason": "aggregation_reuse",
+            "changed_fields": decision.changed_fields,
+            "source_run_id": str(run.id),
+            "previous_source_run_id": str(prior_run.id),
+            "ability_evaluation_key": evaluation_key,
+            "identity_hash": identity,
+            "suite_hash": suite_hash,
+            "evaluator_revision": ABILITY_EVALUATOR_REVISION,
+            "gateway_calls": 0,
+            "triggered_by": "evaluator_aggregation",
         }
 
     run.reuse_reason = decision.reason

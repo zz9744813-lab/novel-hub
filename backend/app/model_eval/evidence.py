@@ -23,8 +23,9 @@ from app.model_eval.suite_definitions import (
 )
 
 
-ABILITY_EVALUATOR_REVISION = "v98-ability-5"
+ABILITY_EVALUATOR_REVISION = "v98-ability-6"
 CONTEXT_EVALUATOR_REVISION = "v98-context-5"
+CORE_QUALITY_FLOOR = 70.0
 _DIRECT_CONTEXT_REQUIRED_ROLES = {
     "chapter_planner",
     "draft_writer",
@@ -761,6 +762,51 @@ def _threshold_percent(value: Any, default: float = 0.70) -> float:
     return threshold if threshold > 1 else threshold * 100
 
 
+def reaggregate_qualification_roles(
+    roles: dict[str, dict],
+    *,
+    execution_complete: bool = True,
+) -> dict[str, dict]:
+    """Apply role/core gates to already persisted deterministic case scores.
+
+    Role-specific cases are contractual, so every one must clear its suite
+    floor.  The shared core bank is a broad signal: its aggregate must clear
+    the core quality floor, but one partially-correct core answer must not
+    globally invalidate otherwise excellent evidence for every writing role.
+    """
+
+    aggregated: dict[str, dict] = {}
+    for role, source in roles.items():
+        detail = dict(source or {})
+        combined = detail.get("score")
+        core_score = detail.get("core_score")
+        threshold = float(detail.get("threshold") or 70.0)
+        total_cases = int(detail.get("total_cases") or 0)
+        passed_cases = int(detail.get("passed_cases") or 0)
+        role_floor_passed = total_cases > 0 and passed_cases == total_cases
+        core_floor = float(detail.get("core_threshold") or CORE_QUALITY_FLOOR)
+        core_floor_passed = (
+            core_score is not None and float(core_score) >= core_floor
+        )
+        passed = bool(
+            execution_complete
+            and combined is not None
+            and float(combined) >= threshold
+            and role_floor_passed
+            and core_floor_passed
+        )
+        detail.update(
+            core_threshold=core_floor,
+            case_floor_passed=role_floor_passed,
+            core_floor_passed=core_floor_passed,
+            passed=passed,
+            status="qualified" if passed else "evaluated",
+            level="role_qualified" if passed else "none",
+        )
+        aggregated[role] = detail
+    return aggregated
+
+
 async def _maybe_cancelled(cancel_check: Callable[[], bool | Awaitable[bool]] | None) -> bool:
     if cancel_check is None:
         return False
@@ -956,7 +1002,6 @@ async def run_qualification_core(
             break
 
     core_score = round(sum(core_scores) / len(core_scores), 1) if core_scores else None
-    core_floor_passed = bool(core_case_passes) and all(core_case_passes)
     roles: dict[str, dict] = {}
     for role in PRODUCTION_ROLES:
         role_scores = scores_by_role.get(role) or []
@@ -967,28 +1012,25 @@ async def run_qualification_core(
         combined = None
         if role_score is not None:
             combined = role_score if core_score is None else round(0.25 * core_score + 0.75 * role_score, 1)
-        passed = bool(
-            execution_error is None
-            and combined is not None
-            and combined >= threshold
-            and (core_score is None or core_score >= 60.0)
-            and core_floor_passed
-            and role_floor_passed
-        )
         roles[role] = {
             "score": combined,
             "role_score": role_score,
             "core_score": core_score,
             "threshold": threshold,
-            "passed": passed,
+            "core_threshold": CORE_QUALITY_FLOOR,
+            "passed": False,
             "sample_count": len(role_scores) + len(core_scores),
             "passed_cases": sum(role_case_passes),
             "total_cases": len(role_scores),
             "case_floor_passed": role_floor_passed,
-            "core_floor_passed": core_floor_passed,
-            "status": "qualified" if passed else "evaluated",
-            "level": "role_qualified" if passed else "none",
+            "core_passed_cases": sum(core_case_passes),
+            "core_total_cases": len(core_case_passes),
         }
+
+    roles = reaggregate_qualification_roles(
+        roles,
+        execution_complete=execution_error is None,
+    )
 
     all_scores = [item["score"] for item in case_results]
     overall = round(sum(all_scores) / len(all_scores), 1) if all_scores else None

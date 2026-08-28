@@ -248,7 +248,15 @@ async def build_role_route(
                 )
             )
         ).scalar_one_or_none()
-        role_quality = score_row.composite_score if score_row else None
+        # The current, role-specific qualification result is the authoritative
+        # ability score.  ModelRoleScore.composite_score is an operational
+        # aggregate (static prior, production feedback and reliability); using
+        # it as RoleQuality can reject a model that passed the one-time role
+        # evaluation, which defeats evidence reuse and creates contradictory
+        # preflight results.
+        qualification_score = role_evidence.get("score")
+        role_quality = float(qualification_score) if qualification_score is not None else None
+        route_composite_score = score_row.composite_score if score_row else None
         if role_quality is None or role_quality < floor:
             blockers.append(
                 {
@@ -345,6 +353,7 @@ async def build_role_route(
                 ),
                 {
                     "role_quality": role_quality,
+                    "route_composite_score": route_composite_score,
                     "reliability": reliability,
                     "context_fit": context_fit,
                     "health": health_score,
@@ -355,7 +364,6 @@ async def build_role_route(
     scored.sort(key=lambda x: -x[0])
 
     # locked manual primary (spec §122/§80): auto router never overrides
-    has_lock = False
     if locked_primary and locked_primary.get("model"):
         locked = next(
             (s for s in scored if s[1].model == locked_primary["model"] and s[1].provider == locked_primary.get("provider")),
@@ -363,7 +371,6 @@ async def build_role_route(
         )
         if locked:
             scored = [locked] + [s for s in scored if s[1] is not locked[1]]
-            has_lock = True
         else:
             return RoleRouteResult(assignment=None, blockers=[
                 {"role": agent_role, "code": "MODEL_QUALITY_FLOOR_UNSATISFIED", "reason": "locked primary not eligible"}
@@ -377,22 +384,11 @@ async def build_role_route(
             ],
         )
 
-    if not has_lock and scored[0][0] < floor:
-        return RoleRouteResult(assignment=None, blockers=[
-            {
-                "role": agent_role,
-                "code": "MODEL_QUALITY_FLOOR_UNSATISFIED",
-                "required_context": required_context,
-                "best_score": scored[0][0],
-                "floor": floor,
-            }
-        ])
-
     primary_score, primary, detail = scored[0]
     primary_reason = {
         **detail,
         "route_score": primary.route_score,
-        "reason": f"RoleQuality {detail['role_quality']}, Reliability {detail['reliability']}, Context Fit {detail['context_fit']}, Health {detail['health']}",
+        "reason": f"Qualification {detail['role_quality']}, Reliability {detail['reliability']}, Context Fit {detail['context_fit']}, Health {detail['health']}",
     }
 
     fallbacks: list[dict] = []

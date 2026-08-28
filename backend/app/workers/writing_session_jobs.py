@@ -9,6 +9,14 @@ from app.database import async_session_factory
 logger = logging.getLogger("novelforge.session_jobs")
 
 
+async def _run_model_preflight(session_id: str) -> dict:
+    from app.model_autopilot.session_preflight_job import run_writing_session_model_preflight
+
+    result = await run_writing_session_model_preflight(session_id)
+    logger.info("preflight job session=%s result=%s", session_id, result)
+    return result
+
+
 async def advance_writing_session_job(ctx, session_id: str, run_id: str = ""):
     """One session evaluation. All state changes commit in this transaction."""
     try:
@@ -28,15 +36,16 @@ async def advance_writing_session_job(ctx, session_id: str, run_id: str = ""):
                 )
             ).first()
         if row is not None and row[0] == "created" and row[1] == "running":
-            from app.model_autopilot.session_preflight_job import run_writing_session_model_preflight
-
-            result = await run_writing_session_model_preflight(session_id)
-            logger.info("preflight job session=%s result=%s", session_id, result)
-            return result
+            return await _run_model_preflight(session_id)
 
         async with async_session_factory() as db:
             result = await advance_writing_session(db, uuid.UUID(session_id))
             await db.commit()
+        # The first evaluation only writes the durable `running` marker.  Run
+        # provider IO after that transaction has committed; the preflight job
+        # writes its own result and outbox handoff for the first chapter.
+        if result.get("action") == "wait_current" and result.get("reason") == "model preflight running":
+            return await _run_model_preflight(session_id)
         if result.get("action") != "wait_current":
             logger.info(
                 "advance session=%s action=%s reason=%s",

@@ -129,6 +129,52 @@ async def test_session_advance_enqueue_uses_registered_function(monkeypatch):
     ]
 
 
+@pytest.mark.asyncio
+async def test_session_advance_runs_preflight_after_committing_marker(monkeypatch):
+    import app.model_autopilot.session_preflight_job as preflight_job
+    import app.services.writing_session_controller as controller
+    import app.workers.writing_session_jobs as jobs
+
+    commits = []
+    preflight_calls = []
+
+    class _FirstResult:
+        def first(self):
+            return None
+
+    class _Db:
+        async def execute(self, _statement):
+            return _FirstResult()
+
+        async def commit(self):
+            commits.append(True)
+
+    class _SessionContext:
+        async def __aenter__(self):
+            return _Db()
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+    async def _advance(_db, _session_id):
+        return {"action": "wait_current", "reason": "model preflight running"}
+
+    async def _preflight(session_id):
+        preflight_calls.append(session_id)
+        return {"status": "running"}
+
+    monkeypatch.setattr(jobs, "async_session_factory", lambda: _SessionContext())
+    monkeypatch.setattr(controller, "advance_writing_session", _advance)
+    monkeypatch.setattr(preflight_job, "run_writing_session_model_preflight", _preflight)
+    session_id = str(uuid.uuid4())
+
+    result = await jobs.advance_writing_session_job({}, session_id)
+
+    assert commits == [True]
+    assert preflight_calls == [session_id]
+    assert result == {"status": "running"}
+
+
 class _Scalar:
     def __init__(self, value):
         self.value = value

@@ -270,7 +270,7 @@ show_logs() {
 
 novel_action() {
   local action=$1 release
-  [[ $action =~ ^(validate|qualify|install|start|status|audit|export|download)$ ]] || exit 64
+  [[ $action =~ ^(validate|qualify|install|start|status|monitor|audit|export|download)$ ]] || exit 64
   release=$(current_release)
   [ -n "$release" ] || exit 69
   if [ "$action" = export ]; then

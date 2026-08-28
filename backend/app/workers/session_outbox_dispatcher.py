@@ -60,7 +60,12 @@ async def claim_pending_session_batch(db, limit: int = 10) -> list[SessionAdvanc
     return rows
 
 
-async def enqueue_advance_arq(session_id: uuid.UUID, run_id: uuid.UUID | None = None) -> str:
+async def enqueue_advance_arq(
+    session_id: uuid.UUID,
+    run_id: uuid.UUID | None = None,
+    *,
+    delivery_id: uuid.UUID,
+) -> str:
     from arq import create_pool
     from arq.connections import RedisSettings
     import redis.asyncio.connection as _rc
@@ -73,7 +78,11 @@ async def enqueue_advance_arq(session_id: uuid.UUID, run_id: uuid.UUID | None = 
     r_port = int(redis_parts[1].split("/")[0]) if len(redis_parts) > 1 else 6379
     pool = await create_pool(RedisSettings(host=r_host, port=r_port))
     try:
-        job_id = f"session-advance:{session_id}:{run_id or 'none'}"
+        # Use the durable outbox row as the delivery identity.  Re-dispatching
+        # the same row stays idempotent, while a later control/recovery poke for
+        # the same session is not swallowed by an older completed/failed ARQ
+        # job whose run_id was also None.
+        job_id = f"session-advance:{session_id}:{delivery_id}"
         await pool.enqueue_job(
             SESSION_ADVANCE_ARQ_FUNCTION,
             str(session_id),
@@ -102,7 +111,11 @@ async def dispatch_session_outbox_once(limit: int = 10) -> dict:
             if not fresh or fresh.status != "dispatching":
                 continue
             try:
-                await enqueue_advance_arq(fresh.writing_session_id, fresh.completed_run_id)
+                await enqueue_advance_arq(
+                    fresh.writing_session_id,
+                    fresh.completed_run_id,
+                    delivery_id=fresh.id,
+                )
                 fresh.status = "dispatched"
                 fresh.dispatched_at = datetime.now(timezone.utc)
                 fresh.locked_at = None

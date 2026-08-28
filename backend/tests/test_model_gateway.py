@@ -27,8 +27,15 @@ class TestGenerationControls:
 
     def test_unknown_model_keeps_standard_token_cap(self):
         assert _generation_controls(
-            "deepseek-v4-flash", max_tokens=512, reasoning_mode="disabled"
+            "some-unknown-model", max_tokens=512, reasoning_mode="disabled"
         ) == {"max_tokens": 512}
+
+    def test_deepseek_reasoning_headroom(self):
+        """DeepSeek-family reasoning shares the max_tokens budget with the
+        final answer; the cap is raised so reasoning cannot consume it all."""
+        assert _generation_controls(
+            "deepseek-v4-flash", max_tokens=512, reasoning_mode="disabled"
+        ) == {"max_tokens": 65536}
 
 
 class TestStreamResult:

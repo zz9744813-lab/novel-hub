@@ -430,6 +430,74 @@ async def test_release_reconciles_only_allowlisted_alias_to_discovered_model():
     assert service.updates[0][1]["changed_by"] == "production_release"
 
 
+@pytest.mark.asyncio
+async def test_release_reconciles_selected_primary_with_stale_binding_constraints():
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from app.production_pack.model_evidence import _apply_role_assignments
+
+    selected = ModelCatalog(
+        id=uuid.uuid4(),
+        provider="new-api",
+        model_id="deepseek-v4-flash",
+        enabled=True,
+        availability_status="available",
+    )
+    stale_id = str(uuid.uuid4())
+    binding = SimpleNamespace(
+        id=uuid.uuid4(),
+        provider=selected.provider,
+        primary_model=selected.model_id,
+        allowed_model_ids=[stale_id],
+        blocked_model_ids=[str(selected.id)],
+        updated_by="old",
+        updated_at=None,
+    )
+
+    class Rows:
+        def scalars(self):
+            return self
+
+        def all(self):
+            return [selected]
+
+    class Session:
+        async def execute(self, _statement):
+            return Rows()
+
+    class Service:
+        def __init__(self):
+            self.updates = []
+
+        async def get_binding(self, role, book_id):
+            return binding
+
+        async def update_binding(self, binding_id, **changes):
+            self.updates.append((binding_id, changes))
+            return binding
+
+    service = Service()
+    with patch(
+        "app.production_pack.model_evidence.ModelBindingService",
+        return_value=service,
+    ):
+        report = await _apply_role_assignments(
+            Session(),
+            uuid.uuid4(),
+            {"draft_writer": (selected.provider, selected.model_id)},
+        )
+
+    assert binding.allowed_model_ids == [stale_id, str(selected.id)]
+    assert binding.blocked_model_ids == []
+    assert service.updates[0][1]["changed_by"] == "production_release"
+    assert report[0]["constraints"] == {
+        "selected_catalog_id": str(selected.id),
+        "added_to_allowed": True,
+        "removed_from_blocked": True,
+    }
+
+
 def test_every_key_event_is_present_at_its_declared_chapter():
     pack = _pack()
     chapters = {chapter.chapter_no: chapter for chapter in pack.chapters}

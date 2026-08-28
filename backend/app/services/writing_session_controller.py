@@ -699,6 +699,11 @@ def serialize_session(session: WritingSession, *, backlog: int | None = None, qu
         "words_generated": session.words_generated or 0,
         "stop_reason": session.stop_reason,
         "stop_detail": session.stop_detail,
+        "model_preflight_status": session.model_preflight_status,
+        "model_preflight_detail": session.model_preflight_detail,
+        "model_route_plan_id": (
+            str(session.model_route_plan_id) if session.model_route_plan_id else None
+        ),
         "policy_snapshot": session.policy_snapshot,
         "editorial_backlog": backlog,
         "editorial_backlog_limit": (session.policy_snapshot or {}).get("max_unreviewed_ahead"),

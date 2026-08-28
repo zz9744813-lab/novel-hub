@@ -128,15 +128,45 @@ async def build_role_route(
     blockers = []
 
     for catalog in catalogs:
-        if not catalog.enabled or not catalog.auto_route_enabled:
-            continue  # spec §37: never auto-route a model that hasn't passed probe/benchmark
+        if not catalog.enabled:
+            continue
         if catalog.availability_status == "missing":
             continue
         if blocked_ids and str(catalog.id) in blocked_ids:
+            blockers.append(
+                {
+                    "model": catalog.model_id,
+                    "role": agent_role,
+                    "code": "MODEL_BLOCKED_BY_BINDING",
+                }
+            )
             continue
         if allowed_ids and str(catalog.id) not in allowed_ids:
+            blockers.append(
+                {
+                    "model": catalog.model_id,
+                    "role": agent_role,
+                    "code": "MODEL_NOT_ALLOWED_BY_BINDING",
+                }
+            )
             continue
+        if not catalog.auto_route_enabled:
+            blockers.append(
+                {
+                    "model": catalog.model_id,
+                    "role": agent_role,
+                    "code": "MODEL_AUTO_ROUTE_DISABLED",
+                }
+            )
+            continue  # spec §37: never auto-route a model that hasn't passed probe/benchmark
         if not catalog.text_generation_eligible:
+            blockers.append(
+                {
+                    "model": catalog.model_id,
+                    "role": agent_role,
+                    "code": "MODEL_NOT_TEXT_ELIGIBLE",
+                }
+            )
             continue
 
         from app.model_eval.engine import get_catalog_evidence_state
@@ -220,8 +250,26 @@ async def build_role_route(
         ).scalar_one_or_none()
         role_quality = score_row.composite_score if score_row else None
         if role_quality is None or role_quality < floor:
+            blockers.append(
+                {
+                    "model": catalog.model_id,
+                    "role": agent_role,
+                    "code": "MODEL_QUALITY_FLOOR_UNSATISFIED",
+                    "score": role_quality,
+                    "floor": floor,
+                }
+            )
             continue  # spec §41: never silently downgrade below the role floor
         if min_quality and role_quality < min_quality:
+            blockers.append(
+                {
+                    "model": catalog.model_id,
+                    "role": agent_role,
+                    "code": "MODEL_POLICY_QUALITY_UNSATISFIED",
+                    "score": role_quality,
+                    "floor": min_quality,
+                }
+            )
             continue
 
         snap = (
@@ -255,6 +303,16 @@ async def build_role_route(
             )
             continue
         if min_health and (health_status not in ("healthy", "degraded") or snap.health_score is None):
+            blockers.append(
+                {
+                    "model": catalog.model_id,
+                    "role": agent_role,
+                    "code": "MODEL_POLICY_HEALTH_UNSATISFIED",
+                    "health_status": health_status,
+                    "health_score": snap.health_score if snap else None,
+                    "floor": min_health,
+                }
+            )
             continue
         if health_status not in ("healthy", "degraded"):
             blockers.append(

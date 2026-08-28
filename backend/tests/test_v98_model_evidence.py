@@ -1899,8 +1899,12 @@ async def test_router_uses_current_evidence_and_fresh_health_only():
         force=True,
     )
     draft_score = next(row for row in db._table(ModelRoleScore) if row.agent_role == "draft_writer")
+    draft_score.benchmark_score = 88.3
     draft_score.benchmark_passed = True
-    draft_score.composite_score = 95.0
+    # The operational composite can legitimately be lower than the writing
+    # floor before production samples exist.  Current role qualification is
+    # the authoritative quality signal and must remain reusable.
+    draft_score.composite_score = 77.1
 
     context_run = make_run(mode="context_ladder", catalog=good)
     db._table(ModelEvalRun).append(context_run)
@@ -1936,7 +1940,27 @@ async def test_router_uses_current_evidence_and_fresh_health_only():
     )
     assert route.assignment is not None
     assert route.assignment["primary"]["model"] == "glm-5.2"
+    assert route.assignment["primary"]["role_quality"] == 88.3
+    assert route.assignment["primary"]["route_composite_score"] == 77.1
     assert route.blockers is None  # unrelated bad catalog must not block a valid route
+
+    # A high operational aggregate must never override failed role evidence.
+    draft_score.benchmark_passed = False
+    draft_score.composite_score = 99.0
+    failed_qualification = await build_role_route(
+        db,
+        agent_role="draft_writer",
+        required_context=50000,
+        policy=policy,
+    )
+    assert failed_qualification.assignment is None
+    assert any(
+        item.get("model") == good.model_id
+        and item.get("code") == "ROLE_QUALIFICATION_FAILED"
+        for item in failed_qualification.blockers or []
+    )
+    draft_score.benchmark_passed = True
+    draft_score.composite_score = 77.1
 
     excluded = await build_role_route(
         db,

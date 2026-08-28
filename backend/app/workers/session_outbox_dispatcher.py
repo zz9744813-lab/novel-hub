@@ -21,6 +21,7 @@ from app.models import SessionAdvanceOutbox
 logger = logging.getLogger("novelforge.session_outbox")
 DISPATCHER_ID = f"{socket.gethostname()}:{os.getpid()}"
 MAX_ATTEMPTS = int(os.environ.get("SESSION_OUTBOX_MAX_ATTEMPTS", "20"))
+SESSION_ADVANCE_ARQ_FUNCTION = "advance_writing_session_job"
 
 
 async def reclaim_stale_session_dispatch(db, older_than_sec: int = 60) -> int:
@@ -74,7 +75,7 @@ async def enqueue_advance_arq(session_id: uuid.UUID, run_id: uuid.UUID | None = 
     try:
         job_id = f"session-advance:{session_id}:{run_id or 'none'}"
         await pool.enqueue_job(
-            "advance_writing_session",
+            SESSION_ADVANCE_ARQ_FUNCTION,
             str(session_id),
             str(run_id) if run_id else "",
             _job_id=job_id,

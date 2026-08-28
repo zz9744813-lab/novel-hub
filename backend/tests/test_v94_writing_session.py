@@ -101,15 +101,31 @@ async def test_session_advance_enqueue_uses_registered_function(monkeypatch):
     monkeypatch.setattr(arq, "create_pool", _create_pool)
     session_id = uuid.uuid4()
     run_id = uuid.uuid4()
+    first_delivery_id = uuid.uuid4()
+    second_delivery_id = uuid.uuid4()
 
-    job_id = await enqueue_advance_arq(session_id, run_id)
+    first_job_id = await enqueue_advance_arq(
+        session_id,
+        run_id,
+        delivery_id=first_delivery_id,
+    )
+    second_job_id = await enqueue_advance_arq(
+        session_id,
+        run_id,
+        delivery_id=second_delivery_id,
+    )
 
-    assert job_id == f"session-advance:{session_id}:{run_id}"
+    assert first_job_id == f"session-advance:{session_id}:{first_delivery_id}"
+    assert second_job_id == f"session-advance:{session_id}:{second_delivery_id}"
     assert calls == [
         (
             (SESSION_ADVANCE_ARQ_FUNCTION, str(session_id), str(run_id)),
-            {"_job_id": job_id},
-        )
+            {"_job_id": first_job_id},
+        ),
+        (
+            (SESSION_ADVANCE_ARQ_FUNCTION, str(session_id), str(run_id)),
+            {"_job_id": second_job_id},
+        ),
     ]
 
 

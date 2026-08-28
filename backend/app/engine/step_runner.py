@@ -20,6 +20,7 @@ from sqlalchemy import select, update, func
 
 from app.database import async_session_factory
 from app.models import ChapterRun, ChapterStepRun
+from app.prompt_runtime import PromptCompileError
 
 logger = logging.getLogger("novelforge.step_runner")
 
@@ -395,6 +396,17 @@ async def run_step(
     except PermanentStepError as exc:
         await persist_failure(step.id, error_code=exc.code, error_detail=exc.detail)
         raise
+    except PromptCompileError as exc:
+        # Deterministic template/configuration errors can never succeed by
+        # retrying -- treat them as permanent step failures so the pipeline
+        # stops the ChapterRun and blocks the session instead of retrying
+        # every outbox tick and accumulating failure steps forever.
+        await persist_failure(
+            step.id,
+            error_code="prompt_compile_error",
+            error_detail={"type": type(exc).__name__, "message": str(exc)[:500]},
+        )
+        raise PermanentStepError("prompt_compile_error", {"message": str(exc)[:500]}) from exc
     except Exception as exc:
         await persist_failure(
             step.id,

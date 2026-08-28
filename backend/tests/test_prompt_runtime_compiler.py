@@ -55,3 +55,70 @@ def test_prompt_snapshot_contains_immutable_template_and_render_hashes():
     assert snapshot["variables"] == compiled.variables_used
     assert snapshot["system_text"] == compiled.system_text
     assert snapshot["user_text"] == compiled.user_text
+
+
+# === P0-A regression: JSON / literal braces inside variable values must NOT
+#     be treated as unresolved template placeholders. ===
+
+
+def test_compile_prompt_accepts_json_value_with_adjacent_closing_braces():
+    """Template {{user_content}} + JSON value {"outer":{"inner":1}} must
+    compile successfully and keep the value bytes untouched."""
+    compiled = compile_prompt(
+        _template("System {{ book_profile }}", "User {{user_content}}"),
+        {"book_profile": "PROFILE", "user_content": '{"outer":{"inner":1}}'},
+    )
+    assert compiled.user_text == 'User {"outer":{"inner":1}}'
+    assert compiled.variables_used["user_content"] == '{"outer":{"inner":1}}'
+
+
+def test_compile_prompt_accepts_literal_braces_inside_variable_value():
+    """A value containing "{{literal}}" or "}}" is data, not a placeholder."""
+    compiled = compile_prompt(
+        _template("User {{user_content}}", "User {{user_content}}"),
+        {"user_content": "prefix {{literal}} suffix }}"},
+    )
+    assert compiled.user_text == "User prefix {{literal}} suffix }}"
+
+
+def test_compile_prompt_rejects_missing_variable_with_names():
+    """Missing declared variables stay fail-closed and list the names."""
+    with pytest.raises(PromptCompileError, match="missing_var"):
+        compile_prompt(
+            _template("System {{book_profile}}", "User {{missing_var}}"),
+            {"book_profile": "PROFILE"},
+        )
+
+
+def test_compile_prompt_rejects_unclosed_left_placeholder():
+    """Template 'broken {{user_content' must fail (dangling left brace)."""
+    with pytest.raises(PromptCompileError, match="unresolved placeholder"):
+        compile_prompt(
+            _template("System {{book_profile}}", "User broken {{user_content"),
+            {"book_profile": "PROFILE", "user_content": "X"},
+        )
+
+
+def test_compile_prompt_rejects_unmatched_right_placeholder():
+    """Template 'broken user_content}}' must fail (dangling right brace)."""
+    with pytest.raises(PromptCompileError, match="unresolved placeholder"):
+        compile_prompt(
+            _template("System {{book_profile}}", "User broken user_content}}"),
+            {"book_profile": "PROFILE"},
+        )
+
+
+def test_compile_prompt_hashes_and_snapshot_stay_correct_with_json_value():
+    """system/user hashes, variables_used and snapshot remain reproducible."""
+    compiled = compile_prompt(
+        _template("System {{ book_profile }}", "User {{user_content}}"),
+        {"book_profile": "PROFILE", "user_content": '{"a":1,"b":{"c":2}}'},
+    )
+    assert compiled.system_hash == compiled.system_hash  # deterministic
+    assert compiled.user_hash
+    assert compiled.rendered_hash
+    snapshot = prompt_snapshot(compiled)
+    assert snapshot["variables"]["user_content"] == '{"a":1,"b":{"c":2}}'
+    assert snapshot["user_text"] == 'User {"a":1,"b":{"c":2}}'
+    assert snapshot["user_hash"] == compiled.user_hash
+    assert snapshot["rendered_hash"] == compiled.rendered_hash

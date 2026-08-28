@@ -30,14 +30,21 @@ class CompiledPrompt:
 
 
 def _render(text: str, variables: dict[str, Any], label: str) -> tuple[str, set[str]]:
-    names = set(_VARIABLE.findall(text or ""))
+    source = text or ""
+    names = set(_VARIABLE.findall(source))
     missing = sorted(name for name in names if name not in variables)
     if missing:
         raise PromptCompileError(f"missing {label} variables: {', '.join(missing)}")
 
-    rendered = _VARIABLE.sub(lambda match: str(variables[match.group(1)]), text or "")
-    if "{{" in rendered or "}}" in rendered:
+    # Check the ORIGINAL template for dangling/unknown braces AFTER all
+    # legitimate {{name}} placeholders are removed. Scanning the raw template
+    # (not the substituted text) keeps JSON values -- which legitimately
+    # contain adjacent }} -- from being misread as unresolved placeholders.
+    residue = _VARIABLE.sub("", source)
+    if "{{" in residue or "}}" in residue:
         raise PromptCompileError(f"unresolved placeholder in {label} template")
+
+    rendered = _VARIABLE.sub(lambda match: str(variables[match.group(1)]), source)
     return rendered, names
 
 

@@ -1782,6 +1782,99 @@ async def test_preflight_fail_closed_for_context_only():
 
 
 @pytest.mark.asyncio
+async def test_preflight_uses_each_roles_binding_and_keeps_bound_primary_eligible():
+    from unittest.mock import AsyncMock, patch
+
+    from app.model_autopilot.preflight import run_model_preflight
+    from app.model_autopilot.router import RoleRouteResult
+
+    db = FakeAsyncSession()
+    book_id = uuid.uuid4()
+    deep = make_catalog(model_id="deepseek-v4-flash", provider="deepseek")
+    step = make_catalog(model_id="step-3.7-flash", provider="stepfun")
+    stale = make_catalog(model_id="glm-5.2", provider="zai")
+    db._table(ModelCatalog).extend([deep, step, stale])
+
+    draft_binding = AgentModelBinding(
+        id=uuid.uuid4(),
+        scope_type="book",
+        scope_id=book_id,
+        agent_role="draft_writer",
+        provider=deep.provider,
+        primary_model=deep.model_id,
+        reasoning_mode="auto",
+        version=1,
+        updated_by="test",
+        routing_policy_id=None,
+        manual_primary_locked=False,
+        allowed_model_ids=[str(stale.id)],
+        blocked_model_ids=[],
+    )
+    memory_binding = AgentModelBinding(
+        id=uuid.uuid4(),
+        scope_type="book",
+        scope_id=book_id,
+        agent_role="memory_compiler",
+        provider=step.provider,
+        primary_model=step.model_id,
+        reasoning_mode="auto",
+        version=1,
+        updated_by="test",
+        routing_policy_id=None,
+        manual_primary_locked=False,
+        allowed_model_ids=[str(step.id)],
+        blocked_model_ids=[],
+    )
+    db._table(AgentModelBinding).extend([draft_binding, memory_binding])
+
+    calls = {}
+
+    async def fake_route(_db, **kwargs):
+        calls[kwargs["agent_role"]] = kwargs
+        return RoleRouteResult(
+            assignment={
+                "primary": {"provider": "chosen", "model": kwargs["agent_role"]},
+                "fallbacks": [],
+            },
+            blockers=None,
+        )
+
+    class FakeSession:
+        pass
+
+    session = FakeSession()
+    session.id = uuid.uuid4()
+    session.book_id = book_id
+    session.status = "created"
+    session.stop_reason = None
+    session.stop_detail = None
+    session.model_preflight_status = None
+    session.model_preflight_detail = None
+    session.model_route_plan_id = None
+    session.model_routing_policy_version = None
+
+    with (
+        patch("app.model_eval.engine.ensure_v98_suites", AsyncMock()),
+        patch("app.model_autopilot.preflight.ensure_capability_for_catalog", AsyncMock()),
+        patch("app.model_autopilot.preflight.compute_role_score", AsyncMock()),
+        patch("app.model_autopilot.preflight.build_role_route", fake_route),
+        patch("app.model_autopilot.preflight.policy_from_db", AsyncMock(return_value={})),
+    ):
+        result = await run_model_preflight(
+            db,
+            session=session,
+            binding=draft_binding,
+        )
+
+    assert result["status"] == "pass"
+    assert set(calls["draft_writer"]["allowed_ids"]) == {
+        str(stale.id),
+        str(deep.id),
+    }
+    assert calls["memory_compiler"]["allowed_ids"] == [str(step.id)]
+
+
+@pytest.mark.asyncio
 async def test_router_uses_current_evidence_and_fresh_health_only():
     from app.model_autopilot.router import build_role_route, default_policy_for
 

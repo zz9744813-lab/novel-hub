@@ -45,6 +45,89 @@ def test_v96_route_weights():
     assert round(sum(DEFAULT_WEIGHTS.values()), 2) == 1.00
 
 
+@pytest.mark.asyncio
+async def test_resume_after_failed_preflight_schedules_a_fresh_gate(monkeypatch):
+    import uuid
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+
+    import app.services.writing_session_service as service
+
+    old_plan_id = uuid.uuid4()
+    session = SimpleNamespace(
+        id=uuid.uuid4(),
+        status="blocked",
+        control_requested="none",
+        stop_reason="model_preflight_failed",
+        stop_detail={"blockers": [{"code": "NO_ELIGIBLE_MODEL"}]},
+        model_preflight_status="blocked",
+        model_preflight_detail={"blockers": [{"code": "NO_ELIGIBLE_MODEL"}]},
+        model_route_plan_id=old_plan_id,
+        resumed_at=None,
+    )
+
+    class Result:
+        def scalar_one_or_none(self):
+            return session
+
+    class Db:
+        async def execute(self, _statement):
+            return Result()
+
+    record_event = AsyncMock()
+    touch_advance = Mock()
+    monkeypatch.setattr(service, "_record_event", record_event)
+    monkeypatch.setattr(service, "_touch_advance", touch_advance)
+
+    resumed = await service.control_writing_session(
+        Db(),
+        session_id=session.id,
+        action="resume",
+    )
+
+    assert resumed.status == "created"
+    assert resumed.model_preflight_status == "running"
+    assert resumed.model_preflight_detail is None
+    assert resumed.model_route_plan_id is None
+    assert resumed.stop_reason is None
+    assert resumed.stop_detail is None
+    assert record_event.await_args.args[3] == {"model_preflight_retry": True}
+    dedupe_hint = touch_advance.call_args.kwargs["dedupe_hint"]
+    assert dedupe_hint.startswith(f"session-resume:{session.id}:")
+
+
+@pytest.mark.asyncio
+async def test_running_session_cannot_bypass_blocked_preflight(monkeypatch):
+    import uuid
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    import app.services.writing_session_controller as controller
+
+    session = SimpleNamespace(
+        id=uuid.uuid4(),
+        status="running",
+        control_requested="none",
+        policy_snapshot={},
+        model_preflight_status="blocked",
+        model_preflight_detail={"blockers": [{"code": "NO_ELIGIBLE_MODEL"}]},
+        stop_reason=None,
+        stop_detail=None,
+    )
+    record_event = AsyncMock()
+    monkeypatch.setattr(controller, "_record_event", record_event)
+
+    decision = await controller.evaluate_session(object(), session)
+
+    assert decision.action == "block"
+    assert session.status == "blocked"
+    assert session.stop_reason == "model_preflight_failed"
+    assert session.stop_detail == {
+        "blockers": [{"code": "NO_ELIGIBLE_MODEL"}]
+    }
+    record_event.assert_awaited_once()
+
+
 def _db_available() -> bool:
     try:
         import asyncio

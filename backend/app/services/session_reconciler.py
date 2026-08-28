@@ -27,6 +27,25 @@ logger = logging.getLogger("novelforge.session_reconciler")
 RECONCILER_ID = f"{socket.gethostname()}:{os.getpid()}"
 CLAIM_LIMIT = int(os.environ.get("SESSION_RECONCILE_LIMIT", "10"))
 LEASE_SECONDS = 60
+RUN_STALE_GRACE_SECONDS = int(os.environ.get("SESSION_RUN_STALE_GRACE_SECONDS", "120"))
+
+
+def chapter_run_is_stale(run: ChapterRun, now: datetime) -> bool:
+    """Return true for an abandoned RUNNING row with no live worker lease."""
+    if run.status != "running":
+        return False
+    lease_until = run.lease_expires_at
+    if lease_until is not None and lease_until.tzinfo is None:
+        lease_until = lease_until.replace(tzinfo=timezone.utc)
+    if run.lease_owner and lease_until is not None and lease_until >= now:
+        return False
+
+    last_seen = run.heartbeat_at or run.started_at or run.updated_at or run.created_at
+    if last_seen is None:
+        return True
+    if last_seen.tzinfo is None:
+        last_seen = last_seen.replace(tzinfo=timezone.utc)
+    return last_seen < now - timedelta(seconds=RUN_STALE_GRACE_SECONDS)
 
 
 async def reconcile_sessions() -> dict:
@@ -118,6 +137,28 @@ async def reconcile_sessions() -> dict:
                                 .on_conflict_do_nothing(index_elements=["dedupe_key"])
                             )
                             repaired += 1
+                    elif chapter_run_is_stale(run, now):
+                        # An unhandled worker exception used to leave the run
+                        # as RUNNING after its lease disappeared.  Such a row
+                        # blocks the session forever and is never eligible for
+                        # chapter outbox backfill.  Terminalize it, then let the
+                        # normal session outbox/controller recovery path decide
+                        # whether to retry the chapter.
+                        run.status = "failed"
+                        run.error_code = run.error_code or "orphaned_chapter_run"
+                        run.error_detail = run.error_detail or {
+                            "reason": "running row lost its worker lease",
+                        }
+                        run.finished_at = now
+                        run.lease_owner = None
+                        run.lease_expires_at = None
+                        repaired += 1
+                        touched += 1
+                        logger.warning(
+                            "terminalized stale chapter run id=%s session=%s",
+                            run.id,
+                            session.id,
+                        )
                     elif run.status not in ACTIVE_RUN_STATUSES | {"paused"}:
                         # terminal-but-uncleaned run: nudge controller to clear pointer
                         touched += 1

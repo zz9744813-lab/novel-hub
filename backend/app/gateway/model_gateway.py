@@ -92,8 +92,13 @@ def _generation_controls(
     normalized = str(model or "").strip().casefold()
     controls: dict = {}
     is_step_3 = normalized.startswith("step-3") or "/step-3" in normalized
+    is_deepseek = "deepseek" in normalized
     if max_tokens is not None and not is_step_3:
-        controls["max_tokens"] = int(max_tokens)
+        # DeepSeek-family models emit long reasoning traces that share the
+        # max_tokens budget with the final answer; a tight cap lets reasoning
+        # consume everything (finish=length, final_content_empty).  Raise the
+        # ceiling so the final content has room after reasoning completes.
+        controls["max_tokens"] = max(int(max_tokens), 65536) if is_deepseek else int(max_tokens)
     is_glm = normalized.startswith("glm-") or "/glm-" in normalized
     if is_glm and reasoning_mode in {"enabled", "disabled"}:
         controls["thinking"] = {"type": reasoning_mode}

@@ -214,6 +214,125 @@ async def _status(path: str) -> dict:
     return report.model_dump(mode="json")
 
 
+async def _monitor(path: str) -> dict:
+    """Return read-only production progress and current-run diagnostics."""
+    from app.database import async_session_factory
+    from app.models import Chapter, ChapterRun, ChapterStepRun, WritingSession
+    from app.production_pack.service import stable_id
+    from app.services.writing_session_controller import ACTIVE_SESSION_STATUSES
+    from app.services.writing_session_service import session_current_view
+    from sqlalchemy import select
+
+    pack, _ = load_and_validate_pack(path)
+    book_id = stable_id(pack.pack_id, "book", "root")
+    async with async_session_factory() as db:
+        sessions = (
+            await db.execute(
+                select(WritingSession)
+                .where(WritingSession.book_id == book_id)
+                .order_by(WritingSession.created_at.desc(), WritingSession.id.desc())
+                .limit(20)
+            )
+        ).scalars().all()
+        session = next(
+            (item for item in sessions if item.status in ACTIVE_SESSION_STATUSES),
+            sessions[0] if sessions else None,
+        )
+        if session is None:
+            return {
+                "pack_id": pack.pack_id,
+                "book_id": str(book_id),
+                "session": None,
+                "current_run": None,
+                "recent_runs": [],
+            }
+
+        session_view = await session_current_view(db, session)
+        runs = (
+            await db.execute(
+                select(ChapterRun)
+                .where(ChapterRun.writing_session_id == session.id)
+                .order_by(ChapterRun.created_at.desc(), ChapterRun.id.desc())
+                .limit(20)
+            )
+        ).scalars().all()
+        current_run = next(
+            (item for item in runs if item.id == session.current_chapter_run_id),
+            None,
+        )
+        if current_run is None and session.current_chapter_run_id:
+            current_run = (
+                await db.execute(
+                    select(ChapterRun).where(
+                        ChapterRun.id == session.current_chapter_run_id
+                    )
+                )
+            ).scalar_one_or_none()
+
+        chapter = None
+        steps = []
+        if current_run is not None:
+            chapter = (
+                await db.execute(
+                    select(Chapter).where(Chapter.id == current_run.chapter_id)
+                )
+            ).scalar_one_or_none()
+            steps = (
+                await db.execute(
+                    select(ChapterStepRun)
+                    .where(ChapterStepRun.chapter_run_id == current_run.id)
+                    .order_by(ChapterStepRun.created_at.asc())
+                )
+            ).scalars().all()
+
+    def _iso(value):
+        return value.isoformat() if value else None
+
+    def _run_payload(run: ChapterRun) -> dict:
+        return {
+            "run_id": str(run.id),
+            "chapter_no": run.chapter_no,
+            "status": run.status,
+            "current_step": run.current_step,
+            "error_code": run.error_code,
+            "error_detail": run.error_detail,
+            "lease_owner": run.lease_owner,
+            "lease_expires_at": _iso(run.lease_expires_at),
+            "started_at": _iso(run.started_at),
+            "finished_at": _iso(run.finished_at),
+            "created_at": _iso(run.created_at),
+        }
+
+    current_payload = _run_payload(current_run) if current_run else None
+    if current_payload is not None:
+        current_payload["chapter_status"] = chapter.status if chapter else None
+        current_payload["chapter_last_transition_reason"] = (
+            chapter.last_transition_reason if chapter else None
+        )
+        current_payload["steps"] = [
+            {
+                "step_run_id": str(step.id),
+                "step_name": step.step_name,
+                "step_key": step.step_key,
+                "status": step.status,
+                "attempt_no": step.attempt_no,
+                "error_code": step.error_code,
+                "error_detail": step.error_detail,
+                "created_at": _iso(step.created_at),
+                "completed_at": _iso(step.completed_at),
+            }
+            for step in steps
+        ]
+
+    return {
+        "pack_id": pack.pack_id,
+        "book_id": str(book_id),
+        "session": session_view,
+        "current_run": current_payload,
+        "recent_runs": [_run_payload(run) for run in runs],
+    }
+
+
 async def _export(path: str, output: str) -> dict:
     from app.database import async_session_factory
     from app.models import ManuscriptReleaseAudit
@@ -288,6 +407,7 @@ def main() -> int:
             "install",
             "start",
             "status",
+            "monitor",
             "audit",
             "export",
             "scan-output",
@@ -331,6 +451,8 @@ def main() -> int:
             payload = asyncio.run(_start(args.pack, args.reference))
         elif args.command == "status":
             payload = asyncio.run(_status(args.pack))
+        elif args.command == "monitor":
+            payload = asyncio.run(_monitor(args.pack))
         elif args.command == "audit":
             payload = asyncio.run(
                 _audit(

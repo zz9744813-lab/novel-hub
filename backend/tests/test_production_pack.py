@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import importlib.util
+import inspect
 import json
 from pathlib import Path
 import uuid
@@ -155,8 +156,8 @@ def test_restricted_release_runs_model_evidence_before_switching():
     qualification = "production_pack.py qualify"
     assert qualification in release
     assert release.index(qualification) < release.index('switch_to "$release"')
-    assert "validate|qualify|install|start" in release
-    assert "validate|qualify|install|start" in forced
+    assert "validate|qualify|install|start|status|monitor" in release
+    assert "validate|qualify|install|start|status|monitor" in forced
     assert "candidate)" in release
     assert "candidate)" in forced
     assert 'git -C "$release" rev-parse HEAD' in release
@@ -171,6 +172,21 @@ def test_restricted_release_runs_model_evidence_before_switching():
     assert release.index('mv -T "$CURRENT" "$legacy"') < release.index(
         'mv -Tf "$CURRENT.next" "$CURRENT"'
     )
+
+
+def test_production_monitor_is_read_only():
+    spec = importlib.util.spec_from_file_location(
+        "production_pack_monitor_cli_for_test", PRODUCTION_PACK_SCRIPT
+    )
+    assert spec and spec.loader
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+
+    source = inspect.getsource(cli._monitor)
+    assert "session_current_view" in source
+    assert "_touch_advance" not in source
+    assert "control_writing_session" not in source
+    assert "create_writing_session" not in source
 
 
 def test_console_bootstrap_is_pinned_and_never_interprets_the_key_as_shell():

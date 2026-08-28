@@ -832,13 +832,20 @@ async def execute_pipeline(
             outline_node_id=uuid.UUID(outline_data["id"]),
             scene_contracts=scene_contracts,
         )
+        # A service error (provider outage / empty model response) must NOT be
+        # persisted as a succeeded checkpoint: run_step caches the output and
+        # every later dispatch would reuse the failure without ever calling the
+        # model again. Raise so the step is marked failed and retried.
+        if any(isinstance(i, dict) and i.get("severity") == "critical"
+               and i.get("category") == "service_error" for i in (iss or [])):
+            raise RetryableStepError("review_service_error", {"issues": iss[:5]})
         return {"passed": bool(p), "issues": iss or []}
 
     try:
         rev_art = await run_step(
             ctx=ctx,
             step_name="review",
-            step_key=f"review:0:{content_hash(chapter_content)[:16]}",
+            step_key=f"review:v2:{content_hash(chapter_content)[:16]}",
             input_payload={
                 "content_hash": content_hash(chapter_content),
                 "outline_node_id": outline_data["id"],
@@ -1015,6 +1022,9 @@ async def execute_pipeline(
                         outline_node_id=uuid.UUID(outline_data["id"]),
                         scene_contracts=scene_contracts,
                     )
+                    if any(isinstance(i, dict) and i.get("severity") == "critical"
+                           and i.get("category") == "service_error" for i in (iss or [])):
+                        raise RetryableStepError("review_service_error", {"issues": iss[:5]})
                     return {"passed": bool(p), "issues": iss or []}
 
                 try:

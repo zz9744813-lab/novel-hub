@@ -60,6 +60,100 @@ def _required_context(roles: set[str]) -> int:
     return required
 
 
+def _choose_role_assignments(
+    evaluations: dict[tuple[str, str], dict],
+    current_targets: dict[tuple[str, str], set[str]],
+) -> tuple[dict[str, tuple[str, str]], list[dict]]:
+    """Keep a qualified current target, otherwise choose the best replacement.
+
+    Ability and context calls happen before this function.  Selection is pure
+    and deterministic.  A qualified current assignment is preserved so a
+    small synthetic-score difference cannot churn an intentional production
+    choice.  When it fails, highest benchmark score wins and provider/model
+    identity breaks ties.  Missing/stale or context-insufficient evidence is
+    never a candidate.
+    """
+
+    current_by_role = {
+        role: target
+        for target, roles in current_targets.items()
+        for role in roles
+    }
+    assignments: dict[str, tuple[str, str]] = {}
+    unresolved: list[dict] = []
+    for role in sorted(current_by_role):
+        required_context = _required_context({role})
+        candidates: list[tuple[float, bool, str, str]] = []
+        for (provider, model_id), evaluation in evaluations.items():
+            state = evaluation.get("state") or {}
+            detail = (state.get("role_evidence") or {}).get(role) or {}
+            effective_context = (state.get("context_profile") or {}).get("effective")
+            if detail.get("state") != "valid" or not detail.get("passed"):
+                continue
+            if required_context and (
+                effective_context is None or effective_context < required_context
+            ):
+                continue
+            score = detail.get("score")
+            if score is None:
+                continue
+            candidates.append(
+                (
+                    float(score),
+                    (provider, model_id) == current_by_role[role],
+                    provider,
+                    model_id,
+                )
+            )
+        if not candidates:
+            unresolved.append(
+                {
+                    "role": role,
+                    "current_provider": current_by_role[role][0],
+                    "current_model": current_by_role[role][1],
+                    "required_context": required_context or None,
+                    "reason": "no_qualified_evaluated_model",
+                }
+            )
+            continue
+        current_candidate = next((item for item in candidates if item[1]), None)
+        candidates.sort(key=lambda item: (-item[0], item[2], item[3]))
+        _, _, provider, model_id = current_candidate or candidates[0]
+        assignments[role] = (provider, model_id)
+    return assignments, unresolved
+
+
+async def _apply_role_assignments(
+    db,
+    book_id: uuid.UUID,
+    assignments: dict[str, tuple[str, str]],
+) -> list[dict]:
+    service = ModelBindingService(db)
+    changed: list[dict] = []
+    for role, (provider, model_id) in sorted(assignments.items()):
+        binding = await service.get_binding(role, book_id)
+        if binding is None:
+            continue
+        current = (binding.provider, binding.primary_model)
+        if current == (provider, model_id):
+            continue
+        await service.update_binding(
+            binding.id,
+            new_provider=provider,
+            new_model=model_id,
+            reason="replace unqualified production model using reusable evidence",
+            changed_by="production_release",
+        )
+        changed.append(
+            {
+                "role": role,
+                "from": {"provider": current[0], "model": current[1]},
+                "to": {"provider": provider, "model": model_id},
+            }
+        )
+    return changed
+
+
 async def _reconcile_known_model_aliases(db, book_id: uuid.UUID) -> dict:
     """Replace only exact, unavailable legacy IDs with discovered equivalents.
 
@@ -121,12 +215,11 @@ async def _reconcile_known_model_aliases(db, book_id: uuid.UUID) -> dict:
 
 
 async def ensure_configured_model_evidence(pack: ProductionPack) -> dict:
-    """Create/reuse evidence for every model effectively bound to pack roles."""
+    """Create/reuse evidence, then route each role to the best proven model."""
 
-    # Production startup deliberately never mutates bindings.  This CLI is an
-    # explicit release action, so installing only missing env-backed bindings
-    # here preserves that approval boundary while allowing a fresh deployment
-    # to become ready.
+    # Production startup deliberately never mutates bindings.  This command is
+    # the explicit operator-approved release path, so it may reconcile aliases
+    # and select a better *already tested* target before the release switch.
     from app.database import async_session_factory
     from app.main import ensure_required_bindings
     from app.model_eval.engine import (
@@ -140,26 +233,24 @@ async def ensure_configured_model_evidence(pack: ProductionPack) -> dict:
     book_id = stable_id(pack.pack_id, "book", "root")
 
     async with async_session_factory() as db:
-        reconciliation = await _reconcile_known_model_aliases(db, book_id)
+        alias_reconciliation = await _reconcile_known_model_aliases(db, book_id)
         await db.commit()
-    if reconciliation["changed"]:
-        # The first pass synchronized the provider catalogs.  Re-run the cheap
-        # handshake layer against the corrected bindings; fresh successful
-        # probes are reused and therefore do not repeat network work.
+    if alias_reconciliation["changed"]:
         bootstrap = await bootstrap_catalog_and_probes()
-    bootstrap["binding_reconciliation"] = reconciliation
+    bootstrap["binding_reconciliation"] = alias_reconciliation
 
     async with async_session_factory() as db:
-        targets, missing_bindings = await _effective_targets(db, book_id)
+        initial_targets, missing_bindings = await _effective_targets(db, book_id)
 
-    blockers: list[dict] = [
-        {"code": "MODEL_BINDING_MISSING", "role": role}
-        for role in missing_bindings
-    ]
-    model_reports: list[dict] = []
+    # Every successfully qualified configured model gets one context profile.
+    # This lets the role selector compare candidates without launching a new
+    # long-context test merely because a later binding moves between roles.
+    all_role_context = _required_context(set(required_roles()))
     total_gateway_calls = 0
+    evaluations: dict[tuple[str, str], dict] = {}
+    gate_errors: dict[tuple[str, str], dict] = {}
 
-    for (provider, model_id), roles in sorted(targets.items()):
+    for (provider, model_id), roles in sorted(initial_targets.items()):
         async with async_session_factory() as db:
             catalog = (
                 await db.execute(
@@ -172,14 +263,9 @@ async def ensure_configured_model_evidence(pack: ProductionPack) -> dict:
                 )
             ).scalar_one_or_none()
             if catalog is None:
-                blockers.append(
-                    {
-                        "code": "CONFIGURED_MODEL_NOT_DISCOVERED",
-                        "provider": provider,
-                        "model": model_id,
-                        "roles": sorted(roles),
-                    }
-                )
+                gate_errors[(provider, model_id)] = {
+                    "code": "CONFIGURED_MODEL_NOT_DISCOVERED",
+                }
                 continue
             snapshot = (
                 await db.execute(
@@ -189,24 +275,15 @@ async def ensure_configured_model_evidence(pack: ProductionPack) -> dict:
                 )
             ).scalar_one_or_none()
             if not catalog.text_generation_eligible or not catalog.auto_route_enabled:
-                blockers.append(
-                    {
-                        "code": "CONFIGURED_TEXT_HANDSHAKE_FAILED",
-                        "provider": provider,
-                        "model": model_id,
-                        "roles": sorted(roles),
-                    }
-                )
+                gate_errors[(provider, model_id)] = {
+                    "code": "CONFIGURED_TEXT_HANDSHAKE_FAILED",
+                }
                 continue
             if snapshot is None or snapshot.health_status != "healthy":
-                blockers.append(
-                    {
-                        "code": "CONFIGURED_MODEL_UNHEALTHY",
-                        "provider": provider,
-                        "model": model_id,
-                        "health_status": snapshot.health_status if snapshot else "missing",
-                    }
-                )
+                gate_errors[(provider, model_id)] = {
+                    "code": "CONFIGURED_MODEL_UNHEALTHY",
+                    "health_status": snapshot.health_status if snapshot else "missing",
+                }
                 continue
 
             ability_run = ModelEvalRun(
@@ -221,11 +298,10 @@ async def ensure_configured_model_evidence(pack: ProductionPack) -> dict:
             total_gateway_calls += int(ability.get("gateway_calls") or 0)
 
             context = None
-            required_context = _required_context(roles)
             if (
                 ability.get("status") == "succeeded"
                 and ability.get("execution_complete")
-                and required_context
+                and all_role_context
             ):
                 context_run = ModelEvalRun(
                     id=uuid.uuid4(),
@@ -245,86 +321,170 @@ async def ensure_configured_model_evidence(pack: ProductionPack) -> dict:
 
             await db.refresh(catalog)
             state = await get_catalog_evidence_state(db, catalog)
-            role_failures = [
-                role
-                for role in sorted(roles)
-                if (state.get("role_evidence") or {}).get(role, {}).get("state")
-                != "valid"
-                or not (state.get("role_evidence") or {}).get(role, {}).get("passed")
-            ]
-            effective_context = (
-                (state.get("context_profile") or {}).get("effective")
-            )
-            if role_failures:
-                blockers.append(
-                    {
-                        "code": "MODEL_ROLE_QUALIFICATION_FAILED",
-                        "provider": provider,
-                        "model": model_id,
-                        "roles": role_failures,
-                    }
-                )
-            if required_context and (
-                effective_context is None or effective_context < required_context
-            ):
-                blockers.append(
-                    {
-                        "code": "MODEL_CONTEXT_INSUFFICIENT",
-                        "provider": provider,
-                        "model": model_id,
-                        "required_context": required_context,
-                        "effective_context": effective_context,
-                    }
-                )
+            evaluations[(provider, model_id)] = {
+                "provider": provider,
+                "model": model_id,
+                "initial_roles": sorted(roles),
+                "ability": ability,
+                "context": context,
+                "state": state,
+            }
 
-            model_reports.append(
+    assignments, routing_unresolved = _choose_role_assignments(
+        evaluations,
+        initial_targets,
+    )
+    current_by_role = {
+        role: target
+        for target, roles in initial_targets.items()
+        for role in roles
+    }
+    changed_assignments = {
+        role: target
+        for role, target in assignments.items()
+        if current_by_role.get(role) != target
+    }
+    async with async_session_factory() as db:
+        routing_changed = await _apply_role_assignments(
+            db,
+            book_id,
+            changed_assignments,
+        )
+        await db.commit()
+    async with async_session_factory() as db:
+        final_targets, final_missing = await _effective_targets(db, book_id)
+
+    blockers: list[dict] = [
+        {"code": "MODEL_BINDING_MISSING", "role": role}
+        for role in sorted(set(missing_bindings) | set(final_missing))
+    ]
+    for (provider, model_id), roles in sorted(final_targets.items()):
+        evaluation = evaluations.get((provider, model_id))
+        if evaluation is None:
+            error = gate_errors.get((provider, model_id)) or {
+                "code": "CONFIGURED_MODEL_NOT_EVALUATED",
+            }
+            blockers.append(
                 {
+                    **error,
                     "provider": provider,
                     "model": model_id,
                     "roles": sorted(roles),
-                    "ability_state": (state.get("ability") or {}).get("state"),
-                    "ability_reused": bool(ability.get("reused")),
-                    "ability_gateway_calls": int(ability.get("gateway_calls") or 0),
-                    "ability_result": {
-                        "status": ability.get("status"),
-                        "error": ability.get("error"),
-                        "reuse_reason": ability.get("reuse_reason"),
-                    },
-                    "context_state": (state.get("context") or {}).get("state"),
-                    "context_reused": bool((context or {}).get("reused")),
-                    "context_gateway_calls": int((context or {}).get("gateway_calls") or 0),
+                }
+            )
+            continue
+        state = evaluation["state"]
+        role_failures = [
+            role
+            for role in sorted(roles)
+            if (state.get("role_evidence") or {}).get(role, {}).get("state")
+            != "valid"
+            or not (state.get("role_evidence") or {}).get(role, {}).get("passed")
+        ]
+        required_context = _required_context(roles)
+        effective_context = (state.get("context_profile") or {}).get("effective")
+        if role_failures:
+            blockers.append(
+                {
+                    "code": "MODEL_ROLE_QUALIFICATION_FAILED",
+                    "provider": provider,
+                    "model": model_id,
+                    "roles": role_failures,
+                }
+            )
+        if required_context and (
+            effective_context is None or effective_context < required_context
+        ):
+            blockers.append(
+                {
+                    "code": "MODEL_CONTEXT_INSUFFICIENT",
+                    "provider": provider,
+                    "model": model_id,
+                    "required_context": required_context,
                     "effective_context": effective_context,
-                    "required_context": required_context or None,
-                    "role_scores": {
-                        role: {
-                            "state": detail.get("state"),
-                            "score": detail.get("score"),
-                            "passed": bool(detail.get("passed")),
-                            "evidence_role": detail.get("evidence_role"),
-                        }
-                        for role, detail in sorted(
-                            (state.get("role_evidence") or {}).items()
-                        )
-                    },
                 }
             )
 
+    model_reports: list[dict] = []
+    for (provider, model_id), evaluation in sorted(evaluations.items()):
+        state = evaluation["state"]
+        ability = evaluation["ability"]
+        context = evaluation["context"]
+        final_roles = sorted(final_targets.get((provider, model_id), set()))
+        required_context = _required_context(set(final_roles))
+        effective_context = (state.get("context_profile") or {}).get("effective")
+        ability_roles = ability.get("roles") or {}
+        role_scores = {}
+        for role, detail in sorted((state.get("role_evidence") or {}).items()):
+            evidence_role = detail.get("evidence_role") or role
+            qualification = ability_roles.get(evidence_role) or {}
+            role_scores[role] = {
+                "state": detail.get("state"),
+                "score": detail.get("score"),
+                "passed": bool(detail.get("passed")),
+                "evidence_role": evidence_role,
+                "role_score": qualification.get("role_score"),
+                "core_score": qualification.get("core_score"),
+                "threshold": qualification.get("threshold"),
+                "passed_cases": qualification.get("passed_cases"),
+                "total_cases": qualification.get("total_cases"),
+                "case_floor_passed": qualification.get("case_floor_passed"),
+                "core_floor_passed": qualification.get("core_floor_passed"),
+            }
+        model_reports.append(
+            {
+                "provider": provider,
+                "model": model_id,
+                "initial_roles": evaluation["initial_roles"],
+                "roles": final_roles,
+                "ability_state": (state.get("ability") or {}).get("state"),
+                "ability_reused": bool(ability.get("reused")),
+                "ability_gateway_calls": int(ability.get("gateway_calls") or 0),
+                "ability_result": {
+                    "status": ability.get("status"),
+                    "error": ability.get("error"),
+                    "reuse_reason": ability.get("reuse_reason"),
+                },
+                "context_state": (state.get("context") or {}).get("state"),
+                "context_reused": bool((context or {}).get("reused")),
+                "context_gateway_calls": int((context or {}).get("gateway_calls") or 0),
+                "effective_context": effective_context,
+                "required_context": required_context or None,
+                "role_scores": role_scores,
+            }
+        )
+
     return {
-        "passed": bool(model_reports) and not blockers,
+        "passed": bool(final_targets) and not blockers,
         "pack_id": pack.pack_id,
         "pack_revision": pack.revision,
         "bootstrap": bootstrap,
+        "routing_reconciliation": {
+            "changed": routing_changed,
+            "unresolved": routing_unresolved,
+            "selected": [
+                {
+                    "role": role,
+                    "provider": target[0],
+                    "model": target[1],
+                }
+                for role, target in sorted(assignments.items())
+            ],
+        },
         "models": model_reports,
         "blockers": blockers,
         "counts": {
-            "configured_models": len(targets),
-            "evaluated_models": len(model_reports),
+            "configured_models": len(final_targets),
+            "evaluated_models": len(evaluations),
             "gateway_calls": total_gateway_calls,
             "reused_models": sum(
                 1
-                for item in model_reports
-                if item["ability_reused"]
-                and (item["required_context"] is None or item["context_reused"])
+                for item in evaluations.values()
+                if item["ability"].get("reused")
+                and (
+                    not all_role_context
+                    or bool((item.get("context") or {}).get("reused"))
+                )
             ),
         },
     }

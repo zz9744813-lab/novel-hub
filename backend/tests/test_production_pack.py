@@ -296,6 +296,76 @@ async def test_production_qualification_reuses_current_evidence_without_calls():
     context.assert_awaited_once()
 
 
+def test_release_routing_selects_highest_qualified_model_and_respects_context():
+    from app.production_pack.model_evidence import _choose_role_assignments
+
+    def evaluation(*, style_score, style_passed, planner_score, context):
+        return {
+            "state": {
+                "role_evidence": {
+                    "style_analyzer": {
+                        "state": "valid",
+                        "passed": style_passed,
+                        "score": style_score,
+                    },
+                    "chapter_planner": {
+                        "state": "valid",
+                        "passed": True,
+                        "score": planner_score,
+                    },
+                },
+                "context_profile": {"effective": context},
+            }
+        }
+
+    current = {
+        ("new-api", "deepseek"): {"style_analyzer", "chapter_planner"},
+        ("new-api", "step"): set(),
+    }
+    assignments, unresolved = _choose_role_assignments(
+        {
+            ("new-api", "deepseek"): evaluation(
+                style_score=91,
+                style_passed=False,
+                planner_score=88,
+                context=128_000,
+            ),
+            ("new-api", "step"): evaluation(
+                style_score=96,
+                style_passed=True,
+                planner_score=99,
+                context=32_000,
+            ),
+        },
+        current,
+    )
+
+    assert unresolved == []
+    assert assignments["style_analyzer"] == ("new-api", "step")
+    # Step has the higher planner score but not enough measured context.
+    assert assignments["chapter_planner"] == ("new-api", "deepseek")
+
+
+def test_release_routing_keeps_current_model_on_an_exact_score_tie():
+    from app.production_pack.model_evidence import _choose_role_assignments
+
+    state = {
+        "role_evidence": {
+            "review_agent": {"state": "valid", "passed": True, "score": 90},
+        },
+        "context_profile": {"effective": 128_000},
+    }
+    assignments, unresolved = _choose_role_assignments(
+        {
+            ("new-api", "alpha"): {"state": state},
+            ("new-api", "current"): {"state": state},
+        },
+        {("new-api", "current"): {"review_agent"}},
+    )
+    assert unresolved == []
+    assert assignments["review_agent"] == ("new-api", "current")
+
+
 @pytest.mark.asyncio
 async def test_release_reconciles_only_allowlisted_alias_to_discovered_model():
     from types import SimpleNamespace

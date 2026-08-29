@@ -55,6 +55,16 @@ REVIEW_MAX_RETRYABLE_ATTEMPTS = 2
 REVIEW_RETRY_EXHAUSTED_CODE = "review_service_retry_exhausted"
 
 
+def review_result_payload(passed: bool, issues: list | None) -> dict:
+    """Shared output shape for initial review and re-review.
+
+    Both review wrappers return through this helper; classification
+    (quality rejection vs service failure vs outline_missing) and
+    persistence happen in run_step(validate_fn=validate_review_output).
+    """
+    return {"passed": bool(passed), "issues": issues or []}
+
+
 def validate_review_output(output: Any) -> dict:
     """Validate-before-persist gate for both review paths.
 
@@ -63,6 +73,9 @@ def validate_review_output(output: Any) -> dict:
     review verdict is a service failure and must never be cached:
     - outline_missing  -> permanent (data/precondition error, no retry);
     - other service errors -> retryable (bounded by the caller).
+
+    outline_missing takes precedence over other service errors regardless of
+    issue order, so the classification is deterministic.
     """
     if not isinstance(output, dict) or "passed" not in output:
         raise RetryableStepError(
@@ -77,10 +90,11 @@ def validate_review_output(output: Any) -> dict:
             "outline" in message.lower() and "missing" in message.lower()
         ):
             raise PermanentStepError("outline_missing", {"issue": message})
-        if issue.get("category") == "service_error":
+    for issue in issues:
+        if isinstance(issue, dict) and issue.get("category") == "service_error":
             raise RetryableStepError(
                 str(issue.get("issue_id") or "review_service_failure"),
-                {"message": message[:300]},
+                {"message": str(issue.get("message") or "")[:300]},
             )
     return output
 
@@ -870,14 +884,11 @@ async def execute_pipeline(
             outline_node_id=uuid.UUID(outline_data["id"]),
             scene_contracts=scene_contracts,
         )
-        # A service error (provider outage / empty model response) must NOT be
-        # persisted as a succeeded checkpoint: run_step caches the output and
-        # every later dispatch would reuse the failure without ever calling the
-        # model again. Raise so the step is marked failed and retried.
-        if any(isinstance(i, dict) and i.get("severity") == "critical"
-               and i.get("category") == "service_error" for i in (iss or [])):
-            raise RetryableStepError("review_service_error", {"issues": iss[:5]})
-        return {"passed": bool(p), "issues": iss or []}
+        # Classification (service error / outline_missing / quality rejection)
+        # is owned by validate_review_output inside run_step, so a service
+        # failure can never be persisted as a succeeded checkpoint and
+        # outline_missing is permanent instead of retried.
+        return review_result_payload(p, iss)
 
     try:
         rev_art = await run_step(
@@ -1063,10 +1074,8 @@ async def execute_pipeline(
                         outline_node_id=uuid.UUID(outline_data["id"]),
                         scene_contracts=scene_contracts,
                     )
-                    if any(isinstance(i, dict) and i.get("severity") == "critical"
-                           and i.get("category") == "service_error" for i in (iss or [])):
-                        raise RetryableStepError("review_service_error", {"issues": iss[:5]})
-                    return {"passed": bool(p), "issues": iss or []}
+                    # Same classification contract as the initial review.
+                    return review_result_payload(p, iss)
 
                 try:
                     rr_art = await run_step(

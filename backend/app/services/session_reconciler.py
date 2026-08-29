@@ -17,7 +17,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.database import async_session_factory
 from app.editorial.session_metrics import count_editorial_backlog
-from app.models import ChapterRun, SessionAdvanceOutbox, WritingSession
+from app.models import Chapter, ChapterRun, SessionAdvanceOutbox, WritingSession
+from app.engine.state_transition import transition_chapter
+from app.state_machine import ChapterState
 from app.services.writing_session_controller import (
     ACTIVE_RUN_STATUSES,
     ACTIVE_SESSION_STATUSES,
@@ -46,6 +48,49 @@ def chapter_run_is_stale(run: ChapterRun, now: datetime) -> bool:
     if last_seen.tzinfo is None:
         last_seen = last_seen.replace(tzinfo=timezone.utc)
     return last_seen < now - timedelta(seconds=RUN_STALE_GRACE_SECONDS)
+
+
+async def _fail_chapter_of_orphaned_run(
+    db,
+    run: ChapterRun | None,
+    chapter_id,
+    *,
+    reason: str,
+) -> bool:
+    """Sync the chapter to a legal failed state when its run is orphaned.
+
+    Terminalizing only the ChapterRun while the Chapter stays in an
+    intermediate state (e.g. reviewing) is the production P0 that blinded the
+    next-chapter selector and recreated chapter 1 in a loop. The transition
+    goes through transition_chapter() in the SAME transaction, leaving a
+    ChapterStateEvent with actor/reason/run_id as audit evidence. Finalized
+    chapters are never regressed; an already-failed chapter gets no duplicate
+    event.
+    """
+    if chapter_id is None:
+        return False
+    chapter = (
+        await db.execute(select(Chapter).where(Chapter.id == chapter_id).with_for_update())
+    ).scalar_one_or_none()
+    if chapter is None:
+        return False
+    current = chapter.status or "queued"
+    if current in (ChapterState.FINALIZED.value, ChapterState.FAILED.value):
+        return False
+    await transition_chapter(
+        chapter.id,
+        ChapterState.FAILED,
+        reason=reason,
+        actor="session_reconciler",
+        run_id=run.id if run is not None else None,
+        db=db,
+    )
+    logger.warning(
+        "reconciler synced chapter %s to failed (orphaned run %s)",
+        chapter.id,
+        run.id if run is not None else None,
+    )
+    return True
 
 
 async def reconcile_sessions() -> dict:
@@ -101,6 +146,15 @@ async def reconcile_sessions() -> dict:
                         )
                     ).scalar_one_or_none()
                     if run is None:
+                        # The run row is gone but the chapter may still sit in
+                        # an intermediate state — sync it before clearing the
+                        # pointer so the selector can see and resume it.
+                        await _fail_chapter_of_orphaned_run(
+                            db,
+                            None,
+                            session.current_chapter_id,
+                            reason="chapter run row vanished while chapter in progress",
+                        )
                         session.current_chapter_run_id = None
                         session.current_chapter_id = None
                         session.current_chapter_no = None
@@ -141,9 +195,16 @@ async def reconcile_sessions() -> dict:
                         # An unhandled worker exception used to leave the run
                         # as RUNNING after its lease disappeared.  Such a row
                         # blocks the session forever and is never eligible for
-                        # chapter outbox backfill.  Terminalize it, then let the
-                        # normal session outbox/controller recovery path decide
+                        # chapter outbox backfill.  Terminalize it, keep the
+                        # chapter in lockstep (failed), then let the normal
+                        # session outbox/controller recovery path decide
                         # whether to retry the chapter.
+                        await _fail_chapter_of_orphaned_run(
+                            db,
+                            run,
+                            run.chapter_id,
+                            reason="orphaned chapter run terminalized: running row lost its worker lease",
+                        )
                         run.status = "failed"
                         run.error_code = run.error_code or "orphaned_chapter_run"
                         run.error_detail = run.error_detail or {
@@ -155,9 +216,10 @@ async def reconcile_sessions() -> dict:
                         repaired += 1
                         touched += 1
                         logger.warning(
-                            "terminalized stale chapter run id=%s session=%s",
+                            "terminalized stale chapter run id=%s session=%s chapter=%s",
                             run.id,
                             session.id,
+                            run.chapter_id,
                         )
                     elif run.status not in ACTIVE_RUN_STATUSES | {"paused"}:
                         # terminal-but-uncleaned run: nudge controller to clear pointer

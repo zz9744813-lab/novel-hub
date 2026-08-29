@@ -9,7 +9,7 @@ import pytest
 import app.database  # conftest patches module
 from sqlalchemy import select, text
 
-from app.models import Book, Chapter, ChapterRun, ChapterStepRun
+from app.models import Book, Chapter, ChapterRun, ChapterStepRun, OutlineVersion
 from app.prompt_runtime import PromptCompileError
 from app.engine.step_runner import (
     RunContext,
@@ -56,18 +56,23 @@ async def _fresh_run(book, ch):
 
 
 async def _book_chapter():
+    """Seed a self-contained book so the one-active-run partial index can
+    never collide with rows left behind by other tests in the shared DB."""
     try:
         async with app.database.async_session_factory() as db:
-            book = (await db.execute(select(Book).limit(1))).scalar_one_or_none()
-            if not book:
-                pytest.skip("no book")
-            ch = (
-                await db.execute(
-                    select(Chapter).where(Chapter.book_id == book.id).limit(1)
-                )
-            ).scalar_one_or_none()
-            if not ch:
-                pytest.skip("no chapter")
+            book = Book(id=uuid.uuid4(), title="step-runner 测试书")
+            db.add(book)
+            ov = OutlineVersion(id=uuid.uuid4(), book_id=book.id, version=1, status="approved")
+            db.add(ov)
+            ch = Chapter(
+                id=uuid.uuid4(),
+                book_id=book.id,
+                chapter_no=1,
+                outline_node_id=uuid.uuid4(),
+                status="queued",
+            )
+            db.add(ch)
+            await db.commit()
             return book, ch
     except Exception as e:  # no DB in local env -> skip like other DB tests
         msg = str(e).lower()

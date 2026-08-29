@@ -151,6 +151,26 @@ async def find_reusable_checkpoint(
         return result.scalar_one_or_none()
 
 
+async def count_failed_steps(
+    chapter_run_id: uuid.UUID,
+    step_key: str,
+    error_codes: list[str],
+) -> int:
+    """Count prior failed attempts for one step key and error codes."""
+    async with async_session_factory() as db:
+        result = await db.execute(
+            select(func.count())
+            .select_from(ChapterStepRun)
+            .where(
+                ChapterStepRun.chapter_run_id == chapter_run_id,
+                ChapterStepRun.step_key == step_key,
+                ChapterStepRun.status == "failed",
+                ChapterStepRun.error_code.in_(error_codes),
+            )
+        )
+        return int(result.scalar() or 0)
+
+
 async def _next_attempt_no(db, chapter_run_id: uuid.UUID, step_key: str) -> int:
     n = (
         await db.execute(
@@ -319,6 +339,8 @@ async def run_step(
     execute_fn: Callable[[dict], Awaitable[Any]],
     validate_fn: Callable[[Any], Any] | None = None,
     skip_if_no_run: bool = True,
+    max_retryable_attempts: int | None = None,
+    retry_exhausted_code: str | None = None,
 ) -> StepArtifact:
     """Run one step with checkpoint reuse (INV-07).
 
@@ -392,6 +414,15 @@ async def run_step(
         raise
     except RetryableStepError as exc:
         await persist_failure(step.id, error_code=exc.code, error_detail=exc.detail)
+        if max_retryable_attempts is not None and retry_exhausted_code:
+            prior = await count_failed_steps(
+                ctx.run_id, step_key, [exc.code]
+            )
+            if prior >= max_retryable_attempts:
+                raise PermanentStepError(
+                    retry_exhausted_code,
+                    {"code": exc.code, "attempts": prior},
+                ) from exc
         raise
     except PermanentStepError as exc:
         await persist_failure(step.id, error_code=exc.code, error_detail=exc.detail)

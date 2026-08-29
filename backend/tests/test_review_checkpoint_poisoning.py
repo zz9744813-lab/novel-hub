@@ -33,7 +33,11 @@ def test_do_review_returns_payload_only_for_real_reviews():
 
 def test_review_step_key_bumped_past_poisoned_version():
     """The outer review step_key must no longer be `review:0:` so that
-    checkpoints poisoned by the cached service failure no longer match."""
+    checkpoints poisoned by the cached service failure no longer match.
+    Acceptance plan §6.4: version lives in REVIEW_CHECKPOINT_VERSION with
+    v1 initial/rN key naming."""
     src = inspect.getsource(pipeline_mod)
     assert 'review:0:' not in src
-    assert 'review:v2:' in src
+    assert 'REVIEW_CHECKPOINT_VERSION' in src
+    assert 'review:v{REVIEW_CHECKPOINT_VERSION}:initial:' in src
+    assert 'review:v{REVIEW_CHECKPOINT_VERSION}:r{retry_round}:' in src

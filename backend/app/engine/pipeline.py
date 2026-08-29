@@ -6,6 +6,7 @@ LLM calls happen BETWEEN sessions — no DB connection held during API waits.
 import uuid
 import json
 import logging
+from typing import Any
 from sqlalchemy import select
 from app.database import async_session_factory
 from app.state_machine import ChapterState
@@ -45,6 +46,43 @@ import os
 import socket
 
 logger = logging.getLogger("novelforge.pipeline")
+
+
+# Review checkpoints are versioned so a poisoned legacy checkpoint can
+# never be reused by a new review implementation (acceptance plan §6.4).
+REVIEW_CHECKPOINT_VERSION = 1
+REVIEW_MAX_RETRYABLE_ATTEMPTS = 2
+REVIEW_RETRY_EXHAUSTED_CODE = "review_service_retry_exhausted"
+
+
+def validate_review_output(output: Any) -> dict:
+    """Validate-before-persist gate for both review paths.
+
+    A real quality rejection (passed=False + quality/style issues) is a
+    legitimate review result and becomes a succeeded checkpoint. A missing
+    review verdict is a service failure and must never be cached:
+    - outline_missing  -> permanent (data/precondition error, no retry);
+    - other service errors -> retryable (bounded by the caller).
+    """
+    if not isinstance(output, dict) or "passed" not in output:
+        raise RetryableStepError(
+            "review_invalid_payload", {"received": str(type(output))}
+        )
+    issues = output.get("issues") or []
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        message = str(issue.get("message") or issue.get("issue_id") or "")
+        if issue.get("issue_id") == "outline_missing" or (
+            "outline" in message.lower() and "missing" in message.lower()
+        ):
+            raise PermanentStepError("outline_missing", {"issue": message})
+        if issue.get("category") == "service_error":
+            raise RetryableStepError(
+                str(issue.get("issue_id") or "review_service_failure"),
+                {"message": message[:300]},
+            )
+    return output
 
 
 async def _set_chapter_status(
@@ -845,13 +883,16 @@ async def execute_pipeline(
         rev_art = await run_step(
             ctx=ctx,
             step_name="review",
-            step_key=f"review:v2:{content_hash(chapter_content)[:16]}",
+            step_key=f"review:v{REVIEW_CHECKPOINT_VERSION}:initial:{content_hash(chapter_content)[:16]}",
             input_payload={
                 "content_hash": content_hash(chapter_content),
                 "outline_node_id": outline_data["id"],
                 "word_count": word_count,
             },
             execute_fn=_do_review,
+            validate_fn=validate_review_output,
+            max_retryable_attempts=REVIEW_MAX_RETRYABLE_ATTEMPTS,
+            retry_exhausted_code=REVIEW_RETRY_EXHAUSTED_CODE,
         )
         rev = rev_art.output if isinstance(rev_art.output, dict) else {}
         passed = bool(rev.get("passed"))
@@ -1031,13 +1072,16 @@ async def execute_pipeline(
                     rr_art = await run_step(
                         ctx=ctx,
                         step_name="review",
-                        step_key=f"review:r{retry_round}:{content_hash(chapter_content)[:16]}",
+                        step_key=f"review:v{REVIEW_CHECKPOINT_VERSION}:r{retry_round}:{content_hash(chapter_content)[:16]}",
                         input_payload={
                             "content_hash": content_hash(chapter_content),
                             "round": retry_round,
                             "after_patch": True,
                         },
                         execute_fn=_do_rereview,
+                        validate_fn=validate_review_output,
+                        max_retryable_attempts=REVIEW_MAX_RETRYABLE_ATTEMPTS,
+                        retry_exhausted_code=REVIEW_RETRY_EXHAUSTED_CODE,
                     )
                 except ControlRequestedError as e:
                     await _set_chapter_status(

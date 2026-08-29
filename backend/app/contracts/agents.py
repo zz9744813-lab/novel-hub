@@ -128,6 +128,7 @@ class PatchContract(StrictModel):
 
 class ExtractEventContract(StrictModel):
     event_key: str | None = None
+    realized_provisional_event_key: str | None = None
     entity_type: str | None = None
     entity_id: str | None = None
     field: str | None = None
@@ -145,10 +146,32 @@ class ExtractEventContract(StrictModel):
     object_entity_ids: list[Any] | None = None
 
 
+class ReactionEvidenceContract(StrictModel):
+    reaction_key: str | None = None
+    character_id: str | None = None
+    scene_no: int | None = None
+    evidence_paragraph_key: str | None = None
+    reaction_summary: str | None = None
+    weight: float | None = None
+
+
+class ReactionAttributionContract(StrictModel):
+    reaction_key: str | None = None
+    cause_event_keys: list[str] | None = None
+    core_anchor_ids: list[str] | None = None
+    belief_keys: list[str] | None = None
+    goal_keys: list[str] | None = None
+    relationship_refs: list[str] | None = None
+    status: str | None = None
+    reason: str | None = None
+
+
 class StateExtractContract(StrictModel):
     events: list[ExtractEventContract] = Field(default_factory=list)
     conflicts: list[Any] = Field(default_factory=list)
     l1_chapter_ledger: dict[str, Any] | None = None
+    reaction_evidence: list[ReactionEvidenceContract] = Field(default_factory=list)
+    attributions: list[ReactionAttributionContract] = Field(default_factory=list)
 
 
 # ── query / rank / outline / drift ──────────────────────────────────

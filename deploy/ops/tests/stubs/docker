@@ -45,6 +45,12 @@ args=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --env-file)
+      # P0-A: a missing env file makes REAL compose fail before build; the
+      # stub must fail the same way or the tests stay green on broken flows.
+      if [ ! -f "$2" ]; then
+        echo "stub-docker: env file missing: $2" >&2
+        exit 70
+      fi
       envfiles="$envfiles:$2"
       shift 2
       ;;
@@ -108,6 +114,7 @@ run_oneoff() {
         # tests can prove which credentials a candidate one-off would see.
         envfile=${envfiles#:}
         envfile=${envfile%%:*}
+    # shellcheck disable=SC1090
         [ -n "$envfile" ] && . "$envfile"
         key_value=$(eval "printf '%s' \"\${$STUB_ENV_PROBE_KEY:-}\"")
         printf '{"validation":{"passed":true},"model_evidence":{"passed":true,"observed":{"%s":"%s"}},"passed":true}\n' \

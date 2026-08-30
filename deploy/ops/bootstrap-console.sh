@@ -8,6 +8,7 @@ readonly RAW_BASE=https://raw.githubusercontent.com/zz9744813-lab/novel-hub
 # The ops commit to bootstrap MUST be provided explicitly (40-hex, on main).
 # A hardcoded commit here would silently reinstall stale controllers.
 readonly OPS_COMMIT=${OPS_COMMIT:?set OPS_COMMIT to the 40-hex main commit whose deploy/ops controllers should be installed}
+[[ $OPS_COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "OPS_COMMIT must be 40 lowercase hex characters" >&2; exit 64; }
 # This is a public key, not a credential. Keeping the dedicated operator key
 # here removes the last long, mixed-case argument from unreliable noVNC paste.
 readonly DEFAULT_KEY_BODY=AAAAC3NzaC1lZDI1NTE5AAAAIJgT3xuYobfW7EuxqF8exL8bgfbGKCSa/9ORDivDzZjM

@@ -8,7 +8,7 @@
 # Output contract (acceptance §10.2-14): the final line is exactly
 #   SCENARIOS=14 PASSED=<n> FAILED=<n>
 # where every scenario maps to the rework task §10.2 items.
-set -u
+set -Eeuo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../../.." && pwd)"
@@ -18,7 +18,10 @@ UPGRADER="$REPO_ROOT/deploy/ops/upgrade-controller.sh"
 SCENARIOS=0
 PASSED=0
 FAILED=0
-CURRENT_FAILED=0
+SBIN_BEFORE="unset"
+if [ "$(id -u)" = "0" ]; then
+  SBIN_BEFORE="$(sha256sum /usr/local/sbin/novelforge-release /usr/local/sbin/novelforge-ops 2>/dev/null | sha256sum | cut -d' ' -f1)"
+fi
 CURRENT_TEST=""
 
 # Scriptable stub behaviour (defaults; scenarios override before run_controller)
@@ -45,22 +48,24 @@ CONF=""
 
 say() { printf '%s\n' "$*"; }
 
+assert_fail_record() { # $1=label $2=detail
+  printf '%s -- %s
+' "$1" "${2:-}" >>"$SANDBOX/assert-failures"
+  say "  assert-fail: $1 (${2:-})"
+}
 assert_eq() { # got expected label
   if [ "$1" = "$2" ]; then return 0; fi
-  CURRENT_FAILED=$((CURRENT_FAILED + 1))
-  say "  assert-fail: $3 (got: '$1', want: '$2')"
+  assert_fail_record "$3" "got '$1', want '$2'"
   return 0
 }
-assert_contains() { # file-or-string needle label
+assert_contains() { # content needle label
   if printf '%s' "$1" | grep -qF -- "$2"; then return 0; fi
-  CURRENT_FAILED=$((CURRENT_FAILED + 1))
-  say "  assert-fail: $3 (missing '$2')"
+  assert_fail_record "$3" "missing '$2'"
   return 0
 }
 assert_not_contains() {
   if printf '%s' "$1" | grep -qF -- "$2"; then
-    CURRENT_FAILED=$((CURRENT_FAILED + 1))
-    say "  assert-fail: $3 (unexpected '$2')"
+    assert_fail_record "$3" "unexpected '$2'"
   fi
   return 0
 }
@@ -358,23 +363,6 @@ s05_env_rotation_reject_and_reread() {
   assert_eq "$(envelope_state "$SHA1")" "passed" "re-candidate re-passed"
 }
 
-real_compose_config_check() {
-  # Acceptance §10.3: validate the REAL merged config with the REAL compose
-  # CLI when available (config is client-side; no daemon needed).
-  command -v docker-compose >/dev/null 2>&1 || return 0
-  local tag=$1 old_env=$SHARED/.env
-  printf 'POSTGRES_USER=u
-POSTGRES_PASSWORD=p
-POSTGRES_DB=d
-DOMAIN=x
-PRIMARY_BASE_URL=h
-PRIMARY_API_KEY=k
-ADMIN_API_TOKEN=t
-'     >"$(release_env_dir)/.env.check"
-  CANDIDATE_ATTEMPT="$tag" docker-compose     --env-file "$old_env"     -p "novelforge-candidate-$tag"     -f "$REPO_ROOT/deploy/docker-compose.yml"     -f "$REPO_ROOT/deploy/docker-compose.candidate.yml"     config >"$SANDBOX/merged.yml" 2>/dev/null || return 1
-  return 0
-}
-
 s06_no_production_writable_mounts() {
   new_sandbox
   local cfg
@@ -393,18 +381,40 @@ s06_no_production_writable_mounts() {
   assert_not_contains "$cfg" "novelforge_internal" "production network absent"
 
   # Real-CLI structural check (skipped when docker-compose is absent):
-  # the merged config must reference the production data dir ONLY read-only.
-  if real_compose_config_check "realcheck"; then
-    local merged="$SANDBOX/merged.yml"
-    if grep -q "novelforge_internal" "$merged"; then
-      CURRENT_FAILED=$((CURRENT_FAILED + 1))
-      say "  assert-fail: real merged config contains the production network"
+  # render the merged config THROUGH the real controller wrapper
+  # (compose_candidate), not through a copy of the command (§4.4).
+  if command -v docker-compose >/dev/null 2>&1; then
+    local attempt rendered
+    attempt=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee
+    local rendered
+    rendered=$(
+      (
+        export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        export NOVELFORGE_CONTROLLER_SOURCABLE=1
+        export NOVELFORGE_ROOT="$ROOT" NOVELFORGE_CONF="$CONF"
+        export NOVELFORGE_LOCK="$ROOT/lock/nf.lock"
+        export REPOSITORY_URL="$SRC" DEPLOY_BRANCH=main
+        export HEALTH_URL="http://127.0.0.1:1/health/ready"
+        # shellcheck disable=SC1090  # controller path is the test subject
+        source "$CONTROLLER"
+        fetch_main
+        validate_sha "$SHA1"
+        local release
+        release=$(prepare_release "$SHA1")
+        create_attempt_env "$attempt"
+        compose_candidate "$release" "$attempt" config
+      ) 2>"$SANDBOX/real.err"
+    ) || {
+      assert_fail_record "real controller compose config failed" "$(head -c 200 "$SANDBOX/real.err")"
+      return 0
+    }
+    assert_not_contains "$rendered" "novelforge_internal"       "real merged config has no production network"
+    assert_not_contains "$rendered" "novelforge_candidate_unset"       "real merged config has no unset attempt network"
+    assert_contains "$rendered" "novelforge_candidate_$attempt"       "real merged config uses the exact attempt network"
+    if printf '%s' "$rendered" | grep -qE '\.\./data/(books|exports|imports|backups)'; then
+      assert_fail_record "real merged config has production-writable bind"
     fi
-    if grep -qE "\.\./data/(books|exports|imports|backups)" "$merged"; then
-      CURRENT_FAILED=$((CURRENT_FAILED + 1))
-      say "  assert-fail: real merged config contains a production-writable bind"
-    fi
-    assert_eq "$(grep -c 'read_only: true' "$merged")" "2"       "references mounted read-only in real merged config"
+    assert_eq "$(printf '%s' "$rendered" | grep -c 'read_only: true')" "2"       "references read-only in real merged config"
   fi
 }
 
@@ -418,6 +428,32 @@ s07_unique_attempt_generation() {
     "each attempt cleaned its own stack"
   assert_eq "$(envelope_state "$SHA1")" "passed" \
     "second attempt still passes on a fresh generation"
+}
+
+s15_deployed_sha_candidate_tag_safety() {
+  new_sandbox
+  seed_deployed "$SHA1"
+  # Record the current digest of the deployed release tag.
+  local map=$SANDBOX/ids.txt
+  : >"$map"
+  local svc
+  for svc in api worker web; do
+    printf 'novelforge-%s:%s sha256:deployed-digest
+' "$svc" "$SHA1" >>"$map"
+  done
+  STUB_IMAGE_IDS="$map"
+  BUILD_RC=1
+  run_controller candidate "$SHA1" >/dev/null 2>&1
+  assert_eq "$(sed -n 's/^state=//p' "$(envelope "$SHA1")")" "failed"     "failed candidate on deployed sha is marked failed"
+  # The deployed release-tag digests must be untouched by the failed attempt.
+  for svc in api worker web; do
+    assert_eq "$(sed -n "s#^novelforge-$svc:$SHA1 ##p" "$map")" "sha256:deployed-digest"       "release tag digest of $svc unchanged"
+  done
+  # The build must have targeted the per-attempt candidate tag, not the
+  # release tag: the attempt env pins RELEASE_TAG=candidate-<attempt>.
+  local attempt
+  attempt=$(sed -n 's/^attempt_id=//p' "$(envelope "$SHA1")")
+  assert_contains "$(docker_log)" "RELEASE_TAG=candidate-$attempt"     "attempt env pins the candidate tag"
 }
 
 s08_digest_repoint_reject() {
@@ -436,6 +472,61 @@ s08_digest_repoint_reject() {
   assert_eq "$OUT_RC" "71" "deploy rejects re-pointed image"
   assert_contains "$(last_output)" "digest mismatch" "digest mismatch error"
   assert_eq "$(prod_backup_calls)" "0" "zero backups on digest mismatch"
+}
+
+s16_real_postgres_snapshot_migration() {
+  new_sandbox
+  command -v psql >/dev/null 2>&1 || { assert_fail_record "psql missing"; return 0; }
+  local WIN_PY="/mnt/f/gpt/.worktrees/novel-hub-model-gate-20260825/.venv/Scripts/python.exe"
+  [ -f "$WIN_PY" ] || { assert_fail_record "backend venv python missing"; return 0; }
+  local role_pw=nfcandidate_testpw
+  local src_db=nf_snap_src dst_db=nf_snap_dst
+  su postgres -c "psql -qc \"DROP ROLE IF EXISTS nfcandidate\" >/dev/null" || true
+  su postgres -c "psql -qc \"DROP DATABASE IF EXISTS $src_db\" >/dev/null" || true
+  su postgres -c "psql -qc \"DROP DATABASE IF EXISTS $dst_db\" >/dev/null" || true
+  su postgres -c "psql -qc \"CREATE ROLE nfcandidate LOGIN PASSWORD '$role_pw'\" >/dev/null"
+  su postgres -c "createdb -O nfcandidate $src_db"
+  # Old schema: migrate the worktree backend to the revision BEFORE head.
+  local backend=$REPO_ROOT/backend
+  local wsl_ip
+  wsl_ip=$(hostname -I | awk '{print $1}')
+  local url="postgresql+asyncpg://nfcandidate:$role_pw@$wsl_ip:5432/$src_db"
+  local cmd_file=$SANDBOX/alembic.cmd
+  make_alembic_cmd() { # $1=alembic args $2=url
+    {
+      printf '@echo off
+'
+      printf 'cd /d %s
+' "$(wslpath -w "$backend")"
+      printf 'set DATABASE_URL=%s
+' "${2:-}"
+      printf '%s -m alembic %s
+' "$(wslpath -w "$WIN_PY")" "$1"
+    } >"$cmd_file"
+  }
+  local parent_rev
+  parent_rev=$( (cd "$backend" && "$WIN_PY" -m alembic history) 2>/dev/null | sed -n '1s/^\([0-9a-f]*\) ->.*/\1/p')
+  [ -n "$parent_rev" ] || { assert_fail_record "cannot read alembic history"; return 0; }
+  make_alembic_cmd "upgrade $parent_rev" "$url"
+  cmd.exe /c "$(wslpath -w "$cmd_file")" >/dev/null 2>&1
+  # old schema + one data row
+  su postgres -c "psql -q -d $src_db -c \"INSERT INTO books (id, title) VALUES (gen_random_uuid(), 'snapshot-row')\"" >/dev/null
+  su postgres -c "pg_dump --format=custom $src_db" >"$SANDBOX/snap.dump"
+  # restore into the dst db through the controller's exec mechanism
+  su postgres -c "createdb -O nfcandidate $dst_db"
+  su postgres -c "pg_restore --dbname=$dst_db" <"$SANDBOX/snap.dump" >/dev/null 2>&1
+  # migrate dst to head with the real alembic chain
+  local dst_url="postgresql+asyncpg://nfcandidate:$role_pw@$wsl_ip:5432/$dst_db"
+  make_alembic_cmd "upgrade head" "$dst_url"
+  cmd.exe /c "$(wslpath -w "$cmd_file")" >/dev/null 2>&1
+  local head_ver rows
+  head_ver=$(su postgres -c "psql -tA -d $dst_db -c 'SELECT version_num FROM alembic_version'" 2>/dev/null)
+  rows=$(su postgres -c "psql -tA -d $dst_db -c 'SELECT count(*) FROM books'" 2>/dev/null)
+  assert_eq "$rows" "1" "snapshot data survived restore+migrate"
+  assert_contains "$( (cd "$backend" && "$WIN_PY" -m alembic heads) 2>/dev/null)" "$head_ver"     "snapshot db migrated to alembic head"
+  su postgres -c "psql -qc \"DROP DATABASE IF EXISTS $src_db\" >/dev/null" || true
+  su postgres -c "psql -qc \"DROP DATABASE IF EXISTS $dst_db\" >/dev/null" || true
+  su postgres -c "psql -qc \"DROP ROLE IF EXISTS nfcandidate\" >/dev/null" || true
 }
 
 s09_missing_failed_stale_envelopes() {
@@ -481,23 +572,38 @@ s10_malformed_wrong_sha_envelopes() {
 s11_safe_controller_upgrade() {
   new_sandbox
   seed_deployed "$SHA1"
+  # Real install/mv/mktemp (NO stub PATH): the upgrader targets are pointed
+  # INSIDE the sandbox so /usr/local/sbin is never touched (P0-D).
   local log=$SANDBOX/docker-calls.log
   : >"$log"
   (
-    export PATH="$HERE/stubs:$PATH"
+    export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     export NOVELFORGE_ROOT="$ROOT"
     export NOVELFORGE_CONF="$CONF"
-    export DOCKER_CALL_LOG="$log"
+    export NOVELFORGE_LOCK="$ROOT/lock/nf.lock"
+    export NOVELFORGE_OPS_TARGET="$SANDBOX/usr/local/sbin/novelforge-release"
+    export NOVELFORGE_OPS_WRAPPER_TARGET="$SANDBOX/usr/local/sbin/novelforge-ops"
     bash "$UPGRADER" "$SHA2"
   ) >"$SANDBOX/upgrade-output" 2>&1
   assert_eq "$?" "0" "upgrade-controller exits zero"
   if grep -qE '^PROJECT=' "$log"; then
-    CURRENT_FAILED=$((CURRENT_FAILED + 1))
-    say "  assert-fail: upgrade called docker compose (production at risk)"
+    assert_fail_record "upgrade called docker compose" "production at risk"
   fi
-  assert_contains "$(cat "$SANDBOX/upgrade-output")" '"action":"upgrade-controller"' \
-    "structured upgrade output"
-  assert_contains "$(cat "$SANDBOX/upgrade-output")" '"after_sha256"' "controller hash recorded"
+  assert_contains "$(cat "$SANDBOX/upgrade-output")" '"action":"upgrade-controller"'     "structured upgrade output"
+  local rel_sha
+  rel_sha=$(sed -n 's/.*"sha":"\([0-9a-f]\{40\}\)".*/\1/p' "$SANDBOX/upgrade-output" | head -1)
+  assert_eq "$(sha256sum "$SANDBOX/usr/local/sbin/novelforge-release" | cut -d' ' -f1)"     "$(sha256sum "$ROOT/releases/$rel_sha/deploy/ops/novelforge-release" | cut -d' ' -f1)"     "installed controller hash matches release source"
+  # Lock contention: a held release lock must make the upgrader refuse (75).
+  (
+    export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    export NOVELFORGE_ROOT="$ROOT" NOVELFORGE_CONF="$CONF" NOVELFORGE_LOCK="$ROOT/lock/nf.lock"
+    export NOVELFORGE_OPS_TARGET="$SANDBOX/usr/local/sbin/novelforge-release"
+    export NOVELFORGE_OPS_WRAPPER_TARGET="$SANDBOX/usr/local/sbin/novelforge-ops"
+    exec 9>"$ROOT/lock/nf.lock"
+    flock 9
+    bash "$UPGRADER" "$SHA2"
+  ) >"$SANDBOX/lock-output" 2>&1
+  assert_eq "$?" "75" "concurrent lock contention refused"
 }
 
 s12_migration_failure_no_change() {
@@ -505,7 +611,7 @@ s12_migration_failure_no_change() {
   seed_deployed "$SHA1"
   run_controller candidate "$SHA2" >/dev/null 2>&1
   seed_images "$SHA2"
-  : >"$(docker_log)"
+  : >"$SANDBOX/docker-calls.log"
   ALEMBIC_RC=1
   run_controller deploy "$SHA2" >/dev/null 2>&1
   assert_eq "$(current_release_sha)" "$SHA1" "symlink unchanged"
@@ -563,20 +669,42 @@ EOF
 
 # ── precise scenario accounting (§10.2-14) ─────────────────────────────────
 
+# Error signatures that mark a scenario's stderr as dirty (acceptance P0-D:
+# unexpected bash/python errors must fail the scenario, never print through).
+STDERR_ERROR_RE='no such file|unbound variable|unterminated|permission denied|integer expected|traceback|syntax error|command not found|ambiguous argument|invalid argument|not a valid|unexpected'
+
 scenario() { # $1=name $2=fn
   CURRENT_TEST=$1
-  CURRENT_FAILED=0
   SCENARIOS=$((SCENARIOS + 1))
-  "$2"
-  if [ "$CURRENT_FAILED" -eq 0 ]; then
+  : >"$SANDBOX/assert-failures"
+  : >"$SANDBOX/scenario.err"
+  local rc=0
+  (
+    set -Eeuo pipefail
+    trap 'echo "uncaught error at line $LINENO (rc=$?)" >&2' ERR
+    "$2"
+  ) >"$SANDBOX/last-output" 2>"$SANDBOX/scenario.err" || rc=$?
+
+  local failures=0
+  if [ -s "$SANDBOX/assert-failures" ]; then
+    failures=$(grep -c . "$SANDBOX/assert-failures")
+  fi
+  local dirty=""
+  if [ -s "$SANDBOX/scenario.err" ]     && grep -qiE "$STDERR_ERROR_RE" "$SANDBOX/scenario.err"; then
+    dirty=yes
+  fi
+
+  if [ "$rc" -eq 0 ] && [ "$failures" = "0" ] && [ -z "$dirty" ]; then
     PASSED=$((PASSED + 1))
-    say "PASS [$SCENARIOS/14] $CURRENT_TEST"
+    say "PASS [$SCENARIOS/16] $CURRENT_TEST"
   else
     FAILED=$((FAILED + 1))
-    say "FAIL [$SCENARIOS/14] $CURRENT_TEST ($CURRENT_FAILED assertion(s))"
-    [ -f "$SANDBOX/last-output" ] && say "  last-output: $(head -c 400 "$SANDBOX/last-output")"
+    say "FAIL [$SCENARIOS/16] $CURRENT_TEST (rc=$rc assertions=$failures dirty_stderr=$dirty)"
+    sed -n '1,10p' "$SANDBOX/assert-failures" 2>/dev/null
+    grep -iE "$STDERR_ERROR_RE" "$SANDBOX/scenario.err" 2>/dev/null | sed -n '1,4p'
+    [ -f "$SANDBOX/last-output" ] && say "  last-output: $(head -c 300 "$SANDBOX/last-output")"
   fi
-  if [ "${KEEP_FAILED:-0}" = "1" ] && [ "$CURRENT_FAILED" -gt 0 ]; then
+  if [ "${KEEP_FAILED:-0}" = "1" ]     && { [ "$rc" -ne 0 ] || [ "$failures" != "0" ] || [ -n "$dirty" ]; }; then
     say "  (sandbox kept: $SANDBOX)"
   else
     [ -n "$SANDBOX" ] && rm -rf "$SANDBOX"
@@ -588,16 +716,27 @@ scenario "same-SHA pass then build failure -> deploy rejects" s01_build_fail_rej
 scenario "same-SHA pass then up failure -> deploy rejects" s02_up_fail_reject
 scenario "same-SHA pass then alembic failure -> deploy rejects" s03_alembic_fail_reject
 scenario "same-SHA pass then snapshot restore failure -> deploy rejects" s04_snapshot_restore_fail_reject
+scenario "candidate on the deployed sha never touches its release-tag digests" s15_deployed_sha_candidate_tag_safety
 scenario "shared .env rotation -> deploy rejects; re-candidate reads rotated value" s05_env_rotation_reject_and_reread
 scenario "merged candidate config has no production-writable mounts" s06_no_production_writable_mounts
 scenario "candidate attempts use unique project generations" s07_unique_attempt_generation
 scenario "re-pointed image digest -> deploy rejects" s08_digest_repoint_reject
 scenario "missing/failed/stale envelopes -> deploy rejects with zero backups" s09_missing_failed_stale_envelopes
+scenario "real PostgreSQL restore + alembic migrate keeps data and reaches head" s16_real_postgres_snapshot_migration
 scenario "malformed/wrong-sha envelopes -> deploy rejects with zero backups" s10_malformed_wrong_sha_envelopes
 scenario "safe controller upgrade with zero production compose calls" s11_safe_controller_upgrade
 scenario "migration failure leaves current and services unchanged" s12_migration_failure_no_change
 scenario "health failure rolls back and reports structurally" s13_health_failure_rollback
 scenario "status provenance variants incl. infra version and missing services" s14_status_provenance_variants
+
+# P0-D guard: the test run must never modify the host's /usr/local/sbin.
+if [ "$(id -u)" = "0" ]; then
+  after_sbin="$(sha256sum /usr/local/sbin/novelforge-release /usr/local/sbin/novelforge-ops 2>/dev/null | sha256sum | cut -d' ' -f1)"
+  if [ "$SBIN_BEFORE" != "${after_sbin:-absent}" ]; then
+    FAILED=$((FAILED + 1))
+    say "FAIL: /usr/local/sbin controller files changed during the run"
+  fi
+fi
 
 say ""
 say "SCENARIOS=$SCENARIOS PASSED=$PASSED FAILED=$FAILED"

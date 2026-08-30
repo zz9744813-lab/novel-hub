@@ -1,0 +1,35 @@
+# Candidate isolation overrides (deploy atomicity, ops task A).
+#
+# Applied ONLY by the candidate gate in deploy/ops/novelforge-release via
+#   docker compose -p novelforge-candidate -f docker-compose.yml -f docker-compose.candidate.yml
+#
+# Guarantees (ops rework §10-2): building and gating a candidate must never
+# recreate, restart, retag or otherwise touch the running production
+# postgres/redis/api/worker/web containers, their shared image tags, their
+# volumes, or the production network.
+#
+# - The candidate runs under its own compose project name (-p
+#   novelforge-candidate), so implicitly named volumes/networks/containers are
+#   project-prefixed and cannot collide with production.
+# - postgres/redis have EXPLICIT shared image tags in the base file
+#   (novelforge-postgres:16-config-v2 / novelforge-redis:7-config-v2); they are
+#   overridden here so a candidate build can never retag the images production
+#   relies on.
+# - The explicit production network name (novelforge_internal) is overridden so
+#   candidate DNS aliases cannot shadow production services.
+# - web never runs during candidacy; its host port binding is cleared anyway
+#   so an accidental `up` cannot steal port 80 from production.
+services:
+  postgres:
+    image: !override novelforge-candidate-postgres:candidate
+
+  redis:
+    image: !override novelforge-candidate-redis:candidate
+
+  web:
+    ports: !override []
+
+networks:
+  internal:
+    name: novelforge_candidate_internal
+    driver: bridge

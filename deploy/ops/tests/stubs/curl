@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Health-endpoint stub: HEALTH_FAIL=1 makes the release controller's
+# wait_healthy fail, exercising the post-switch rollback path.
+if [ "${HEALTH_FAIL:-0}" = "1" ]; then
+  exit 7
+fi
+printf '{"status":"ready"}'
+exit 0

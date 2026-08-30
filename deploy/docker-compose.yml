@@ -8,6 +8,7 @@ x-logging: &default-logging
 
 services:
   web:
+    image: "novelforge-web:${RELEASE_TAG:-latest}"
     build:
       context: ..
       dockerfile: deploy/web/Dockerfile
@@ -29,6 +30,10 @@ services:
     logging: *default-logging
 
   api:
+    # RELEASE_TAG is injected per release via the generated release env file
+    # (deploy/ops/novelforge-release: release_env_file), giving every release
+    # its own immutable image tag so rollback restores the exact prior code.
+    image: "novelforge-api:${RELEASE_TAG:-latest}"
     build:
       context: ../backend
       dockerfile: Dockerfile
@@ -84,6 +89,7 @@ services:
     logging: *default-logging
 
   worker:
+    image: "novelforge-worker:${RELEASE_TAG:-latest}"
     build:
       context: ../backend
       dockerfile: Dockerfile

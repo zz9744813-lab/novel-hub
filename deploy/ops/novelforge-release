@@ -1,17 +1,35 @@
 #!/usr/bin/env bash
 # Root-owned, argument-validating NovelForge release controller.
+#
+# Deploy atomicity contract (ops rework task A):
+#   candidate SHA  - self-fetches/validates/prepares the release, builds the
+#                    candidate under an ISOLATED compose project
+#                    (novelforge-candidate, own images/volumes/network), runs
+#                    alembic + pack validate + model evidence against the
+#                    isolated throwaway database, records a structured result,
+#                    and touches NOTHING that is running in production.
+#   deploy SHA     - accepts ONLY a passed, fresh candidate result bound to the
+#                    exact SHA, then does backup -> migration (one-off
+#                    container, no service recreation) -> symlink switch ->
+#                    health -> automatic rollback.
+#   status         - reports mixed release provenance (containers running from
+#                    a different release than the current symlink).
 set -Eeuo pipefail
 umask 027
 
-ROOT=/srv/novelforge
+ROOT=${NOVELFORGE_ROOT:-/srv/novelforge}
 MIRROR="$ROOT/repo.git"
 RELEASES="$ROOT/releases"
 SHARED="$ROOT/shared"
 CURRENT="$ROOT/current"
-CONF=/etc/novelforge-ops.conf
+CONF=${NOVELFORGE_CONF:-/etc/novelforge-ops.conf}
+LOCK_FILE=${NOVELFORGE_LOCK:-/run/lock/novelforge-release.lock}
+CANDIDATE_PROJECT=${NOVELFORGE_CANDIDATE_PROJECT:-novelforge-candidate}
+# A candidate result older than this is stale and deploy refuses it.
+CANDIDATE_MAX_AGE_SECONDS=${CANDIDATE_MAX_AGE_SECONDS:-86400}
 PACK=production_packs/zhutian_hongyanlu/pack.json
 
-exec 9>/run/lock/novelforge-release.lock
+exec 9>"$LOCK_FILE"
 flock -w 5 9 || { echo '{"ok":false,"error":"release_busy"}'; exit 75; }
 
 [ -r "$CONF" ] || { echo "missing $CONF" >&2; exit 78; }
@@ -22,10 +40,47 @@ DEPLOY_BRANCH=${DEPLOY_BRANCH:-main}
 HEALTH_URL=${HEALTH_URL:-http://127.0.0.1/health/ready}
 
 compose() {
+  # Production compose project. RELEASE_TAG interpolation comes from the
+  # per-release generated env file, pinning api/worker/web to this release's
+  # immutable image tags.
   local release=$1
   shift
-  docker compose --project-directory "$release/deploy" \
+  docker compose \
+    --env-file "$(release_env_file "$release")" \
+    --project-directory "$release/deploy" \
     -f "$release/deploy/docker-compose.yml" "$@"
+}
+
+compose_candidate() {
+  # Isolated candidate compose project: own containers, own image tags, own
+  # volumes and network (see deploy/docker-compose.candidate.yml). Sharing
+  # nothing with production is what makes the candidate gate side-effect free.
+  local release=$1
+  shift
+  docker compose \
+    --env-file "$(release_env_file "$release")" \
+    --project-directory "$release/deploy" \
+    -f "$release/deploy/docker-compose.yml" \
+    -f "$release/deploy/docker-compose.candidate.yml" \
+    -p "$CANDIDATE_PROJECT" "$@"
+}
+
+release_env_file() {
+  # Generated per-release env file: shared .env content plus RELEASE_TAG, used
+  # ONLY for compose variable interpolation. The service-level env_file keeps
+  # pointing at the shared .env symlink, so runtime secrets stay single-source.
+  local release=$1 sha dir file
+  sha=${release##*/}
+  dir="$SHARED/release-env"
+  file="$dir/$sha.env"
+  if [ ! -f "$file" ]; then
+    [ -r "$SHARED/.env" ] || { echo "missing $SHARED/.env" >&2; exit 78; }
+    install -d -m 0750 "$dir"
+    { cat "$SHARED/.env"; printf '\nRELEASE_TAG=%s\n' "$sha"; } >"$file.tmp"
+    chmod 0640 "$file.tmp"
+    mv -f "$file.tmp" "$file"
+  fi
+  printf '%s\n' "$file"
 }
 
 current_release() {
@@ -53,47 +108,80 @@ healthy() {
 
 wait_healthy() {
   local attempt
-  for attempt in $(seq 1 30); do
+  for attempt in $(seq 1 "${HEALTH_CHECK_ATTEMPTS:-30}"); do
     healthy && return 0
-    sleep 2
+    sleep "${HEALTH_CHECK_INTERVAL:-2}"
   done
   return 1
 }
 
 wait_postgres() {
-  local release=$1 attempt
-  for attempt in $(seq 1 30); do
-    if compose "$release" exec -T postgres sh -ec \
+  # $1: compose function name ("compose" or "compose_candidate"), $2: release.
+  local compose_fn=$1 release=$2 attempt
+  for attempt in $(seq 1 "${PG_WAIT_ATTEMPTS:-30}"); do
+    if "$compose_fn" "$release" exec -T postgres sh -ec \
       'pg_isready --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"' \
       >/dev/null 2>&1; then
       return 0
     fi
-    sleep 2
+    sleep "${PG_WAIT_INTERVAL:-2}"
   done
   return 1
 }
 
-candidate_release() {
-  local sha=$1 release actual
-  [[ $sha =~ ^[0-9a-f]{40}$ ]] || { echo "invalid sha" >&2; exit 64; }
-  release="$RELEASES/$sha"
-  [ -f "$release/.git" ] && [ -f "$release/deploy/docker-compose.yml" ] \
-    || { echo "candidate release not prepared: $sha" >&2; exit 66; }
-  actual=$(git -C "$release" rev-parse HEAD)
-  [ "$actual" = "$sha" ] \
-    || { echo "candidate release identity mismatch" >&2; exit 73; }
-  printf '%s\n' "$release"
+release_images_present() {
+  local release=$1 sha svc
+  sha=${release##*/}
+  for svc in api worker web; do
+    docker image inspect "novelforge-$svc:$sha" >/dev/null 2>&1 \
+      || { echo "image novelforge-$svc:$sha missing; run 'candidate $sha' first" >&2; return 1; }
+  done
 }
 
-show_candidate() {
-  local release
-  release=$(candidate_release "$1")
-  printf '{"ok":true,"candidate":"%s"}\n' "${release##*/}"
-  compose "$release" ps --format json || true
-  compose "$release" logs --no-color --tail 200 postgres || true
+extract_json_payload() {
+  # Ops tools log progress lines to stdout before the final JSON payload; the
+  # payload starts at the first bare "{" column-0 line and runs to EOF.
+  local raw=$1 out=$2
+  awk 'BEGIN{found=0} /^\{/{found=1} found{print}' "$raw" >"$out"
+  grep -q '"passed"' "$out" \
+    || { echo "could not extract JSON payload from $raw" >&2; return 1; }
+}
+
+write_candidate_envelope() {
+  local sha=$1 passed=$2 file
+  install -d -m 0750 "$SHARED/candidates"
+  file="$SHARED/candidates/$sha.envelope"
+  {
+    printf 'sha=%s\n' "$sha"
+    printf 'created=%s\n' "$(date -u +%s)"
+    printf 'passed=%s\n' "$passed"
+  } >"$file.tmp"
+  chmod 0640 "$file.tmp"
+  mv -f "$file.tmp" "$file"
+  printf '%s\n' "$file"
+}
+
+check_candidate_passed() {
+  local sha=$1 envelope="$SHARED/candidates/$sha.envelope" passed created now
+  [ -f "$envelope" ] \
+    || { echo "candidate gate result missing for $sha; run 'candidate $sha' first" >&2; exit 71; }
+  passed=$(sed -n 's/^passed=//p' "$envelope")
+  if [ "$passed" != "true" ]; then
+    echo "candidate gate FAILED for $sha; refusing to deploy (evidence: $SHARED/candidates/$sha.*.json)" >&2
+    exit 71
+  fi
+  created=$(sed -n 's/^created=//p' "$envelope")
+  now=$(date -u +%s)
+  if [ -z "$created" ] \
+    || [ "$created" -le $((now - CANDIDATE_MAX_AGE_SECONDS)) ]; then
+    echo "candidate gate result for $sha is stale (older than ${CANDIDATE_MAX_AGE_SECONDS}s); re-run 'candidate $sha'" >&2
+    exit 71
+  fi
 }
 
 backup_database() {
+  # Backup via `compose exec` ONLY: never starts or recreates a container. If
+  # production postgres is not running, deploy aborts (self-heal first).
   local release=$1 target_sha=$2 stamp destination temporary
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
   destination="$SHARED/data/backups/pre-${target_sha}-${stamp}.dump"
@@ -102,7 +190,7 @@ backup_database() {
     'export PGPASSWORD="$POSTGRES_PASSWORD"; exec pg_dump --format=custom --no-owner --no-acl --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"' \
     >"$temporary"; then
     rm -f "$temporary"
-    echo "database backup failed; migration was not started" >&2
+    echo "database backup failed (is postgres running?); migration was not started" >&2
     return 1
   fi
   if [ ! -s "$temporary" ]; then
@@ -146,6 +234,7 @@ prepare_release() {
   install -d -m 0750 -o root -g root "$SHARED/data/backups"
   rm -f "$release/deploy/.env"
   ln -s "$SHARED/.env" "$release/deploy/.env"
+  release_env_file "$release" >/dev/null
   if [ -e "$release/data" ] && [ ! -L "$release/data" ]; then
     echo "release contains a non-symlink data path" >&2
     exit 73
@@ -181,40 +270,112 @@ install_release_controller() {
     "$release/deploy/ops/novelforge-release" /usr/local/sbin/novelforge-release
 }
 
+candidate_sha() {
+  local sha=$1 release raw_dir validate_raw qualify_raw validate_json qualify_json
+  local validate_rc=0 qualify_rc=0 passed envelope
+  fetch_main
+  validate_sha "$sha"
+  release=$(prepare_release "$sha")
+
+  # Validate interpolation, mounts and service definitions before building.
+  compose "$release" config --quiet
+  compose_candidate "$release" config --quiet
+
+  raw_dir=$(mktemp -d "$SHARED/candidates/${sha}.raw.XXXXXX")
+  validate_raw="$raw_dir/validate.raw"
+  qualify_raw="$raw_dir/qualify.raw"
+  validate_json="$raw_dir/validate.json"
+  qualify_json="$raw_dir/qualify.json"
+
+  # Script-scope handle for the EXIT trap: the trap fires after the function
+  # scope is gone, where the local $release is no longer visible.
+  CANDIDATE_RELEASE=$release
+  candidate_cleanup() {
+    # Throwaway DB/containers/volumes/network go away; images are kept so a
+    # passing candidate can be deployed without rebuilding.
+    [ -n "${CANDIDATE_RELEASE:-}" ] || return 0
+    compose_candidate "$CANDIDATE_RELEASE" down -v --remove-orphans >/dev/null 2>&1 || true
+    CANDIDATE_RELEASE=""
+  }
+  trap candidate_cleanup EXIT
+
+  # Build all five images under the isolated project / candidate image names.
+  compose_candidate "$release" build postgres redis api worker web
+
+  # Isolated throwaway database for migration and evidence gating.
+  compose_candidate "$release" up -d postgres redis
+  wait_postgres compose_candidate "$release" \
+    || { echo "candidate postgres did not become ready" >&2; exit 70; }
+
+  # 1) Migrations must apply cleanly to a fresh database.
+  compose_candidate "$release" run --rm --no-deps api alembic upgrade head
+
+  # 2) Deterministic pack validation.
+  compose_candidate "$release" run --rm --no-deps api \
+    python scripts/production_pack.py validate --pack "$PACK" \
+    >"$validate_raw" || validate_rc=$?
+
+  # 3) Model evidence against the real gateway, written to the throwaway DB.
+  compose_candidate "$release" run --rm --no-deps api \
+    python scripts/production_pack.py qualify --pack "$PACK" \
+    >"$qualify_raw" || qualify_rc=$?
+
+  if ! extract_json_payload "$validate_raw" "$validate_json"; then
+    validate_rc=1
+  fi
+  if ! extract_json_payload "$qualify_raw" "$qualify_json"; then
+    qualify_rc=1
+  fi
+
+  passed=true
+  [ "$validate_rc" -eq 0 ] || passed=false
+  [ "$qualify_rc" -eq 0 ] || passed=false
+
+  envelope=$(write_candidate_envelope "$sha" "$passed")
+
+  printf '{"ok":true,"action":"candidate","sha":"%s","passed":%s,"validation":' \
+    "$sha" "$passed"
+  cat "$validate_json"
+  printf ',"model_evidence":'
+  cat "$qualify_json"
+  printf ',"envelope":"%s"}\n' "$envelope"
+
+  [ "$passed" = "true" ] || exit 71
+}
+
 deploy_sha() {
   local sha=$1
-  local previous release backup_source backup
+  local previous release backup
   fetch_main
   validate_sha "$sha"
   release=$(prepare_release "$sha")
   previous=$(current_release)
 
-  # Validate interpolation, mounts and service definitions on the target host
-  # before touching the running database or building any image.
+  # Validate interpolation, mounts and service definitions on the target host.
   compose "$release" config --quiet
 
+  # Hard gate: only a passed, fresh candidate result for THIS exact sha may be
+  # deployed. Nothing running has been touched at this point.
+  check_candidate_passed "$sha"
+  release_images_present "$release"
+
   backup_source=${previous:-$release}
-  compose "$backup_source" up -d postgres
-  if ! wait_postgres "$backup_source"; then
-    echo "postgres did not become ready; migration was not started" >&2
-    compose "$backup_source" ps --format json >&2 || true
-    compose "$backup_source" logs --no-color --tail 200 postgres >&2 || true
-    exit 70
-  fi
   backup=$(backup_database "$backup_source" "$sha")
 
-  compose "$release" build postgres redis api worker web
-  compose "$release" run --rm api alembic upgrade head
-  compose "$release" run --rm api \
-    python scripts/production_pack.py qualify --pack "$PACK"
-  compose "$release" run --rm api \
-    python scripts/production_pack.py validate --pack "$PACK"
+  # Migration as a one-off container (--no-deps: no service is ever started,
+  # recreated or restarted by this call) against the production database.
+  compose "$release" run --rm --no-deps api alembic upgrade head
+
   switch_to "$release"
   compose "$release" up -d --remove-orphans
   if ! wait_healthy; then
     echo "new release failed health check" >&2
     if [ -n "$previous" ] && [ -d "$previous" ]; then
       switch_to "$previous"
+      # Per-release image tags make this a true code rollback; build only if
+      # the previous release's images were pruned.
+      release_images_present "$previous" \
+        || compose "$previous" build api worker web
       compose "$previous" up -d --remove-orphans
       wait_healthy || true
     fi
@@ -235,7 +396,10 @@ rollback_sha() {
   fetch_main
   validate_sha "$sha"
   [ -d "$release" ] || { echo "release not prepared: $sha" >&2; exit 66; }
+  release_env_file "$release" >/dev/null
   switch_to "$release"
+  release_images_present "$release" \
+    || compose "$release" build api worker web
   compose "$release" up -d --remove-orphans
   wait_healthy || { echo "rollback target unhealthy" >&2; exit 70; }
   printf '%s\n' "$sha" >"$SHARED/DEPLOYED_SHA"
@@ -243,7 +407,9 @@ rollback_sha() {
 }
 
 show_status() {
-  local release sha health=false current_kind=absent
+  local release sha health=false current_kind=absent mixed=false
+  local lines line svc rel
+  local prov_api="" prov_web="" prov_worker="" prov_postgres="" prov_redis=""
   release=$(current_release)
   sha=$(current_sha)
   if [ -n "$release" ]; then
@@ -252,8 +418,38 @@ show_status() {
     current_kind=legacy
   fi
   healthy && health=true || true
-  printf '{"ok":true,"sha":"%s","health":%s,"release":"%s","current_kind":"%s"}\n' \
-    "$sha" "$health" "$release" "$current_kind"
+
+  if [ -n "$release" ] && [ -d "$release/deploy" ]; then
+    lines=$(compose "$release" ps --format json 2>/dev/null || true)
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      svc=$(printf '%s' "$line" | sed -n 's/.*"Service":"\([a-z]*\)".*/\1/p')
+      rel=$(printf '%s' "$line" | sed -n 's#.*com\.docker\.compose\.project\.working_dir='"$RELEASES"'/\([0-9a-f]\{40\}\)/deploy.*#\1#p')
+      case "$svc" in
+        api) prov_api=$rel ;;
+        web) prov_web=$rel ;;
+        worker) prov_worker=$rel ;;
+        postgres) prov_postgres=$rel ;;
+        redis) prov_redis=$rel ;;
+      esac
+    done <<<"$lines"
+    # Mixed provenance: any running service came from a different release than
+    # the one the current symlink selects (the failed-gate deployment state).
+    for rel in "$prov_api" "$prov_web" "$prov_worker" "$prov_postgres" "$prov_redis"; do
+      if [ -n "$rel" ] && [ "$rel" != "$sha" ]; then
+        mixed=true
+      fi
+    done
+  fi
+
+  json_value() {
+    if [ -n "$1" ]; then printf '"%s"' "$1"; else printf 'null'; fi
+  }
+  printf '{"ok":true,"sha":"%s","health":%s,"release":"%s","current_kind":"%s","mixed_release":%s,"provenance":{"api":%s,"web":%s,"worker":%s,"postgres":%s,"redis":%s}}\n' \
+    "$sha" "$health" "$release" "$current_kind" "$mixed" \
+    "$(json_value "$prov_api")" "$(json_value "$prov_web")" \
+    "$(json_value "$prov_worker")" "$(json_value "$prov_postgres")" \
+    "$(json_value "$prov_redis")"
   if [ -n "$release" ] && [ -d "$release/deploy" ]; then
     compose "$release" ps --format json || true
   fi
@@ -300,7 +496,7 @@ case "${1:-status}" in
   deploy) [ "$#" -eq 2 ] && deploy_sha "$2" ;;
   rollback) [ "$#" -eq 2 ] && rollback_sha "$2" ;;
   logs) [ "$#" -eq 3 ] && show_logs "$2" "$3" ;;
-  candidate) [ "$#" -eq 2 ] && show_candidate "$2" ;;
+  candidate) [ "$#" -eq 2 ] && candidate_sha "$2" ;;
   novel) [ "$#" -eq 2 ] && novel_action "$2" ;;
   healthcheck) [ "$#" -eq 1 ] && self_heal ;;
   *) exit 64 ;;

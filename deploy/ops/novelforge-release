@@ -1,19 +1,23 @@
 #!/usr/bin/env bash
 # Root-owned, argument-validating NovelForge release controller.
 #
-# Deploy atomicity contract (ops rework task A):
-#   candidate SHA  - self-fetches/validates/prepares the release, builds the
-#                    candidate under an ISOLATED compose project
-#                    (novelforge-candidate, own images/volumes/network), runs
-#                    alembic + pack validate + model evidence against the
-#                    isolated throwaway database, records a structured result,
-#                    and touches NOTHING that is running in production.
-#   deploy SHA     - accepts ONLY a passed, fresh candidate result bound to the
-#                    exact SHA, then does backup -> migration (one-off
-#                    container, no service recreation) -> symlink switch ->
-#                    health -> automatic rollback.
-#   status         - reports mixed release provenance (containers running from
-#                    a different release than the current symlink).
+# Deploy atomicity contract (ops rework round 2):
+#   candidate <sha>  - fetches, validates, prepares the release, builds and
+#                      gates EVERYTHING under a per-attempt isolated compose
+#                      project (own images/volumes/network, throwaway db,
+#                      production data mounted read-only or not at all).
+#                      The envelope for the sha is invalidated to state=running
+#                      BEFORE any build work and only published as state=passed
+#                      after every gate succeeded and image digests were
+#                      recorded; any failure path (including SIGKILL, which the
+#                      next run sees as state=running) leaves deploy refusing.
+#   deploy <sha>     - accepts ONLY a state=passed envelope bound to the exact
+#                      sha, a matching shared-.env hash (secrets rotate ->
+#                      re-candidate), and identical current image digests;
+#                      then backup (compose exec only) -> one-off migration ->
+#                      symlink switch -> health -> automatic rollback.
+#   status           - reports app release provenance, infra image versions,
+#                      missing/unexpected services and mixed_release.
 set -Eeuo pipefail
 umask 027
 
@@ -24,10 +28,13 @@ SHARED="$ROOT/shared"
 CURRENT="$ROOT/current"
 CONF=${NOVELFORGE_CONF:-/etc/novelforge-ops.conf}
 LOCK_FILE=${NOVELFORGE_LOCK:-/run/lock/novelforge-release.lock}
-CANDIDATE_PROJECT=${NOVELFORGE_CANDIDATE_PROJECT:-novelforge-candidate}
+CANDIDATE_PROJECT_BASE=${NOVELFORGE_CANDIDATE_PROJECT:-novelforge-candidate}
+CANDIDATES_DIR="$SHARED/candidates"
+RELEASE_TAGS_DIR="$SHARED/release-tags"
 # A candidate result older than this is stale and deploy refuses it.
 CANDIDATE_MAX_AGE_SECONDS=${CANDIDATE_MAX_AGE_SECONDS:-86400}
 PACK=production_packs/zhutian_hongyanlu/pack.json
+EXPECTED_SERVICES="api web worker postgres redis"
 
 exec 9>"$LOCK_FILE"
 flock -w 5 9 || { echo '{"ok":false,"error":"release_busy"}'; exit 75; }
@@ -39,49 +46,77 @@ source "$CONF"
 DEPLOY_BRANCH=${DEPLOY_BRANCH:-main}
 HEALTH_URL=${HEALTH_URL:-http://127.0.0.1/health/ready}
 
+# ── envelope helpers (strict key=value contract) ────────────────────────────
+
+env_file_hash() {
+  sha256sum "$SHARED/.env" | cut -d' ' -f1
+}
+
+envelope_path() {
+  printf '%s/%s.envelope\n' "$CANDIDATES_DIR" "$1"
+}
+
+write_envelope() { # $1=sha $2=attempt_id $3=state $4=extra key=value lines
+  local sha=$1 attempt=$2 state=$3 extra=$4 file
+  file=$(envelope_path "$sha")
+  install -d -m 0750 "$CANDIDATES_DIR"
+  {
+    printf 'sha=%s\n' "$sha"
+    printf 'attempt_id=%s\n' "$attempt"
+    printf 'created=%s\n' "$(date -u +%s)"
+    printf 'state=%s\n' "$state"
+    printf 'env_hash=%s\n' "$(env_file_hash)"
+    if [ -n "$extra" ]; then printf '%s\n' "$extra"; fi
+  } >"$file.tmp"
+  chmod 0640 "$file.tmp"
+  mv -f "$file.tmp" "$file"
+}
+
+envelope_field() { # $1=sha $2=key -> value (empty when absent)
+  sed -n "s/^$2=//p" "$(envelope_path "$1")" | head -1
+}
+
+# ── compose wrappers ────────────────────────────────────────────────────────
+
 compose() {
-  # Production compose project. RELEASE_TAG interpolation comes from the
-  # per-release generated env file, pinning api/worker/web to this release's
-  # immutable image tags.
+  # Production compose project. Interpolation sources, in order:
+  #   1. $SHARED/.env            (single source of runtime secrets; NEVER
+  #                              cached per release, so key rotation applies)
+  #   2. release-tags/<sha>.env  (only RELEASE_TAG=<sha>)
   local release=$1
   shift
   docker compose \
-    --env-file "$(release_env_file "$release")" \
+    --env-file "$SHARED/.env" \
+    --env-file "$RELEASE_TAGS_DIR/${release##*/}.env" \
     --project-directory "$release/deploy" \
     -f "$release/deploy/docker-compose.yml" "$@"
 }
 
 compose_candidate() {
-  # Isolated candidate compose project: own containers, own image tags, own
-  # volumes and network (see deploy/docker-compose.candidate.yml). Sharing
-  # nothing with production is what makes the candidate gate side-effect free.
-  local release=$1
-  shift
+  # Isolated candidate project: per-attempt name, own images/volumes/network.
+  local release=$1 attempt=$2
+  shift 2
   docker compose \
-    --env-file "$(release_env_file "$release")" \
+    --env-file "$SHARED/.env" \
+    --env-file "$RELEASE_TAGS_DIR/${release##*/}.env" \
+    --env-file "$CANDIDATES_DIR/$attempt.env" \
     --project-directory "$release/deploy" \
     -f "$release/deploy/docker-compose.yml" \
     -f "$release/deploy/docker-compose.candidate.yml" \
-    -p "$CANDIDATE_PROJECT" "$@"
+    -p "${CANDIDATE_PROJECT_BASE}-${attempt%%-*}" "$@"
 }
 
-release_env_file() {
-  # Generated per-release env file: shared .env content plus RELEASE_TAG, used
-  # ONLY for compose variable interpolation. The service-level env_file keeps
-  # pointing at the shared .env symlink, so runtime secrets stay single-source.
-  local release=$1 sha dir file
-  sha=${release##*/}
-  dir="$SHARED/release-env"
-  file="$dir/$sha.env"
-  if [ ! -f "$file" ]; then
-    [ -r "$SHARED/.env" ] || { echo "missing $SHARED/.env" >&2; exit 78; }
-    install -d -m 0750 "$dir"
-    { cat "$SHARED/.env"; printf '\nRELEASE_TAG=%s\n' "$sha"; } >"$file.tmp"
-    chmod 0640 "$file.tmp"
-    mv -f "$file.tmp" "$file"
+write_release_tag_file() { # $1=release path
+  local sha=${1##*/}
+  install -d -m 0750 "$RELEASE_TAGS_DIR"
+  if [ ! -f "$RELEASE_TAGS_DIR/$sha.env" ]; then
+    printf 'RELEASE_TAG=%s\n' "$sha" >"$RELEASE_TAGS_DIR/$sha.env.tmp"
+    chmod 0640 "$RELEASE_TAGS_DIR/$sha.env.tmp"
+    mv -f "$RELEASE_TAGS_DIR/$sha.env.tmp" "$RELEASE_TAGS_DIR/$sha.env"
   fi
-  printf '%s\n' "$file"
 }
+
+# ── shared state helpers ────────────────────────────────────────────────────
 
 current_release() {
   local release
@@ -116,68 +151,23 @@ wait_healthy() {
 }
 
 wait_postgres() {
-  # $1: compose function name ("compose" or "compose_candidate"), $2: release.
-  local compose_fn=$1 release=$2 attempt
-  for attempt in $(seq 1 "${PG_WAIT_ATTEMPTS:-30}"); do
-    if "$compose_fn" "$release" exec -T postgres sh -ec \
+  # $1: compose function name, $2: release, $3: attempt id (candidate only).
+  local compose_fn=$1 release=$2 attempt=${3:-} count=0
+  while [ "$count" -lt "${PG_WAIT_ATTEMPTS:-30}" ]; do
+    "$compose_fn" "$release" $attempt exec -T postgres sh -ec \
       'pg_isready --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"' \
-      >/dev/null 2>&1; then
-      return 0
-    fi
+      >/dev/null 2>&1 && return 0
+    count=$((count + 1))
     sleep "${PG_WAIT_INTERVAL:-2}"
   done
   return 1
 }
 
-release_images_present() {
-  local release=$1 sha svc
-  sha=${release##*/}
-  for svc in api worker web; do
-    docker image inspect "novelforge-$svc:$sha" >/dev/null 2>&1 \
-      || { echo "image novelforge-$svc:$sha missing; run 'candidate $sha' first" >&2; return 1; }
-  done
+app_image_digest() { # $1=sha $2=svc -> image id on stdout, rc!=0 when absent
+  docker image inspect --format '{{.Id}}' "novelforge-$2:$1"
 }
 
-extract_json_payload() {
-  # Ops tools log progress lines to stdout before the final JSON payload; the
-  # payload starts at the first bare "{" column-0 line and runs to EOF.
-  local raw=$1 out=$2
-  awk 'BEGIN{found=0} /^\{/{found=1} found{print}' "$raw" >"$out"
-  grep -q '"passed"' "$out" \
-    || { echo "could not extract JSON payload from $raw" >&2; return 1; }
-}
-
-write_candidate_envelope() {
-  local sha=$1 passed=$2 file
-  install -d -m 0750 "$SHARED/candidates"
-  file="$SHARED/candidates/$sha.envelope"
-  {
-    printf 'sha=%s\n' "$sha"
-    printf 'created=%s\n' "$(date -u +%s)"
-    printf 'passed=%s\n' "$passed"
-  } >"$file.tmp"
-  chmod 0640 "$file.tmp"
-  mv -f "$file.tmp" "$file"
-  printf '%s\n' "$file"
-}
-
-check_candidate_passed() {
-  local sha=$1 envelope="$SHARED/candidates/$sha.envelope" passed created now
-  [ -f "$envelope" ] \
-    || { echo "candidate gate result missing for $sha; run 'candidate $sha' first" >&2; exit 71; }
-  passed=$(sed -n 's/^passed=//p' "$envelope")
-  if [ "$passed" != "true" ]; then
-    echo "candidate gate FAILED for $sha; refusing to deploy (evidence: $SHARED/candidates/$sha.*.json)" >&2
-    exit 71
-  fi
-  created=$(sed -n 's/^created=//p' "$envelope")
-  now=$(date -u +%s)
-  if [ -z "$created" ] \
-    || [ "$created" -le $((now - CANDIDATE_MAX_AGE_SECONDS)) ]; then
-    echo "candidate gate result for $sha is stale (older than ${CANDIDATE_MAX_AGE_SECONDS}s); re-run 'candidate $sha'" >&2
-    exit 71
-  fi
-}
+# ── backup / git / prepare ──────────────────────────────────────────────────
 
 backup_database() {
   # Backup via `compose exec` ONLY: never starts or recreates a container. If
@@ -234,7 +224,7 @@ prepare_release() {
   install -d -m 0750 -o root -g root "$SHARED/data/backups"
   rm -f "$release/deploy/.env"
   ln -s "$SHARED/.env" "$release/deploy/.env"
-  release_env_file "$release" >/dev/null
+  write_release_tag_file "$release"
   if [ -e "$release/data" ] && [ ! -L "$release/data" ]; then
     echo "release contains a non-symlink data path" >&2
     exit 73
@@ -253,8 +243,6 @@ switch_to() {
     legacy="$ROOT/legacy/current-$stamp"
     [ ! -e "$legacy" ] && [ ! -L "$legacy" ] \
       || { echo "legacy archive path already exists: $legacy" >&2; exit 73; }
-    # Moving on the same filesystem is atomic and preserves the complete
-    # pre-managed tree (or symlink) instead of deleting or overwriting it.
     mv -T "$CURRENT" "$legacy"
     echo "legacy current archived: $legacy" >&2
   fi
@@ -270,94 +258,226 @@ install_release_controller() {
     "$release/deploy/ops/novelforge-release" /usr/local/sbin/novelforge-release
 }
 
+# ── candidate gate ──────────────────────────────────────────────────────────
+
 candidate_sha() {
-  local sha=$1 release raw_dir validate_raw qualify_raw validate_json qualify_json
-  local validate_rc=0 qualify_rc=0 passed envelope
+  local sha=$1 release attempt raw_dir
+  local validate_rc=0 qualify_rc=0 snapshot_rc=0
+  local snapshot_state=skipped digests="" extra="" envelope
+
   fetch_main
   validate_sha "$sha"
   release=$(prepare_release "$sha")
 
-  # Validate interpolation, mounts and service definitions before building.
   compose "$release" config --quiet
-  compose_candidate "$release" config --quiet
 
-  raw_dir=$(mktemp -d "$SHARED/candidates/${sha}.raw.XXXXXX")
-  validate_raw="$raw_dir/validate.raw"
-  qualify_raw="$raw_dir/qualify.raw"
-  validate_json="$raw_dir/validate.json"
-  qualify_json="$raw_dir/qualify.json"
+  attempt=$(cat /proc/sys/kernel/random/uuid 2>/dev/null \
+    || printf '%s%s' "$(date -u +%s)" "$$")
 
-  # Script-scope handle for the EXIT trap: the trap fires after the function
-  # scope is gone, where the local $release is no longer visible.
+  # P0-1: invalidate any previous success for this sha BEFORE touching
+  # anything. From this moment deploy refuses (state=running).
+  write_envelope "$sha" "$attempt" running ""
+
+  raw_dir=$(mktemp -d "$CANDIDATES_DIR/$attempt.raw.XXXXXX")
+
   CANDIDATE_RELEASE=$release
+  CANDIDATE_ATTEMPT=$attempt
   candidate_cleanup() {
-    # Throwaway DB/containers/volumes/network go away; images are kept so a
-    # passing candidate can be deployed without rebuilding.
-    [ -n "${CANDIDATE_RELEASE:-}" ] || return 0
-    compose_candidate "$CANDIDATE_RELEASE" down -v --remove-orphans >/dev/null 2>&1 || true
-    CANDIDATE_RELEASE=""
+    # Per-attempt project: a crashed attempt's resources are orphaned by
+    # design (unique generation, never reused); THIS attempt's own stack is
+    # torn down. Images are kept so a passing candidate deploys without
+    # rebuilding. On any non-published exit the envelope is marked failed.
+    if [ -n "${CANDIDATE_RELEASE:-}" ] && [ -n "${CANDIDATE_ATTEMPT:-}" ]; then
+      compose_candidate "$CANDIDATE_RELEASE" "$CANDIDATE_ATTEMPT" \
+        down -v --remove-orphans >/dev/null 2>&1 || true
+    fi
+    if [ "${CANDIDATE_PUBLISHED:-false}" != "true" ]; then
+      write_envelope "$CANDIDATE_SHA" "$CANDIDATE_ATTEMPT" failed "" || true
+    fi
   }
-  trap candidate_cleanup EXIT
+  candidate_cleanup_on_exit() {
+    candidate_cleanup
+  }
+  CANDIDATE_SHA=$sha
+  CANDIDATE_PUBLISHED=false
+  trap candidate_cleanup_on_exit EXIT
 
-  # Build all five images under the isolated project / candidate image names.
-  compose_candidate "$release" build postgres redis api worker web
+  # Build all five images under the per-attempt isolated project.
+  compose_candidate "$release" "$attempt" build postgres redis api worker web
 
-  # Isolated throwaway database for migration and evidence gating.
-  compose_candidate "$release" up -d postgres redis
-  wait_postgres compose_candidate "$release" \
+  # Isolated throwaway database (per-attempt volumes and network).
+  compose_candidate "$release" "$attempt" up -d postgres redis
+  wait_postgres compose_candidate "$release" "$attempt" \
     || { echo "candidate postgres did not become ready" >&2; exit 70; }
 
-  # 1) Migrations must apply cleanly to a fresh database.
-  compose_candidate "$release" run --rm --no-deps api alembic upgrade head
+  # 1) fresh-database migration.
+  compose_candidate "$release" "$attempt" run --rm --no-deps api alembic upgrade head
+  extra="${extra}migration_fresh=passed
+"
 
-  # 2) Deterministic pack validation.
-  compose_candidate "$release" run --rm --no-deps api \
+  # 2) production-snapshot migration when a backup exists: restore the newest
+  #    dump into a second throwaway db and migrate it. Reported separately
+  #    from the fresh-db migration (acceptance §9.3).
+  local dump
+  dump=$(ls -1t "$SHARED/data/backups/"*.dump 2>/dev/null | head -1 || true)
+  if [ -n "$dump" ]; then
+    local pg_user pg_pass pg_db
+    pg_user=$(sed -n 's/^POSTGRES_USER=//p' "$SHARED/.env" | head -1)
+    pg_pass=$(sed -n 's/^POSTGRES_PASSWORD=//p' "$SHARED/.env" | head -1)
+    pg_db=$(sed -n 's/^POSTGRES_DB=//p' "$SHARED/.env" | head -1)
+    compose_candidate "$release" "$attempt" run --rm --no-deps \
+      -v "$dump:/backup.dump:ro" \
+      postgres sh -ec '
+        dropdb --if-exists --username="$POSTGRES_USER" snapshot_check
+        createdb --username="$POSTGRES_USER" snapshot_check
+        pg_restore --no-owner --no-acl --username="$POSTGRES_USER" --dbname=snapshot_check /backup.dump
+      ' || snapshot_rc=1
+    if [ "$snapshot_rc" -eq 0 ]; then
+      compose_candidate "$release" "$attempt" run --rm --no-deps \
+        -e "DATABASE_URL=postgresql+asyncpg://${pg_user}:${pg_pass}@postgres:5432/snapshot_check" \
+        api alembic upgrade head || snapshot_rc=1
+    fi
+    if [ "$snapshot_rc" -eq 0 ]; then
+      snapshot_state=passed
+    else
+      snapshot_state=failed
+    fi
+    extra="${extra}migration_snapshot=$snapshot_state
+"
+    extra="${extra}migration_snapshot_dump=$(basename "$dump")
+"
+  else
+    extra="${extra}migration_snapshot=skipped
+"
+  fi
+
+  # 3) deterministic pack validation.
+  compose_candidate "$release" "$attempt" run --rm --no-deps api \
     python scripts/production_pack.py validate --pack "$PACK" \
-    >"$validate_raw" || validate_rc=$?
+    >"$raw_dir/validate.raw" || validate_rc=$?
 
-  # 3) Model evidence against the real gateway, written to the throwaway DB.
-  compose_candidate "$release" run --rm --no-deps api \
+  # 4) model evidence against the real gateway (writes to throwaway db only).
+  compose_candidate "$release" "$attempt" run --rm --no-deps api \
     python scripts/production_pack.py qualify --pack "$PACK" \
-    >"$qualify_raw" || qualify_rc=$?
+    >"$raw_dir/qualify.raw" || qualify_rc=$?
 
-  if ! extract_json_payload "$validate_raw" "$validate_json"; then
+  extract_json_payload() {
+    local raw=$1 out=$2
+    awk 'BEGIN{found=0} /^\{/{found=1} found{print}' "$raw" >"$out"
+    grep -q '"passed"' "$out" \
+      || { echo "could not extract JSON payload from $raw" >&2; return 1; }
+  }
+  if ! extract_json_payload "$raw_dir/validate.raw" "$raw_dir/validate.json"; then
     validate_rc=1
   fi
-  if ! extract_json_payload "$qualify_raw" "$qualify_json"; then
+  if ! extract_json_payload "$raw_dir/qualify.raw" "$raw_dir/qualify.json"; then
     qualify_rc=1
   fi
 
-  passed=true
+  # Digest binding: the exact image ids this candidate built and verified.
+  local svc
+  for svc in api worker web; do
+    local id
+    id=$(app_image_digest "$sha" "$svc") \
+      || { echo "candidate image novelforge-$svc:$sha missing after build" >&2; exit 70; }
+    digests="${digests}${digests:+|}$(printf '%s:%s' "$svc" "$id")"
+  done
+  extra="${extra}image_digests=$digests
+"
+
+  local passed=true
   [ "$validate_rc" -eq 0 ] || passed=false
   [ "$qualify_rc" -eq 0 ] || passed=false
+  [ "$snapshot_rc" -eq 0 ] || passed=false
 
-  envelope=$(write_candidate_envelope "$sha" "$passed")
+  if [ "$passed" = "true" ]; then
+    write_envelope "$sha" "$attempt" passed "$extra"
+    CANDIDATE_PUBLISHED=true
+  else
+    write_envelope "$sha" "$attempt" failed "$extra"
+  fi
+  envelope=$(envelope_path "$sha")
 
-  printf '{"ok":true,"action":"candidate","sha":"%s","passed":%s,"validation":' \
-    "$sha" "$passed"
-  cat "$validate_json"
+  printf '{"ok":true,"action":"candidate","sha":"%s","attempt_id":"%s","passed":%s,"migrations":{"fresh":"passed","production_snapshot":"%s"},"validation":' \
+    "$sha" "$attempt" "$passed" "$snapshot_state"
+  cat "$raw_dir/validate.json"
   printf ',"model_evidence":'
-  cat "$qualify_json"
+  cat "$raw_dir/qualify.json"
   printf ',"envelope":"%s"}\n' "$envelope"
 
   [ "$passed" = "true" ] || exit 71
 }
 
+check_candidate_passed() {
+  # Strict, multi-factor validation (P0-1 / P0-2 / §9.1):
+  # sha binding, state, freshness, environment hash and image digests.
+  local sha=$1 file
+  file=$(envelope_path "$sha")
+  [ -f "$file" ] \
+    || { echo "candidate gate result missing for $sha; run 'candidate $sha' first" >&2; exit 71; }
+
+  local state attempt created env_hash digests bound_sha
+  bound_sha=$(envelope_field "$sha" sha)
+  if [ "$bound_sha" != "$sha" ]; then
+    echo "candidate envelope sha mismatch (envelope is for '$bound_sha'); re-run 'candidate $sha'" >&2
+    exit 71
+  fi
+  state=$(envelope_field "$sha" state)
+  attempt=$(envelope_field "$sha" attempt_id)
+  created=$(envelope_field "$sha" created)
+  env_hash=$(envelope_field "$sha" env_hash)
+  digests=$(envelope_field "$sha" image_digests)
+
+  [ "$state" = "passed" ] \
+    || { echo "candidate gate for $sha is state=$state (not passed); re-run 'candidate $sha'" >&2; exit 71; }
+  [ -n "$attempt" ] \
+    || { echo "candidate envelope for $sha is malformed (no attempt_id)" >&2; exit 71; }
+
+  local now
+  now=$(date -u +%s)
+  if [ -z "$created" ] || [ "$created" -gt "$now" ] \
+    || [ "$created" -le $((now - CANDIDATE_MAX_AGE_SECONDS)) ]; then
+    echo "candidate gate result for $sha is stale (older than ${CANDIDATE_MAX_AGE_SECONDS}s); re-run 'candidate $sha'" >&2
+    exit 71
+  fi
+
+  local current_hash
+  current_hash=$(env_file_hash)
+  if [ -z "$env_hash" ] || [ "$env_hash" != "$current_hash" ]; then
+    echo "shared .env changed since candidate $sha (env_hash mismatch); re-run 'candidate $sha'" >&2
+    exit 71
+  fi
+
+  local pair svc recorded_id current_id
+  local IFS='|'
+  for pair in $digests; do
+    svc=${pair%%:*}
+    recorded_id=${pair#*:}
+    current_id=$(app_image_digest "$sha" "$svc") \
+      || { echo "image novelforge-$svc:$sha missing; run 'candidate $sha' first" >&2; exit 71; }
+    if [ "$current_id" != "$recorded_id" ]; then
+      echo "image novelforge-$svc:$sha was re-pointed after the candidate gate (digest mismatch); re-run 'candidate $sha'" >&2
+      exit 71
+    fi
+  done
+  return 0
+}
+
+# ── deploy / rollback ───────────────────────────────────────────────────────
+
 deploy_sha() {
   local sha=$1
-  local previous release backup
+  local previous release backup attempt
   fetch_main
   validate_sha "$sha"
   release=$(prepare_release "$sha")
   previous=$(current_release)
 
-  # Validate interpolation, mounts and service definitions on the target host.
   compose "$release" config --quiet
 
-  # Hard gate: only a passed, fresh candidate result for THIS exact sha may be
-  # deployed. Nothing running has been touched at this point.
+  # Hard gate BEFORE anything that could touch production state.
   check_candidate_passed "$sha"
-  release_images_present "$release"
+  attempt=$(envelope_field "$sha" attempt_id)
 
   backup_source=${previous:-$release}
   backup=$(backup_database "$backup_source" "$sha")
@@ -372,22 +492,21 @@ deploy_sha() {
     echo "new release failed health check" >&2
     if [ -n "$previous" ] && [ -d "$previous" ]; then
       switch_to "$previous"
-      # Per-release image tags make this a true code rollback; build only if
-      # the previous release's images were pruned.
-      release_images_present "$previous" \
-        || compose "$previous" build api worker web
       compose "$previous" up -d --remove-orphans
-      wait_healthy || true
+      if wait_healthy; then
+        printf '%s\n' '{"ok":false,"action":"deploy","rollback":"succeeded"}' >&2
+      else
+        printf '%s\n' '{"ok":false,"action":"deploy","rollback":"failed"}' >&2
+      fi
+    else
+      printf '%s\n' '{"ok":false,"action":"deploy","rollback":"unavailable","reason":"no previous release"}' >&2
     fi
     exit 70
   fi
-  # The commit is already proven to be on origin/main.  Updating the forced
-  # command/controller after a healthy switch makes future operational verbs
-  # available without another root-console bootstrap.
   install_release_controller "$release"
   printf '%s\n' "$sha" >"$SHARED/DEPLOYED_SHA"
-  printf '{"ok":true,"action":"deploy","sha":"%s","previous":"%s","backup":"%s"}\n' \
-    "$sha" "${previous##*/}" "${backup##*/}"
+  printf '{"ok":true,"action":"deploy","sha":"%s","previous":"%s","backup":"%s","candidate_attempt":"%s"}\n' \
+    "$sha" "${previous##*/}" "${backup##*/}" "$attempt"
 }
 
 rollback_sha() {
@@ -396,20 +515,18 @@ rollback_sha() {
   fetch_main
   validate_sha "$sha"
   [ -d "$release" ] || { echo "release not prepared: $sha" >&2; exit 66; }
-  release_env_file "$release" >/dev/null
+  write_release_tag_file "$release"
   switch_to "$release"
-  release_images_present "$release" \
-    || compose "$release" build api worker web
   compose "$release" up -d --remove-orphans
   wait_healthy || { echo "rollback target unhealthy" >&2; exit 70; }
   printf '%s\n' "$sha" >"$SHARED/DEPLOYED_SHA"
   printf '{"ok":true,"action":"rollback","sha":"%s"}\n' "$sha"
 }
 
+# ── status ──────────────────────────────────────────────────────────────────
+
 show_status() {
-  local release sha health=false current_kind=absent mixed=false
-  local lines line svc rel
-  local prov_api="" prov_web="" prov_worker="" prov_postgres="" prov_redis=""
+  local release sha health=false current_kind=absent
   release=$(current_release)
   sha=$(current_sha)
   if [ -n "$release" ]; then
@@ -419,34 +536,65 @@ show_status() {
   fi
   healthy && health=true || true
 
+  local lines line svc rel image
+  local prov_api="" prov_web="" prov_worker="" prov_postgres="" prov_redis=""
+  local img_postgres="" img_redis=""
+  local found="" unexpected="" missing=""
+
   if [ -n "$release" ] && [ -d "$release/deploy" ]; then
     lines=$(compose "$release" ps --format json 2>/dev/null || true)
     while IFS= read -r line; do
       [ -n "$line" ] || continue
       svc=$(printf '%s' "$line" | sed -n 's/.*"Service":"\([a-z]*\)".*/\1/p')
       rel=$(printf '%s' "$line" | sed -n 's#.*com\.docker\.compose\.project\.working_dir='"$RELEASES"'/\([0-9a-f]\{40\}\)/deploy.*#\1#p')
+      image=$(printf '%s' "$line" | sed -n 's/.*"Image":"\([^"]*\)".*/\1/p')
       case "$svc" in
         api) prov_api=$rel ;;
         web) prov_web=$rel ;;
         worker) prov_worker=$rel ;;
-        postgres) prov_postgres=$rel ;;
-        redis) prov_redis=$rel ;;
+        postgres) prov_postgres=$rel; img_postgres=$image ;;
+        redis) prov_redis=$rel; img_redis=$image ;;
+        *) [ -n "$svc" ] && unexpected="$unexpected$svc " ;;
       esac
+      [ -n "$svc" ] && found="$found $svc"
     done <<<"$lines"
-    # Mixed provenance: any running service came from a different release than
-    # the one the current symlink selects (the failed-gate deployment state).
-    for rel in "$prov_api" "$prov_web" "$prov_worker" "$prov_postgres" "$prov_redis"; do
-      if [ -n "$rel" ] && [ "$rel" != "$sha" ]; then
-        mixed=true
-      fi
-    done
   fi
+
+  local svc
+  for svc in $EXPECTED_SERVICES; do
+    case " $found " in
+      *" $svc "*) ;;
+      *) missing="$missing$svc " ;;
+    esac
+  done
+
+  local app_mixed=false
+  for rel in "$prov_api" "$prov_web" "$prov_worker"; do
+    if [ -n "$rel" ] && [ "$rel" != "$sha" ]; then
+      app_mixed=true
+    fi
+  done
+
+  local provenance_complete=false
+  [ -z "$missing" ] && provenance_complete=true
 
   json_value() {
     if [ -n "$1" ]; then printf '"%s"' "$1"; else printf 'null'; fi
   }
-  printf '{"ok":true,"sha":"%s","health":%s,"release":"%s","current_kind":"%s","mixed_release":%s,"provenance":{"api":%s,"web":%s,"worker":%s,"postgres":%s,"redis":%s}}\n' \
-    "$sha" "$health" "$release" "$current_kind" "$mixed" \
+  json_array() { # words -> ["a","b"]
+    local out="[" word first=true
+    for word in $1; do
+      if [ "$first" = "true" ]; then first=false; else out="$out,"; fi
+      out="$out\"$word\""
+    done
+    printf '%s]' "$out"
+  }
+
+  printf '{"ok":true,"sha":"%s","health":%s,"release":"%s","current_kind":"%s","mixed_release":%s,"app_mixed_release":%s,"provenance_complete":%s,"missing_services":%s,"unexpected_services":%s,"infra_version":{"postgres":%s,"redis":%s},"provenance":{"api":%s,"web":%s,"worker":%s,"postgres":%s,"redis":%s}}\n' \
+    "$sha" "$health" "$release" "$current_kind" "$app_mixed" "$app_mixed" \
+    "$provenance_complete" \
+    "$(json_array "$missing")" "$(json_array "$unexpected")" \
+    "$(json_value "$img_postgres")" "$(json_value "$img_redis")" \
     "$(json_value "$prov_api")" "$(json_value "$prov_web")" \
     "$(json_value "$prov_worker")" "$(json_value "$prov_postgres")" \
     "$(json_value "$prov_redis")"

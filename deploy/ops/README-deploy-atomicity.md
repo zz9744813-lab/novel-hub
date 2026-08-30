@@ -86,3 +86,62 @@ Run inside a real Linux environment (WSL on this workstation):
 ```bash
 wsl -e bash -c "cd <repo>/deploy/ops/tests && bash run_tests.sh"
 ```
+
+## Round-2 hardening (re-acceptance P0-1..P0-4 + P1)
+
+- **Envelope lifecycle (P0-1)**: `candidate` writes the sha's envelope as
+  `state=running` BEFORE any build work, so a previously passed envelope can
+  never survive a later failed run of the same sha. The EXIT trap marks
+  `state=failed` on any non-published exit (including build/up/migration
+  failures and interruption). `state=passed` is published only after all
+  gates succeeded and image digests were recorded. deploy refuses anything
+  that is not `state=passed`.
+- **Attempt id + digest binding (§9.1)**: every candidate gets a UUID
+  attempt_id; the envelope records the api/worker/web image ids. deploy
+  re-inspects each image and refuses on any digest mismatch (re-pointed tag).
+- **No per-release secret cache (P0-2)**: interpolation uses
+  `--env-file $SHARED/.env --env-file $SHARED/release-tags/<sha>.env`, where
+  the second file contains ONLY `RELEASE_TAG=<sha>`. The envelope records the
+  sha256 of `$SHARED/.env`; deploy recomputes and refuses on rotation
+  ("env_hash mismatch"), forcing a fresh candidate that observes the new
+  credentials (covered by an env-probe test).
+- **No production data mounts in candidate (P0-3)**:
+  `docker-compose.candidate.yml` REPLACES api/worker volumes with
+  per-attempt named volumes (books/exports/imports), keeps references
+  strictly read-only, and drops the postgres backups bind. The behavior test
+  renders the merged config (pyyaml merge emulating `!override`) AND, when a
+  real docker compose CLI is available, validates the real merged config.
+- **Safe controller activation (P0-4)**: `deploy/ops/upgrade-controller.sh
+  <sha>` fetches/verifies the sha on main, prepares the release worktree,
+  `bash -n`-checks both controller files, records the before/after sha256 and
+  atomically installs them. It NEVER calls docker compose, migrations,
+  qualify, or switches the symlink. `bootstrap-console.sh` no longer carries
+  a hardcoded OPS_COMMIT — `OPS_COMMIT` is a required environment variable.
+- **Infra image contract (§7, plan A)**: api/worker/web follow the release
+  SHA; postgres/redis stay on their explicit immutable infra tags
+  (`:16-config-v2` / `:7-config-v2`). Candidate builds infra under
+  candidate-only tags (never retagging production's). `mixed_release` /
+  `app_mixed_release` compare ONLY the three app services; `infra_version`
+  reports the running infra images; `missing_services`,
+  `unexpected_services` and `provenance_complete` cover partial states.
+- **Per-attempt generation (§8)**: candidate project name is
+  `novelforge-candidate-<attempt-short>` and the candidate network embeds the
+  attempt id — a crashed attempt's leftovers can never be reused, and
+  cleanup only ever touches the attempt's own project.
+- **Migration realism (§9.3)**: candidate runs TWO separately reported
+  migrations: `migration_fresh` (empty throwaway db) and
+  `migration_snapshot` (restore of the newest production backup into a
+  second throwaway db, then migrate). Either failure fails the candidate;
+  no backup present -> `migration_snapshot=skipped`.
+
+### Running the tests (round 2)
+
+Requires a real Linux environment (WSL; the controller depends on symlinks
+and flock) and root (the upgrade path installs to /usr/local/sbin via a
+stub). `docker-compose` is optional but enables the real-CLI merged-config
+check inside scenario 6:
+
+```bash
+wsl -u root -e bash -c "cd <repo>/deploy/ops/tests && bash run_tests.sh"
+# final line: SCENARIOS=14 PASSED=14 FAILED=0
+```

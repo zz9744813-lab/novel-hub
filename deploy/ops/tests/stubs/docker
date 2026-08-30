@@ -11,6 +11,25 @@ set -u
 
 DOCKER_CALL_LOG=${DOCKER_CALL_LOG:?DOCKER_CALL_LOG must be set}
 DOCKER_STUB_DIR=${DOCKER_STUB_DIR:?DOCKER_STUB_DIR must be set}
+DOCKER_IMAGE_STATE=${DOCKER_IMAGE_STATE:?DOCKER_IMAGE_STATE must be set}
+
+lookup_id() { # $1=file $2=reference
+  [ -f "$1" ] || return 1
+  awk -v ref="$2" '$1 == ref { value=$2 } END { if (value != "") print value; else exit 1 }' "$1"
+}
+
+resolve_image_id() { # explicit scenario map is an allow-list; state precedes fallback
+  local ref=$1 id
+  if [ -n "${STUB_IMAGE_IDS:-}" ] && [ -f "$STUB_IMAGE_IDS" ]; then
+    lookup_id "$STUB_IMAGE_IDS" "$ref"
+    return
+  fi
+  if id=$(lookup_id "$DOCKER_IMAGE_STATE" "$ref" 2>/dev/null); then
+    printf '%s\n' "$id"
+    return 0
+  fi
+  printf 'sha256:%s\n' "$(printf '%s' "$ref" | sha256sum | cut -d' ' -f1)"
+}
 
 # docker image inspect [--format FMT] REF -> image id (exit 1 when absent)
 if [ "${1:-}" = "image" ] && [ "${2:-}" = "inspect" ]; then
@@ -22,16 +41,18 @@ if [ "${1:-}" = "image" ] && [ "${2:-}" = "inspect" ]; then
       *) ref=$1; shift ;;
     esac
   done
-  if [ -n "${STUB_IMAGE_IDS:-}" ] && [ -f "$STUB_IMAGE_IDS" ]; then
-    id=$(sed -n "s#^$ref ##p" "$STUB_IMAGE_IDS")
-    if [ -z "$id" ]; then
-      exit 1
-    fi
-    printf '%s\n' "$id"
-    exit 0
-  fi
-  # deterministic fallback: stable id per reference
-  printf 'sha256:%s\n' "$(printf '%s' "$ref" | sha256sum | cut -d' ' -f1)"
+  resolve_image_id "$ref"
+  exit $?
+fi
+
+# docker tag SOURCE TARGET -> retain SOURCE's exact image id for TARGET.
+if [ "${1:-}" = "tag" ] && [ "$#" -eq 3 ]; then
+  source_ref=$2
+  target_ref=$3
+  source_id=$(resolve_image_id "$source_ref") || exit 1
+  printf '%s %s\n' "$target_ref" "$source_id" >>"$DOCKER_IMAGE_STATE"
+  printf 'IMAGE_TAG SOURCE=%s TARGET=%s ID=%s\n' \
+    "$source_ref" "$target_ref" "$source_id" >>"$DOCKER_CALL_LOG"
   exit 0
 fi
 
@@ -75,8 +96,16 @@ while [ "$#" -gt 0 ]; do
 done
 
 log_call() {
-  printf 'PROJECT=%s ENVFILES=%s CMD=%s ARGS=%s\n' \
-    "$project" "$envfiles" "$subcommand" "$*" >>"$DOCKER_CALL_LOG"
+  local release_tag="" file value
+  local envfile_list=${envfiles#:}
+  local IFS=':'
+  for file in $envfile_list; do
+    [ -f "$file" ] || continue
+    value=$(sed -n 's/^RELEASE_TAG=//p' "$file" | tail -1)
+    [ -n "$value" ] && release_tag=$value
+  done
+  printf 'PROJECT=%s CMD=%s ARGS=%s ENVFILES=%s RELEASE_TAG=%s\n' \
+    "$project" "$subcommand" "$*" "$envfiles" "$release_tag" >>"$DOCKER_CALL_LOG"
 }
 
 run_oneoff() {
@@ -109,6 +138,12 @@ run_oneoff() {
       return "${STUB_SNAPSHOT_RESTORE_RC:-0}"
       ;;
     *production_pack.py*qualify*)
+      if [ -n "${STUB_ROTATE_ENV_FILE:-}" ] && [ -n "${STUB_ROTATE_ENV_VALUE:-}" ] \
+        && [ ! -f "${STUB_ROTATE_ENV_FILE}.rotated" ]; then
+        sed -i "s/^PRIMARY_API_KEY=.*/PRIMARY_API_KEY=${STUB_ROTATE_ENV_VALUE}/" \
+          "$STUB_ROTATE_ENV_FILE"
+        : >"${STUB_ROTATE_ENV_FILE}.rotated"
+      fi
       if [ "${STUB_ENV_PROBE:-0}" = "1" ] && [ -n "${STUB_ENV_PROBE_KEY:-}" ]; then
         # Source the shared .env exactly like compose interpolation would, so
         # tests can prove which credentials a candidate one-off would see.
@@ -145,7 +180,14 @@ case "$subcommand" in
     ;;
   up)
     log_call "${args[*]:-}"
+    if [ "$project" = "prod" ]; then
+      exit "${STUB_PROD_UP_RC:-0}"
+    fi
     exit "${STUB_UP_RC:-0}"
+    ;;
+  start)
+    log_call "${args[*]:-}"
+    exit "${STUB_START_RC:-0}"
     ;;
   down)
     log_call "${args[*]:-}"
@@ -160,6 +202,10 @@ case "$subcommand" in
     log_call "${args[*]:-}"
     case "${args[*]}" in
       *pg_isready*) exit 0 ;;
+      *pg_restore*)
+        cat >/dev/null || true
+        exit "${STUB_SNAPSHOT_RESTORE_RC:-0}"
+        ;;
       *pg_dump*)
         if [ -n "${STUB_PG_DUMP_FILE:-}" ] && [ -f "$STUB_PG_DUMP_FILE" ]; then
           cat "$STUB_PG_DUMP_FILE"

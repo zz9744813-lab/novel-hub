@@ -8,10 +8,10 @@
 #                      UUID; own images/volumes/network via the attempt env
 #                      file, throwaway databases, production data mounted
 #                      read-only or not at all).
-#                      The attempt env file is a 0600 FROZEN SNAPSHOT of
-#                      $SHARED/.env plus RELEASE_TAG=candidate-<attempt> and
-#                      CANDIDATE_ATTEMPT, so a mid-attempt secret rotation can
-#                      never mix environments inside one attempt.
+#                      A 0600 root-runtime file freezes $SHARED/.env exactly;
+#                      a second non-secret override supplies RELEASE_TAG,
+#                      CANDIDATE_ATTEMPT and the service env-file path, so a
+#                      mid-attempt rotation cannot mix runtime inputs.
 #                      The sha's envelope is invalidated to state=running
 #                      BEFORE any build work and only published state=passed
 #                      after every gate (including a production-snapshot
@@ -37,10 +37,13 @@ CONF=${NOVELFORGE_CONF:-/etc/novelforge-ops.conf}
 LOCK_FILE=${NOVELFORGE_LOCK:-/run/lock/novelforge-release.lock}
 CANDIDATE_PROJECT_BASE=${NOVELFORGE_CANDIDATE_PROJECT:-novelforge-candidate}
 CANDIDATES_DIR="$SHARED/candidates"
+CANDIDATE_RUNTIME_DIR=${NOVELFORGE_CANDIDATE_RUNTIME_DIR:-/run/novelforge-candidate}
 RELEASE_TAGS_DIR="$SHARED/release-tags"
 CANDIDATE_MAX_AGE_SECONDS=${CANDIDATE_MAX_AGE_SECONDS:-86400}
 PACK=production_packs/zhutian_hongyanlu/pack.json
 EXPECTED_SERVICES="api web worker postgres redis"
+OPS_TARGET=${NOVELFORGE_OPS_TARGET:-/usr/local/sbin/novelforge-release}
+OPS_WRAPPER_TARGET=${NOVELFORGE_OPS_WRAPPER_TARGET:-/usr/local/sbin/novelforge-ops}
 
 exec 9>"$LOCK_FILE"
 flock -w 5 9 || { echo '{"ok":false,"error":"release_busy"}'; exit 75; }
@@ -55,15 +58,16 @@ HEALTH_URL=${HEALTH_URL:-http://127.0.0.1/health/ready}
 die() { echo "$2" >&2; exit "$1"; }
 
 # ── envelope: strict, fail-closed parser (acceptance P0-C) ──────────────────
-# Grammar: one key=value per line; keys exactly {sha, attempt_id, created,
-# state, env_hash, image_digests}, each EXACTLY once, formats enforced.
-# Parsed values are exported as ENV_SHA / ENV_ATTEMPT_ID / ENV_CREATED /
-# ENV_STATE / ENV_HASH / ENV_DIGEST_* on success; any violation exits 71.
+# Grammar: one key=value per line; the nine keys written by write_envelope()
+# occur exactly once and are format checked. Passed envelopes additionally
+# require successful migration evidence and all three application digests.
+# Parsed values are exported as ENV_* variables on success; any violation
+# exits 71 before backup, migration, tag publication or service mutation.
 
 envelope_path() { printf '%s/%s.envelope\n' "$CANDIDATES_DIR" "$1"; }
 
-write_envelope() { # $1=sha $2=attempt_id $3=state (extra fields added by caller fields below)
-  local sha=$1 attempt=$2 state=$3 file
+write_envelope() { # $1=sha $2=attempt_id $3=state $4=hash of the env actually tested
+  local sha=$1 attempt=$2 state=$3 tested_env_hash=$4 file
   file=$(envelope_path "$sha")
   install -d -m 0750 "$CANDIDATES_DIR"
   {
@@ -71,8 +75,11 @@ write_envelope() { # $1=sha $2=attempt_id $3=state (extra fields added by caller
     printf 'attempt_id=%s\n' "$attempt"
     printf 'created=%s\n' "$(date -u +%s)"
     printf 'state=%s\n' "$state"
-    printf 'env_hash=%s\n' "$(env_file_hash)"
-    if [ -n "${ENVELOPE_EXTRA:-}" ]; then printf '%b' "$ENVELOPE_EXTRA"; fi
+    printf 'env_hash=%s\n' "$tested_env_hash"
+    printf 'migration_fresh=%s\n' "${ENVELOPE_MIGRATION_FRESH:-pending}"
+    printf 'migration_snapshot=%s\n' "${ENVELOPE_MIGRATION_SNAPSHOT:-pending}"
+    printf 'migration_snapshot_dump=%s\n' "${ENVELOPE_MIGRATION_SNAPSHOT_DUMP:-}"
+    printf 'image_digests=%s\n' "${ENVELOPE_IMAGE_DIGESTS:-}"
   } >"$file.tmp"
   chmod 0640 "$file.tmp"
   mv -f "$file.tmp" "$file"
@@ -93,36 +100,38 @@ parse_envelope() { # $1=sha -> exits 71 on any violation
     || die 71 "candidate gate result missing for $sha; run 'candidate $sha' first"
 
   ENV_SHA=""; ENV_ATTEMPT_ID=""; ENV_CREATED=""; ENV_STATE=""
-  ENV_HASH=""; ENV_DIGEST_API=""; ENV_DIGEST_WORKER=""; ENV_DIGEST_WEB=""
+  ENV_HASH=""; ENV_MIGRATION_FRESH=""; ENV_MIGRATION_SNAPSHOT=""
+  ENV_MIGRATION_SNAPSHOT_DUMP=""
+  ENV_DIGEST_API=""; ENV_DIGEST_WORKER=""; ENV_DIGEST_WEB=""
+  declare -A envelope_seen=()
 
   while IFS= read -r line || [ -n "$line" ]; do
     [ -n "$line" ] || continue
     case "$line" in
-      sha=*|attempt_id=*|created=*|state=*|env_hash=*|image_digests=*) ;;
+      sha=*|attempt_id=*|created=*|state=*|env_hash=*|migration_fresh=*|migration_snapshot=*|migration_snapshot_dump=*|image_digests=*) ;;
       *) die 71 "candidate envelope for $sha has an unknown or malformed line: $line" ;;
     esac
     key=${line%%=*}
     value=${line#*=}
+    [ -z "${envelope_seen[$key]+x}" ] \
+      || die 71 "candidate envelope for $sha: duplicate $key field"
+    envelope_seen[$key]=1
     case "$key" in
       sha)
-        [ -z "$ENV_SHA" ] || die 71 "candidate envelope for $sha: duplicate sha field"
         is_hex 40 "$value" || die 71 "candidate envelope for $sha: invalid sha format"
         ENV_SHA=$value
         ;;
       attempt_id)
-        [ -z "$ENV_ATTEMPT_ID" ] || die 71 "candidate envelope for $sha: duplicate attempt_id"
         [[ $value =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
           || die 71 "candidate envelope for $sha: invalid attempt_id"
         ENV_ATTEMPT_ID=$value
         ;;
       created)
-        [ -z "$ENV_CREATED" ] || die 71 "candidate envelope for $sha: duplicate created"
-        [[ $value =~ ^[0-9]{1,12}$ ]] \
+        [[ $value =~ ^[1-9][0-9]{9,11}$ ]] \
           || die 71 "candidate envelope for $sha: non-numeric created"
         ENV_CREATED=$value
         ;;
       state)
-        [ -z "$ENV_STATE" ] || die 71 "candidate envelope for $sha: duplicate state"
         case "$value" in
           running|failed|passed) ;;
           *) die 71 "candidate envelope for $sha: invalid state '$value'" ;;
@@ -130,12 +139,24 @@ parse_envelope() { # $1=sha -> exits 71 on any violation
         ENV_STATE=$value
         ;;
       env_hash)
-        [ -z "$ENV_HASH" ] || die 71 "candidate envelope for $sha: duplicate env_hash"
         is_hex 64 "$value" || die 71 "candidate envelope for $sha: invalid env_hash"
         ENV_HASH=$value
         ;;
+      migration_fresh)
+        case "$value" in pending|passed|failed) ;; *) die 71 "candidate envelope for $sha: invalid migration_fresh" ;; esac
+        ENV_MIGRATION_FRESH=$value
+        ;;
+      migration_snapshot)
+        case "$value" in pending|passed|failed|skipped) ;; *) die 71 "candidate envelope for $sha: invalid migration_snapshot" ;; esac
+        ENV_MIGRATION_SNAPSHOT=$value
+        ;;
+      migration_snapshot_dump)
+        [[ -z $value || $value =~ ^[A-Za-z0-9._-]{1,255}$ ]] \
+          || die 71 "candidate envelope for $sha: invalid migration_snapshot_dump"
+        ENV_MIGRATION_SNAPSHOT_DUMP=$value
+        ;;
       image_digests)
-        [ -z "$ENV_DIGEST_API" ] || die 71 "candidate envelope for $sha: duplicate image_digests"
+        [ -z "$value" ] && continue
         local pair svc id
         local IFS='|'
         for pair in $value; do
@@ -148,12 +169,18 @@ parse_envelope() { # $1=sha -> exits 71 on any violation
           [[ $id =~ ^sha256:[0-9a-f]{64}$ ]] \
             || die 71 "candidate envelope for $sha: invalid digest for $svc"
           case "$svc" in
-            api) [ -z "$ENV_DIGEST_API" ] && ENV_DIGEST_API=$id \
-              || die 71 "candidate envelope for $sha: duplicate api digest" ;;
-            worker) [ -z "$ENV_DIGEST_WORKER" ] && ENV_DIGEST_WORKER=$id \
-              || die 71 "candidate envelope for $sha: duplicate worker digest" ;;
-            web) [ -z "$ENV_DIGEST_WEB" ] && ENV_DIGEST_WEB=$id \
-              || die 71 "candidate envelope for $sha: duplicate web digest" ;;
+            api)
+              [ -z "$ENV_DIGEST_API" ] || die 71 "candidate envelope for $sha: duplicate api digest"
+              ENV_DIGEST_API=$id
+              ;;
+            worker)
+              [ -z "$ENV_DIGEST_WORKER" ] || die 71 "candidate envelope for $sha: duplicate worker digest"
+              ENV_DIGEST_WORKER=$id
+              ;;
+            web)
+              [ -z "$ENV_DIGEST_WEB" ] || die 71 "candidate envelope for $sha: duplicate web digest"
+              ENV_DIGEST_WEB=$id
+              ;;
           esac
         done
         [ -n "$ENV_DIGEST_API" ] && [ -n "$ENV_DIGEST_WORKER" ] && [ -n "$ENV_DIGEST_WEB" ] \
@@ -162,10 +189,30 @@ parse_envelope() { # $1=sha -> exits 71 on any violation
     esac
   done <"$file"
 
+  local required_key
+  for required_key in sha attempt_id created state env_hash migration_fresh migration_snapshot migration_snapshot_dump image_digests; do
+    [ -n "${envelope_seen[$required_key]+x}" ] \
+      || die 71 "candidate envelope for $sha is missing $required_key"
+  done
   [ "$ENV_SHA" = "$sha" ] \
     || die 71 "candidate envelope sha mismatch (envelope is for '$ENV_SHA'); re-run 'candidate $sha'"
-  [ -n "$ENV_ATTEMPT_ID" ] && [ -n "$ENV_CREATED" ] && [ -n "$ENV_STATE" ] && [ -n "$ENV_HASH" ] \
-    || die 71 "candidate envelope for $sha is incomplete; re-run 'candidate $sha'"
+  if [ "$ENV_STATE" = "passed" ]; then
+    [ "$ENV_MIGRATION_FRESH" = "passed" ] \
+      || die 71 "candidate envelope for $sha lacks a passed fresh migration"
+    case "$ENV_MIGRATION_SNAPSHOT" in
+      passed)
+        [ -n "$ENV_MIGRATION_SNAPSHOT_DUMP" ] \
+          || die 71 "candidate envelope for $sha: passed snapshot has no dump evidence"
+        ;;
+      skipped)
+        [ -z "$ENV_MIGRATION_SNAPSHOT_DUMP" ] \
+          || die 71 "candidate envelope for $sha: skipped snapshot unexpectedly names a dump"
+        ;;
+      *) die 71 "candidate envelope for $sha lacks valid snapshot migration evidence" ;;
+    esac
+    [ -n "$ENV_DIGEST_API" ] && [ -n "$ENV_DIGEST_WORKER" ] && [ -n "$ENV_DIGEST_WEB" ] \
+      || die 71 "candidate envelope for $sha: image_digests must cover api, worker and web"
+  fi
   return 0
 }
 
@@ -193,21 +240,23 @@ compose() {
     -f "$release/deploy/docker-compose.yml" "$@"
 }
 
-attempt_env_file() { printf '%s/%s.env\n' "$CANDIDATES_DIR" "$1"; }
+attempt_env_file() { printf '%s/%s.shared.env\n' "$CANDIDATE_RUNTIME_DIR" "$1"; }
+attempt_override_file() { printf '%s/%s.compose.env\n' "$CANDIDATE_RUNTIME_DIR" "$1"; }
 
-create_attempt_env() { # $1=attempt: frozen 0600 snapshot of shared .env
-  local attempt=$1 file
-  file=$(attempt_env_file "$attempt")
-  install -d -m 0750 "$CANDIDATES_DIR"
+create_attempt_env() { # $1=attempt: frozen secret snapshot + non-secret compose overrides
+  local attempt=$1 shared_file override_file
+  shared_file=$(attempt_env_file "$attempt")
+  override_file=$(attempt_override_file "$attempt")
+  install -d -m 0700 "$CANDIDATE_RUNTIME_DIR"
+  install -m 0600 "$SHARED/.env" "$shared_file.tmp"
+  mv -f "$shared_file.tmp" "$shared_file"
   {
-    cat "$SHARED/.env"
-    printf 'RELEASE_TAG=candidate-%s
-' "$attempt"
-    printf 'CANDIDATE_ATTEMPT=%s
-' "$attempt"
-  } >"$file.tmp"
-  chmod 0600 "$file.tmp"
-  mv -f "$file.tmp" "$file"
+    printf 'RELEASE_TAG=candidate-%s\n' "$attempt"
+    printf 'CANDIDATE_ATTEMPT=%s\n' "$attempt"
+    printf 'CANDIDATE_ENV_FILE=%s\n' "$shared_file"
+  } >"$override_file.tmp"
+  chmod 0600 "$override_file.tmp"
+  mv -f "$override_file.tmp" "$override_file"
 }
 
 compose_candidate() {
@@ -218,6 +267,7 @@ compose_candidate() {
   shift 2
   _compose_cli \
     --env-file "$(attempt_env_file "$attempt")" \
+    --env-file "$(attempt_override_file "$attempt")" \
     --project-directory "$release/deploy" \
     -f "$release/deploy/docker-compose.yml" \
     -f "$release/deploy/docker-compose.candidate.yml" \
@@ -272,7 +322,8 @@ wait_postgres() {
   # $1: compose function name, $2: release, $3: attempt id (candidate only).
   local compose_fn=$1 release=$2 attempt=${3:-} count=0
   while [ "$count" -lt "${PG_WAIT_ATTEMPTS:-30}" ]; do
-    "$compose_fn" "$release" $attempt exec -T postgres sh -ec \
+    # shellcheck disable=SC2016 # variables expand inside the postgres container
+    "$compose_fn" "$release" "$attempt" exec -T postgres sh -ec \
       'pg_isready --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"' \
       >/dev/null 2>&1 && return 0
     count=$((count + 1))
@@ -294,6 +345,7 @@ backup_database() {
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
   destination="$SHARED/data/backups/pre-${target_sha}-${stamp}.dump"
   temporary="${destination}.tmp"
+  # shellcheck disable=SC2016 # variables expand inside the postgres container
   if ! compose "$release" exec -T postgres sh -ec \
     'export PGPASSWORD="$POSTGRES_PASSWORD"; exec pg_dump --format=custom --no-owner --no-acl --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"' \
     >"$temporary"; then
@@ -369,10 +421,47 @@ switch_to() {
 
 install_release_controller() {
   local release=$1
+  local stage_release stage_wrapper backup_release backup_wrapper
+  local source_release_hash source_wrapper_hash after_release after_wrapper
+  local had_release=false had_wrapper=false switched=false
+
+  install -d -m 0755 "$(dirname "$OPS_TARGET")" "$(dirname "$OPS_WRAPPER_TARGET")"
+  stage_release=$(mktemp "$OPS_TARGET.new.XXXXXX")
+  stage_wrapper=$(mktemp "$OPS_WRAPPER_TARGET.new.XXXXXX")
+  backup_release=$(mktemp "$OPS_TARGET.previous.XXXXXX")
+  backup_wrapper=$(mktemp "$OPS_WRAPPER_TARGET.previous.XXXXXX")
+
   install -o root -g root -m 0755 \
-    "$release/deploy/ops/novelforge-ops" /usr/local/sbin/novelforge-ops
+    "$release/deploy/ops/novelforge-release" "$stage_release"
   install -o root -g root -m 0755 \
-    "$release/deploy/ops/novelforge-release" /usr/local/sbin/novelforge-release
+    "$release/deploy/ops/novelforge-ops" "$stage_wrapper"
+  source_release_hash=$(sha256sum "$release/deploy/ops/novelforge-release" | cut -d' ' -f1)
+  source_wrapper_hash=$(sha256sum "$release/deploy/ops/novelforge-ops" | cut -d' ' -f1)
+  if [ "$(sha256sum "$stage_release" | cut -d' ' -f1)" != "$source_release_hash" ] \
+    || [ "$(sha256sum "$stage_wrapper" | cut -d' ' -f1)" != "$source_wrapper_hash" ]; then
+    rm -f "$stage_release" "$stage_wrapper" "$backup_release" "$backup_wrapper"
+    die 70 "staged controller pair hash mismatch"
+  fi
+
+  if [ -f "$OPS_TARGET" ]; then cp -p "$OPS_TARGET" "$backup_release"; had_release=true; fi
+  if [ -f "$OPS_WRAPPER_TARGET" ]; then cp -p "$OPS_WRAPPER_TARGET" "$backup_wrapper"; had_wrapper=true; fi
+
+  if mv -f "$stage_release" "$OPS_TARGET" && mv -f "$stage_wrapper" "$OPS_WRAPPER_TARGET"; then
+    after_release=$(sha256sum "$OPS_TARGET" | cut -d' ' -f1)
+    after_wrapper=$(sha256sum "$OPS_WRAPPER_TARGET" | cut -d' ' -f1)
+    if [ "$after_release" = "$source_release_hash" ] \
+      && [ "$after_wrapper" = "$source_wrapper_hash" ]; then
+      switched=true
+    fi
+  fi
+
+  if [ "$switched" != "true" ]; then
+    if [ "$had_release" = "true" ]; then mv -f "$backup_release" "$OPS_TARGET"; else rm -f "$OPS_TARGET"; fi
+    if [ "$had_wrapper" = "true" ]; then mv -f "$backup_wrapper" "$OPS_WRAPPER_TARGET"; else rm -f "$OPS_WRAPPER_TARGET"; fi
+    rm -f "$stage_release" "$stage_wrapper" "$backup_release" "$backup_wrapper"
+    die 70 "controller pair install failed and was rolled back"
+  fi
+  rm -f "$stage_release" "$stage_wrapper" "$backup_release" "$backup_wrapper"
 }
 
 # ── candidate gate ──────────────────────────────────────────────────────────
@@ -380,48 +469,65 @@ install_release_controller() {
 candidate_sha() {
   local sha=$1 release attempt raw_dir
   local validate_rc=0 qualify_rc=0 snapshot_restore_rc=0 snapshot_migrate_rc=0
-  local snapshot_state=skipped digests="" snapshot_dump=""
+  local snapshot_state=skipped digests="" snapshot_dump="" candidate_env_hash
 
   fetch_main
   validate_sha "$sha"
   release=$(prepare_release "$sha")
 
-  compose "$release" config --quiet
-
   attempt=$(cat /proc/sys/kernel/random/uuid 2>/dev/null \
     || printf '%s-%s' "$(date -u +%s)" "$$")
+  [[ $attempt =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
+    || die 70 "could not generate a valid candidate attempt id"
 
   # P0-1: invalidate any previous success for this sha BEFORE touching
   # anything. From this moment deploy refuses (state=running).
-  ENVELOPE_EXTRA=""
-  write_envelope "$sha" "$attempt" running
-
-  # P0-A / §9.1: frozen 0600 attempt env snapshot. All candidate compose
-  # commands interpolate ONLY from this file; a mid-attempt shared-env
-  # rotation cannot mix environments, and the per-attempt network/volume
-  # names get the real attempt id instead of "unset".
-  create_attempt_env "$attempt"
-
-  raw_dir=$(mktemp -d "$CANDIDATES_DIR/$attempt.raw.XXXXXX")
+  ENVELOPE_MIGRATION_FRESH=pending
+  ENVELOPE_MIGRATION_SNAPSHOT=pending
+  ENVELOPE_MIGRATION_SNAPSHOT_DUMP=""
+  ENVELOPE_IMAGE_DIGESTS=""
+  candidate_env_hash=$(env_file_hash)
+  write_envelope "$sha" "$attempt" running "$candidate_env_hash"
 
   CANDIDATE_RELEASE=$release
   CANDIDATE_ATTEMPT=$attempt
+  CANDIDATE_SHA=$sha
+  CANDIDATE_ENV_HASH=$candidate_env_hash
+  CANDIDATE_PUBLISHED=false
   candidate_cleanup() {
-    if [ -n "${CANDIDATE_RELEASE:-}" ] && [ -n "${CANDIDATE_ATTEMPT:-}" ]; then
+    if [ -n "${CANDIDATE_RELEASE:-}" ] && [ -n "${CANDIDATE_ATTEMPT:-}" ] \
+      && [ -f "$(attempt_env_file "$CANDIDATE_ATTEMPT")" ] \
+      && [ -f "$(attempt_override_file "$CANDIDATE_ATTEMPT")" ]; then
       compose_candidate "$CANDIDATE_RELEASE" "$CANDIDATE_ATTEMPT" \
         down -v --remove-orphans >/dev/null 2>&1 || true
     fi
-    # The frozen env snapshot holds secrets: delete it on every exit. The
-    # envelope keeps env_hash for audit; no secret material persists.
-    rm -f "$(attempt_env_file "${CANDIDATE_ATTEMPT:-}")"
+    # Frozen secret material lives only in the root-only runtime directory.
+    rm -f "$(attempt_env_file "${CANDIDATE_ATTEMPT:-}")" \
+      "$(attempt_override_file "${CANDIDATE_ATTEMPT:-}")"
     if [ "${CANDIDATE_PUBLISHED:-false}" != "true" ]; then
-      write_envelope "${CANDIDATE_SHA:-}" "${CANDIDATE_ATTEMPT:-}" failed || true
+      write_envelope "${CANDIDATE_SHA:-}" "${CANDIDATE_ATTEMPT:-}" failed \
+        "${CANDIDATE_ENV_HASH:-$candidate_env_hash}" || true
     fi
   }
   candidate_cleanup_on_exit() { candidate_cleanup; }
-  CANDIDATE_SHA=$sha
-  CANDIDATE_PUBLISHED=false
   trap candidate_cleanup_on_exit EXIT
+
+  # P0-A / §9.1: frozen 0600 secret snapshot plus a separate compose override.
+  # Both interpolation and service env_file consumption use the snapshot; a
+  # mid-attempt rotation cannot mix environments, and the network/volume names
+  # receive the real attempt id rather than "unset".
+  create_attempt_env "$attempt"
+  candidate_env_hash=$(sha256sum "$(attempt_env_file "$attempt")" | cut -d' ' -f1)
+  CANDIDATE_ENV_HASH=$candidate_env_hash
+  # Rewrite running with the hash of the exact frozen bytes that every gate
+  # will consume. Later writes retain this hash even if shared .env rotates.
+  write_envelope "$sha" "$attempt" running "$candidate_env_hash"
+
+  # Validate the exact candidate merge and frozen env inputs, not production's
+  # compose view.
+  compose_candidate "$release" "$attempt" config --quiet
+
+  raw_dir=$(mktemp -d "$CANDIDATES_DIR/$attempt.raw.XXXXXX")
 
   # Build all five images. App images carry the per-attempt tag
   # novelforge-<svc>:candidate-<attempt> (from the attempt env file), so a
@@ -436,39 +542,39 @@ candidate_sha() {
 
   # 1) fresh-database migration.
   compose_candidate "$release" "$attempt" run --rm --no-deps api alembic upgrade head
-  ENVELOPE_EXTRA="${ENVELOPE_EXTRA}migration_fresh=passed\n"
+  ENVELOPE_MIGRATION_FRESH=passed
 
   # 2) production-snapshot migration when a backup exists: stream the newest
   #    dump through STDIN into the RUNNING candidate postgres (exec, not a
   #    second container mounting the same PGDATA), then migrate the restored
   #    snapshot with the candidate api image. Reported separately (§9.3).
   local dump
-  dump=$(ls -1t "$SHARED/data/backups/"*.dump 2>/dev/null | head -1 || true)
+  dump=$(find "$SHARED/data/backups" -maxdepth 1 -type f -name '*.dump' \
+    -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2- || true)
   if [ -n "$dump" ]; then
     snapshot_dump=$(basename "$dump")
+    # shellcheck disable=SC2016 # variables expand inside the postgres container
     compose_candidate "$release" "$attempt" exec -T postgres sh -ec '
+      export PGPASSWORD="$POSTGRES_PASSWORD"
       dropdb --if-exists --username="$POSTGRES_USER" snapshot_check
       createdb --username="$POSTGRES_USER" snapshot_check
-      pg_restore --no-owner --no-acl --username="$POSTGRES_USER" --dbname=snapshot_check
+      exec pg_restore --no-owner --no-acl --username="$POSTGRES_USER" --dbname=snapshot_check
     ' <"$dump" || snapshot_restore_rc=1
     if [ "$snapshot_restore_rc" -eq 0 ]; then
-      local pg_user pg_pass
-      pg_user=$(sed -n 's/^POSTGRES_USER=//p' "$SHARED/.env" | head -1)
-      pg_pass=$(sed -n 's/^POSTGRES_PASSWORD=//p' "$SHARED/.env" | head -1)
       compose_candidate "$release" "$attempt" run --rm --no-deps \
-        -e "DATABASE_URL=postgresql+asyncpg://${pg_user}:${pg_pass}@postgres:5432/snapshot_check" \
-        api alembic upgrade head || snapshot_migrate_rc=1
+        api python -c 'import os, subprocess; from urllib.parse import quote; user=quote(os.environ["POSTGRES_USER"], safe=""); password=quote(os.environ["POSTGRES_PASSWORD"], safe=""); os.environ["DATABASE_URL"]=f"postgresql+asyncpg://{user}:{password}@postgres:5432/snapshot_check"; raise SystemExit(subprocess.call(["alembic", "upgrade", "head"]))' \
+        || snapshot_migrate_rc=1
     fi
     if [ "$snapshot_restore_rc" -eq 0 ] && [ "$snapshot_migrate_rc" -eq 0 ]; then
       snapshot_state=passed
     else
       snapshot_state=failed
     fi
-    ENVELOPE_EXTRA="${ENVELOPE_EXTRA}migration_snapshot=$snapshot_state\n"
-    ENVELOPE_EXTRA="${ENVELOPE_EXTRA}migration_snapshot_dump=$snapshot_dump\n"
   else
-    ENVELOPE_EXTRA="${ENVELOPE_EXTRA}migration_snapshot=skipped\n"
+    snapshot_state=skipped
   fi
+  ENVELOPE_MIGRATION_SNAPSHOT=$snapshot_state
+  ENVELOPE_MIGRATION_SNAPSHOT_DUMP=$snapshot_dump
 
   # 3) deterministic pack validation.
   compose_candidate "$release" "$attempt" run --rm --no-deps api \
@@ -501,7 +607,7 @@ candidate_sha() {
       || die 70 "candidate image $tag missing after build"
     digests="${digests}${digests:+|}$(printf '%s:%s' "$svc" "$id")"
   done
-  ENVELOPE_EXTRA="${ENVELOPE_EXTRA}image_digests=$digests\n"
+  ENVELOPE_IMAGE_DIGESTS=$digests
 
   local passed=true
   [ "$validate_rc" -eq 0 ] || passed=false
@@ -510,10 +616,10 @@ candidate_sha() {
   [ "$snapshot_migrate_rc" -eq 0 ] || passed=false
 
   if [ "$passed" = "true" ]; then
-    write_envelope "$sha" "$attempt" passed
+    write_envelope "$sha" "$attempt" passed "$candidate_env_hash"
     CANDIDATE_PUBLISHED=true
   else
-    write_envelope "$sha" "$attempt" failed
+    write_envelope "$sha" "$attempt" failed "$candidate_env_hash"
   fi
   local envelope
   envelope=$(envelope_path "$sha")
@@ -572,20 +678,33 @@ check_candidate_passed() {
 }
 
 publish_release_artifacts() { # $1=sha $2=attempt: tag candidate images as the release artifacts
-  local sha=$1 attempt=$2 svc candidate_tag release_tag
+  local sha=$1 attempt=$2 svc candidate_tag release_tag candidate_id published_id
+  local deployed_sha
+  deployed_sha=$(current_sha)
   for svc in api worker web; do
     candidate_tag="novelforge-$svc:candidate-$attempt"
     release_tag="novelforge-$svc:$sha"
-    local candidate_id
     candidate_id=$(app_image_digest "$candidate_tag") \
       || die 71 "candidate image $candidate_tag vanished before publish"
+    # A release SHA is immutable once deployed. Re-qualifying the current SHA
+    # after an env rotation may reuse its artifact, but it must never replace
+    # that tag with different bytes while the old container is still running.
+    if [ "$sha" = "$deployed_sha" ]; then
+      published_id=$(app_image_digest "$release_tag" 2>/dev/null || true)
+      if [ -n "$published_id" ] && [ "$published_id" != "$candidate_id" ]; then
+        die 71 "refusing to re-point deployed release tag $release_tag"
+      fi
+    fi
     docker tag "$candidate_tag" "$release_tag"
-    local published_id
     published_id=$(app_image_digest "$release_tag") \
       || die 70 "release image $release_tag missing after publish"
     [ "$published_id" = "$candidate_id" ] \
       || die 70 "release tag $release_tag digest mismatch after publish"
   done
+}
+
+activate_app_services() { # $1=release; never starts/recreates postgres or redis
+  compose "$1" up -d --no-deps api worker web
 }
 
 # ── backup / deploy / rollback ──────────────────────────────────────────────
@@ -617,13 +736,17 @@ deploy_sha() {
   compose "$release" run --rm --no-deps api alembic upgrade head
 
   switch_to "$release"
-  compose "$release" up -d --remove-orphans
-  if ! wait_healthy; then
-    echo "new release failed health check" >&2
+  local activation_failed=false
+  activate_app_services "$release" || activation_failed=true
+  if [ "$activation_failed" = "true" ] || ! wait_healthy; then
+    if [ "$activation_failed" = "true" ]; then
+      echo "new release application activation failed" >&2
+    else
+      echo "new release failed health check" >&2
+    fi
     if [ -n "$previous" ] && [ -d "$previous" ]; then
       switch_to "$previous"
-      compose "$previous" up -d --remove-orphans
-      if wait_healthy; then
+      if activate_app_services "$previous" && wait_healthy; then
         printf '%s\n' '{"ok":false,"action":"deploy","rollback":"succeeded"}' >&2
       else
         printf '%s\n' '{"ok":false,"action":"deploy","rollback":"failed"}' >&2
@@ -642,13 +765,25 @@ deploy_sha() {
 rollback_sha() {
   local sha=$1
   local release="$RELEASES/$sha"
+  local previous
   fetch_main
   validate_sha "$sha"
   [ -d "$release" ] || die 66 "release not prepared: $sha"
   write_release_tag_file "$release"
+  local svc
+  for svc in api worker web; do
+    app_image_digest "novelforge-$svc:$sha" >/dev/null \
+      || die 66 "rollback image novelforge-$svc:$sha is missing"
+  done
+  previous=$(current_release)
   switch_to "$release"
-  compose "$release" up -d --remove-orphans
-  wait_healthy || die 70 "rollback target unhealthy"
+  if ! activate_app_services "$release" || ! wait_healthy; then
+    if [ -n "$previous" ] && [ -d "$previous" ]; then
+      switch_to "$previous"
+      activate_app_services "$previous" || true
+    fi
+    die 70 "rollback target failed activation or health check"
+  fi
   printf '%s\n' "$sha" >"$SHARED/DEPLOYED_SHA"
   printf '{"ok":true,"action":"rollback","sha":"%s"}\n' "$sha"
 }
@@ -669,10 +804,15 @@ show_status() {
   local lines line svc rel image
   local prov_api="" prov_web="" prov_worker="" prov_postgres="" prov_redis=""
   local img_postgres="" img_redis=""
-  local found="" unexpected="" missing=""
+  local found="" unexpected="" missing="" invalid_provenance=""
 
   if [ -n "$release" ] && [ -d "$release/deploy" ]; then
-    lines=$(compose "$release" ps --format json 2>/dev/null || true)
+    # Compose versions emit either one JSON object per line or a compact JSON
+    # array. Normalize both representations before the deliberately minimal
+    # field extraction below.
+    lines=$(compose "$release" ps --format json 2>/dev/null \
+      | sed -e 's/^[[:space:]]*\[//' -e 's/\][[:space:]]*$//' -e 's/},{/}\
+{/g' || true)
     while IFS= read -r line; do
       [ -n "$line" ] || continue
       svc=$(printf '%s' "$line" | sed -n 's/.*"Service":"\([a-z]*\)".*/\1/p')
@@ -693,7 +833,15 @@ show_status() {
   local svc
   for svc in $EXPECTED_SERVICES; do
     case " $found " in
-      *" $svc "*) ;;
+      *" $svc "*)
+        case "$svc" in
+          api) [ -n "$prov_api" ] || invalid_provenance="$invalid_provenance$svc " ;;
+          web) [ -n "$prov_web" ] || invalid_provenance="$invalid_provenance$svc " ;;
+          worker) [ -n "$prov_worker" ] || invalid_provenance="$invalid_provenance$svc " ;;
+          postgres) [ -n "$prov_postgres" ] || invalid_provenance="$invalid_provenance$svc " ;;
+          redis) [ -n "$prov_redis" ] || invalid_provenance="$invalid_provenance$svc " ;;
+        esac
+        ;;
       *) missing="$missing$svc " ;;
     esac
   done
@@ -701,14 +849,13 @@ show_status() {
   # Plan A: only the three APP services decide mixed_release; postgres/redis
   # are reported as infra versions instead.
   local app_mixed=false
-  for rel in "$prov_api" "$prov_web" "$prov_worker"; do
-    if [ -n "$rel" ] && [ "$rel" != "$sha" ]; then
-      app_mixed=true
-    fi
-  done
+  if [ -n "$sha" ] \
+    && { [ "$prov_api" != "$sha" ] || [ "$prov_web" != "$sha" ] || [ "$prov_worker" != "$sha" ]; }; then
+    app_mixed=true
+  fi
 
   local provenance_complete=false
-  [ -z "$missing" ] && provenance_complete=true
+  [ -z "$missing" ] && [ -z "$invalid_provenance" ] && provenance_complete=true
 
   json_value() {
     if [ -n "$1" ]; then printf '"%s"' "$1"; else printf 'null'; fi
@@ -722,10 +869,11 @@ show_status() {
     printf '%s]' "$out"
   }
 
-  printf '{"ok":true,"sha":"%s","health":%s,"release":"%s","current_kind":"%s","mixed_release":%s,"app_mixed_release":%s,"provenance_complete":%s,"missing_services":%s,"unexpected_services":%s,"infra_version":{"postgres":%s,"redis":%s},"provenance":{"api":%s,"web":%s,"worker":%s,"postgres":%s,"redis":%s}}\n' \
+  printf '{"ok":true,"sha":"%s","health":%s,"release":"%s","current_kind":"%s","mixed_release":%s,"app_mixed_release":%s,"provenance_complete":%s,"missing_services":%s,"invalid_provenance_services":%s,"unexpected_services":%s,"infra_version":{"postgres":%s,"redis":%s},"provenance":{"api":%s,"web":%s,"worker":%s,"postgres":%s,"redis":%s}}\n' \
     "$sha" "$health" "$release" "$current_kind" "$app_mixed" "$app_mixed" \
     "$provenance_complete" \
-    "$(json_array "$missing")" "$(json_array "$unexpected")" \
+    "$(json_array "$missing")" "$(json_array "$invalid_provenance")" \
+    "$(json_array "$unexpected")" \
     "$(json_value "$img_postgres")" "$(json_value "$img_redis")" \
     "$(json_value "$prov_api")" "$(json_value "$prov_web")" \
     "$(json_value "$prov_worker")" "$(json_value "$prov_postgres")" \
@@ -767,7 +915,9 @@ self_heal() {
   release=$(current_release)
   [ -n "$release" ] || exit 0
   healthy && exit 0
-  compose "$release" up -d --remove-orphans
+  # `start` can resume existing infra containers but never recreates them.
+  compose "$release" start postgres redis >/dev/null 2>&1 || true
+  activate_app_services "$release"
   wait_healthy
 }
 
@@ -775,6 +925,7 @@ self_heal() {
 # dispatcher so tests can call compose_candidate()/compose() through the real
 # controller code (never used in production).
 if [ "${NOVELFORGE_CONTROLLER_SOURCABLE:-0}" = "1" ]; then
+  # shellcheck disable=SC2317 # reached when the script is sourced by tests
   return 0 2>/dev/null || true
 fi
 

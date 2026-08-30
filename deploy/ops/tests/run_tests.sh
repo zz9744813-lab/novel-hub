@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
-# Behavior tests for deploy/ops/novelforge-release (ops rework round 2).
+# Behavior tests for deploy/ops/novelforge-release (ops rework round 4).
 #
 # Runs the REAL controller + upgrade-controller.sh against stub docker/curl/
 # install/flock binaries and a real git mirror (execute under WSL/Linux:
 # the controller relies on symlinks and flock).
 #
-# Output contract (acceptance §10.2-14): the final line is exactly
-#   SCENARIOS=14 PASSED=<n> FAILED=<n>
+# Output contract: the final line is exactly
+#   SCENARIOS=17 PASSED=<n> FAILED=<n>
 # where every scenario maps to the rework task §10.2 items.
 set -Eeuo pipefail
+
+[ "$(id -u)" -eq 0 ] || {
+  printf '%s\n' 'run this suite as root (for the real PostgreSQL and controller-lock scenarios)' >&2
+  exit 77
+}
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../../.." && pwd)"
@@ -23,6 +28,7 @@ if [ "$(id -u)" = "0" ]; then
   SBIN_BEFORE="$(sha256sum /usr/local/sbin/novelforge-release /usr/local/sbin/novelforge-ops 2>/dev/null | sha256sum | cut -d' ' -f1)"
 fi
 CURRENT_TEST=""
+TEST_HARNESS=""
 
 # Scriptable stub behaviour (defaults; scenarios override before run_controller)
 QUALIFY_RC=0
@@ -36,6 +42,8 @@ STUB_IMAGE_IDS=""
 HEALTH_FAIL=0
 STUB_ENV_PROBE=0
 STUB_ENV_PROBE_KEY=""
+STUB_ROTATE_ENV_FILE=""
+STUB_ROTATE_ENV_VALUE=""
 
 SANDBOX=""
 SRC=""
@@ -50,7 +58,7 @@ say() { printf '%s\n' "$*"; }
 
 assert_fail_record() { # $1=label $2=detail
   printf '%s -- %s
-' "$1" "${2:-}" >>"$SANDBOX/assert-failures"
+' "$1" "${2:-}" >>"$TEST_HARNESS/assert-failures"
   say "  assert-fail: $1 (${2:-})"
 }
 assert_eq() { # got expected label
@@ -70,20 +78,18 @@ assert_not_contains() {
   return 0
 }
 
-cleanup() {
-  [ -n "$SANDBOX" ] && rm -rf "$SANDBOX"
-  return 0
-}
-trap cleanup EXIT
-
 new_sandbox() {
-  SANDBOX=$(mktemp -d)
+  : "${TEST_HARNESS:?scenario harness was not initialized}"
+  SANDBOX="$TEST_HARNESS/sandbox"
+  mkdir -p "$SANDBOX"
   RUN_NO=0
   : >"$SANDBOX/all-outputs.log"
   : >"$SANDBOX/all-calls.log"
   ROOT=$SANDBOX/root
   SHARED=$ROOT/shared
-  mkdir -p "$ROOT/lock" "$SHARED/data/backups" "$SHARED/candidates" "$ROOT/releases"
+  mkdir -p "$ROOT/lock" "$ROOT/run/candidates" "$ROOT/controller-bin" \
+    "$SHARED/data/backups" "$SHARED/candidates" "$ROOT/releases"
+  : >"$SANDBOX/docker-image-state"
   printf 'POSTGRES_USER=novelforge\nPOSTGRES_PASSWORD=secret\nPOSTGRES_DB=novelforge\nPRIMARY_API_KEY=key-1\n' \
     >"$SHARED/.env"
   chmod 0640 "$SHARED/.env"
@@ -123,6 +129,7 @@ new_sandbox() {
   SNAPSHOT_RESTORE_RC=0
   BUILD_RC=0
   UP_RC=0
+  PROD_UP_RC=0
   QUALIFY_PAYLOAD=$(gate_payload true)
   VALIDATE_PAYLOAD=$(gate_payload true)
   IMAGES_PRESENT=""
@@ -130,6 +137,8 @@ new_sandbox() {
   HEALTH_FAIL=0
   STUB_ENV_PROBE=0
   STUB_ENV_PROBE_KEY=""
+  STUB_ROTATE_ENV_FILE=""
+  STUB_ROTATE_ENV_VALUE=""
 }
 
 release_env_dir() { printf '%s/root/shared/release-tags' "$SANDBOX"; }
@@ -156,6 +165,8 @@ seed_deployed() { # $1 = sha previously deployed
     git --git-dir="$ROOT/repo.git" worktree add --detach "$release" "$sha" >/dev/null 2>&1
   fi
   ln -sfn "$SHARED/.env" "$release/deploy/.env"
+  mkdir -p "$SHARED/release-tags"
+  printf 'RELEASE_TAG=%s\n' "$sha" >"$SHARED/release-tags/$sha.env"
   ln -sfn "$release" "$ROOT/current"
   printf '%s\n' "$sha" >"$SHARED/DEPLOYED_SHA"
   seed_images "$sha"
@@ -175,13 +186,17 @@ OUT_RC=0
 run_controller() { # $@ = controller args
   local log=$SANDBOX/docker-calls.log
   : >"$log"
-  (
+  if (
     export PATH="$HERE/stubs:$PATH"
     export NOVELFORGE_ROOT="$ROOT"
     export NOVELFORGE_CONF="$CONF"
     export NOVELFORGE_LOCK="$ROOT/lock/nf.lock"
+    export NOVELFORGE_CANDIDATE_RUNTIME_DIR="$ROOT/run/candidates"
+    export NOVELFORGE_OPS_TARGET="$ROOT/controller-bin/novelforge-release"
+    export NOVELFORGE_OPS_WRAPPER_TARGET="$ROOT/controller-bin/novelforge-ops"
     export DOCKER_CALL_LOG="$log"
     export DOCKER_STUB_DIR="$HERE/stubs"
+    export DOCKER_IMAGE_STATE="$SANDBOX/docker-image-state"
     export HEALTH_CHECK_ATTEMPTS=1
     export HEALTH_CHECK_INTERVAL=0
     export PG_WAIT_ATTEMPTS=1
@@ -192,6 +207,8 @@ run_controller() { # $@ = controller args
     export STUB_IMAGE_IDS="${STUB_IMAGE_IDS:-}"
     export STUB_ENV_PROBE="$STUB_ENV_PROBE"
     export STUB_ENV_PROBE_KEY="$STUB_ENV_PROBE_KEY"
+    export STUB_ROTATE_ENV_FILE="$STUB_ROTATE_ENV_FILE"
+    export STUB_ROTATE_ENV_VALUE="$STUB_ROTATE_ENV_VALUE"
     [ -n "$QUALIFY_PAYLOAD" ] && export STUB_QUALIFY_OUTPUT="$QUALIFY_PAYLOAD"
     [ -n "$VALIDATE_PAYLOAD" ] && export STUB_VALIDATE_OUTPUT="$VALIDATE_PAYLOAD"
     export STUB_QUALIFY_RC="$QUALIFY_RC"
@@ -200,13 +217,17 @@ run_controller() { # $@ = controller args
     export STUB_SNAPSHOT_RESTORE_RC="$SNAPSHOT_RESTORE_RC"
     export STUB_BUILD_RC="${BUILD_RC:-0}"
     export STUB_UP_RC="${UP_RC:-0}"
+    export STUB_PROD_UP_RC="${PROD_UP_RC:-0}"
     if [ "${RUN_XTRACE:-0}" = "1" ]; then
       bash -x "$CONTROLLER" "$@"
     else
       bash "$CONTROLLER" "$@"
     fi
-  ) >"$SANDBOX/last-output" 2>&1
-  OUT_RC=$?
+  ) >"$SANDBOX/last-output" 2>&1; then
+    OUT_RC=0
+  else
+    OUT_RC=$?
+  fi
   cat "$SANDBOX/docker-calls.log" >>"$SANDBOX/all-calls.log" 2>/dev/null || true
   RUN_NO=$((RUN_NO + 1))
   {
@@ -361,6 +382,25 @@ s05_env_rotation_reject_and_reread() {
   assert_contains "$(last_output)" '"PRIMARY_API_KEY":"key-2"' \
     "new candidate observed the rotated secret"
   assert_eq "$(envelope_state "$SHA1")" "passed" "re-candidate re-passed"
+  assert_eq "$(find "$ROOT/run/candidates" -type f | wc -l | tr -d ' ')" "0" \
+    "candidate secret snapshots are removed on normal exit"
+
+  # Rotate shared .env DURING a new candidate. Every gate must still see the
+  # frozen key-2 snapshot, while the passed envelope remains bound to key-2
+  # and deploy rejects the now-live key-3 environment.
+  STUB_ROTATE_ENV_FILE="$SHARED/.env"
+  STUB_ROTATE_ENV_VALUE="key-3"
+  run_controller candidate "$SHA2" >/dev/null 2>&1
+  assert_eq "$OUT_RC" "0" "mid-run rotation does not mix candidate inputs"
+  assert_contains "$(last_output)" '"PRIMARY_API_KEY":"key-2"' \
+    "mid-run gate kept using the frozen key-2 snapshot"
+  assert_contains "$(cat "$SHARED/.env")" "PRIMARY_API_KEY=key-3" \
+    "test hook rotated the live environment"
+  assert_not_contains "$(cat "$(envelope "$SHA2")")" "env_hash=$(sha256sum "$SHARED/.env" | cut -d' ' -f1)" \
+    "envelope is not rebound to untested key-3"
+  run_controller deploy "$SHA2" >/dev/null 2>&1
+  assert_eq "$OUT_RC" "71" "deploy rejects environment rotated during candidate"
+  assert_contains "$(last_output)" "env_hash mismatch" "mid-run rotation is fail-closed"
 }
 
 s06_no_production_writable_mounts() {
@@ -393,6 +433,7 @@ s06_no_production_writable_mounts() {
         export NOVELFORGE_CONTROLLER_SOURCABLE=1
         export NOVELFORGE_ROOT="$ROOT" NOVELFORGE_CONF="$CONF"
         export NOVELFORGE_LOCK="$ROOT/lock/nf.lock"
+        export NOVELFORGE_CANDIDATE_RUNTIME_DIR="$ROOT/run/candidates"
         export REPOSITORY_URL="$SRC" DEPLOY_BRANCH=main
         export HEALTH_URL="http://127.0.0.1:1/health/ready"
         # shellcheck disable=SC1090  # controller path is the test subject
@@ -454,6 +495,29 @@ s15_deployed_sha_candidate_tag_safety() {
   local attempt
   attempt=$(sed -n 's/^attempt_id=//p' "$(envelope "$SHA1")")
   assert_contains "$(docker_log)" "RELEASE_TAG=candidate-$attempt"     "attempt env pins the candidate tag"
+
+  # A later PASSED candidate for the currently deployed SHA still cannot
+  # replace that SHA's existing immutable release tags with different bytes.
+  BUILD_RC=0
+  STUB_IMAGE_IDS=""
+  run_controller candidate "$SHA1" >/dev/null 2>&1
+  attempt=$(sed -n 's/^attempt_id=//p' "$(envelope "$SHA1")")
+  : >"$map"
+  local digest_line candidate_id
+  digest_line=$(sed -n 's/^image_digests=//p' "$(envelope "$SHA1")")
+  for svc in api worker web; do
+    candidate_id=$(printf '%s' "$digest_line" | tr '|' '\n' | sed -n "s/^$svc://p")
+    printf 'novelforge-%s:candidate-%s %s\n' "$svc" "$attempt" "$candidate_id" >>"$map"
+    printf 'novelforge-%s:%s sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\n' \
+      "$svc" "$SHA1" >>"$map"
+  done
+  STUB_IMAGE_IDS="$map"
+  run_controller deploy "$SHA1" >/dev/null 2>&1
+  assert_eq "$OUT_RC" "71" "passed re-candidate cannot re-point deployed sha"
+  assert_contains "$(last_output)" "refusing to re-point deployed release tag" \
+    "immutable deployed tag refusal is explicit"
+  assert_eq "$(prod_backup_calls)" "0" "immutable-tag refusal happens before backup"
+  assert_not_contains "$(docker_log)" "IMAGE_TAG" "no release tag changed on refusal"
 }
 
 s08_digest_repoint_reject() {
@@ -463,9 +527,11 @@ s08_digest_repoint_reject() {
   seed_images "$SHA1"
   local map=$SANDBOX/ids.txt
   : >"$map"
-  local svc
+  local svc attempt
+  attempt=$(sed -n 's/^attempt_id=//p' "$(envelope "$SHA1")")
   for svc in api worker web; do
-    printf 'novelforge-%s:%s sha256:stable\n' "$svc" "$SHA1" >>"$map"
+    printf 'novelforge-%s:candidate-%s sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\n' \
+      "$svc" "$attempt" >>"$map"
   done
   STUB_IMAGE_IDS="$map"
   run_controller deploy "$SHA1" >/dev/null 2>&1
@@ -480,53 +546,47 @@ s16_real_postgres_snapshot_migration() {
   local WIN_PY="/mnt/f/gpt/.worktrees/novel-hub-model-gate-20260825/.venv/Scripts/python.exe"
   [ -f "$WIN_PY" ] || { assert_fail_record "backend venv python missing"; return 0; }
   local role_pw=nfcandidate_testpw
-  local src_db=nf_snap_src dst_db=nf_snap_dst
-  su postgres -c "psql -qc \"DROP ROLE IF EXISTS nfcandidate\" >/dev/null" || true
-  su postgres -c "psql -qc \"DROP DATABASE IF EXISTS $src_db\" >/dev/null" || true
-  su postgres -c "psql -qc \"DROP DATABASE IF EXISTS $dst_db\" >/dev/null" || true
-  su postgres -c "psql -qc \"CREATE ROLE nfcandidate LOGIN PASSWORD '$role_pw'\" >/dev/null"
-  su postgres -c "createdb -O nfcandidate $src_db"
+  local pg_role="nfcandidate_$$" src_db="nf_snap_src_$$" dst_db="nf_snap_dst_$$"
+  cleanup_pg() {
+    su postgres -c "psql -qc \"DROP DATABASE IF EXISTS $src_db\" >/dev/null" || true
+    su postgres -c "psql -qc \"DROP DATABASE IF EXISTS $dst_db\" >/dev/null" || true
+    su postgres -c "psql -qc \"DROP ROLE IF EXISTS $pg_role\" >/dev/null" || true
+  }
+  trap cleanup_pg EXIT
+  cleanup_pg
+  su postgres -c "psql -qc \"CREATE ROLE $pg_role LOGIN PASSWORD '$role_pw'\" >/dev/null"
+  su postgres -c "createdb -O $pg_role $src_db"
   # Old schema: migrate the worktree backend to the revision BEFORE head.
   local backend=$REPO_ROOT/backend
   local wsl_ip
   wsl_ip=$(hostname -I | awk '{print $1}')
-  local url="postgresql+asyncpg://nfcandidate:$role_pw@$wsl_ip:5432/$src_db"
-  local cmd_file=$SANDBOX/alembic.cmd
-  make_alembic_cmd() { # $1=alembic args $2=url
-    {
-      printf '@echo off
-'
-      printf 'cd /d %s
-' "$(wslpath -w "$backend")"
-      printf 'set DATABASE_URL=%s
-' "${2:-}"
-      printf '%s -m alembic %s
-' "$(wslpath -w "$WIN_PY")" "$1"
-    } >"$cmd_file"
-  }
+  local url="postgresql+asyncpg://$pg_role:$role_pw@$wsl_ip:5432/$src_db"
   local parent_rev
-  parent_rev=$( (cd "$backend" && "$WIN_PY" -m alembic history) 2>/dev/null | sed -n '1s/^\([0-9a-f]*\) ->.*/\1/p')
+  parent_rev=$( (cd "$backend" && "$WIN_PY" -m alembic history) 2>/dev/null | sed -n '1s/ ->.*//p')
   [ -n "$parent_rev" ] || { assert_fail_record "cannot read alembic history"; return 0; }
-  make_alembic_cmd "upgrade $parent_rev" "$url"
-  cmd.exe /c "$(wslpath -w "$cmd_file")" >/dev/null 2>&1
+  (cd "$backend" && \
+    WSLENV="${WSLENV:+$WSLENV:}DATABASE_URL/w" DATABASE_URL="$url" \
+    "$WIN_PY" -m alembic upgrade "$parent_rev") \
+    >"$SANDBOX/alembic-src.log" 2>&1
   # old schema + one data row
   su postgres -c "psql -q -d $src_db -c \"INSERT INTO books (id, title) VALUES (gen_random_uuid(), 'snapshot-row')\"" >/dev/null
   su postgres -c "pg_dump --format=custom $src_db" >"$SANDBOX/snap.dump"
   # restore into the dst db through the controller's exec mechanism
-  su postgres -c "createdb -O nfcandidate $dst_db"
+  su postgres -c "createdb -O $pg_role $dst_db"
   su postgres -c "pg_restore --dbname=$dst_db" <"$SANDBOX/snap.dump" >/dev/null 2>&1
   # migrate dst to head with the real alembic chain
-  local dst_url="postgresql+asyncpg://nfcandidate:$role_pw@$wsl_ip:5432/$dst_db"
-  make_alembic_cmd "upgrade head" "$dst_url"
-  cmd.exe /c "$(wslpath -w "$cmd_file")" >/dev/null 2>&1
+  local dst_url="postgresql+asyncpg://$pg_role:$role_pw@$wsl_ip:5432/$dst_db"
+  (cd "$backend" && \
+    WSLENV="${WSLENV:+$WSLENV:}DATABASE_URL/w" DATABASE_URL="$dst_url" \
+    "$WIN_PY" -m alembic upgrade head) \
+    >"$SANDBOX/alembic-dst.log" 2>&1
   local head_ver rows
   head_ver=$(su postgres -c "psql -tA -d $dst_db -c 'SELECT version_num FROM alembic_version'" 2>/dev/null)
   rows=$(su postgres -c "psql -tA -d $dst_db -c 'SELECT count(*) FROM books'" 2>/dev/null)
   assert_eq "$rows" "1" "snapshot data survived restore+migrate"
   assert_contains "$( (cd "$backend" && "$WIN_PY" -m alembic heads) 2>/dev/null)" "$head_ver"     "snapshot db migrated to alembic head"
-  su postgres -c "psql -qc \"DROP DATABASE IF EXISTS $src_db\" >/dev/null" || true
-  su postgres -c "psql -qc \"DROP DATABASE IF EXISTS $dst_db\" >/dev/null" || true
-  su postgres -c "psql -qc \"DROP ROLE IF EXISTS nfcandidate\" >/dev/null" || true
+  cleanup_pg
+  trap - EXIT
 }
 
 s09_missing_failed_stale_envelopes() {
@@ -567,6 +627,47 @@ s10_malformed_wrong_sha_envelopes() {
   assert_eq "$OUT_RC" "71" "wrong-sha envelope refused"
   assert_contains "$(last_output)" "candidate envelope sha mismatch" "sha binding enforced"
   assert_eq "$(prod_backup_calls)" "0" "wrong-sha: zero backups"
+
+  run_controller candidate "$SHA1" >/dev/null 2>&1
+  sed -i 's/^created=.*/created=not-a-number/' "$(envelope "$SHA1")"
+  run_controller deploy "$SHA1" >/dev/null 2>&1
+  assert_eq "$OUT_RC" "71" "non-numeric created refused"
+  assert_contains "$(last_output)" "non-numeric created" "created validation is fail-closed"
+
+  run_controller candidate "$SHA1" >/dev/null 2>&1
+  sed -i 's/^image_digests=.*/image_digests=/' "$(envelope "$SHA1")"
+  run_controller deploy "$SHA1" >/dev/null 2>&1
+  assert_eq "$OUT_RC" "71" "missing image digests refused"
+  assert_contains "$(last_output)" "image_digests must cover" "digest completeness enforced"
+
+  run_controller candidate "$SHA1" >/dev/null 2>&1
+  printf 'unexpected_key=value\n' >>"$(envelope "$SHA1")"
+  run_controller deploy "$SHA1" >/dev/null 2>&1
+  assert_eq "$OUT_RC" "71" "unknown envelope key refused"
+  assert_eq "$(prod_backup_calls)" "0" "all malformed variants stop before backup"
+}
+
+s17_candidate_to_deploy_success() {
+  new_sandbox
+  seed_deployed "$SHA1"
+  run_controller candidate "$SHA2" >/dev/null 2>&1
+  assert_eq "$OUT_RC" "0" "candidate succeeds"
+  assert_eq "$(envelope_state "$SHA2")" "passed" "candidate publishes passed envelope"
+  run_controller deploy "$SHA2" >/dev/null 2>&1
+  assert_eq "$OUT_RC" "0" "deploy accepts its own candidate envelope"
+  assert_eq "$(current_release_sha)" "$SHA2" "current switches to candidate sha"
+  assert_eq "$(prod_backup_calls)" "1" "successful deploy makes one backup"
+  assert_contains "$(docker_log)" "CMD=up ARGS=-d --no-deps api worker web" \
+    "cutover activates application services only"
+  assert_not_contains "$(docker_log)" "CMD=up ARGS=-d postgres" \
+    "cutover never recreates postgres"
+  assert_contains "$(docker_log)" "IMAGE_TAG SOURCE=novelforge-api:candidate-" \
+    "candidate api artifact is published"
+  assert_contains "$(last_output)" '"ok":true,"action":"deploy"' \
+    "deploy reports structured success"
+  assert_eq "$(sha256sum "$ROOT/controller-bin/novelforge-release" | cut -d' ' -f1)" \
+    "$(sha256sum "$ROOT/releases/$SHA2/deploy/ops/novelforge-release" | cut -d' ' -f1)" \
+    "post-deploy controller pair matches the release"
 }
 
 s11_safe_controller_upgrade() {
@@ -593,8 +694,45 @@ s11_safe_controller_upgrade() {
   local rel_sha
   rel_sha=$(sed -n 's/.*"sha":"\([0-9a-f]\{40\}\)".*/\1/p' "$SANDBOX/upgrade-output" | head -1)
   assert_eq "$(sha256sum "$SANDBOX/usr/local/sbin/novelforge-release" | cut -d' ' -f1)"     "$(sha256sum "$ROOT/releases/$rel_sha/deploy/ops/novelforge-release" | cut -d' ' -f1)"     "installed controller hash matches release source"
+
+  # Force the SECOND install mv to fail after the first file switched. The
+  # upgrader must restore both old files rather than leave a mixed pair.
+  printf 'old-controller\n' >"$SANDBOX/usr/local/sbin/novelforge-release"
+  printf 'old-wrapper\n' >"$SANDBOX/usr/local/sbin/novelforge-ops"
+  local old_release_hash old_wrapper_hash rollback_rc=0
+  old_release_hash=$(sha256sum "$SANDBOX/usr/local/sbin/novelforge-release" | cut -d' ' -f1)
+  old_wrapper_hash=$(sha256sum "$SANDBOX/usr/local/sbin/novelforge-ops" | cut -d' ' -f1)
+  mkdir -p "$SANDBOX/failbin"
+  cat >"$SANDBOX/failbin/mv" <<'MVSTUB'
+#!/usr/bin/env bash
+last=${!#}
+source_arg=${@: -2:1}
+if [[ $source_arg == *.new.* ]] && [ "$last" = "${NOVELFORGE_OPS_WRAPPER_TARGET:-}" ]; then
+  exit 88
+fi
+exec /bin/mv "$@"
+MVSTUB
+  chmod 0755 "$SANDBOX/failbin/mv"
+  if (
+    export PATH="$SANDBOX/failbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    export NOVELFORGE_ROOT="$ROOT" NOVELFORGE_CONF="$CONF" NOVELFORGE_LOCK="$ROOT/lock/nf.lock"
+    export NOVELFORGE_OPS_TARGET="$SANDBOX/usr/local/sbin/novelforge-release"
+    export NOVELFORGE_OPS_WRAPPER_TARGET="$SANDBOX/usr/local/sbin/novelforge-ops"
+    bash "$UPGRADER" "$SHA2"
+  ) >"$SANDBOX/rollback-output" 2>&1; then
+    rollback_rc=0
+  else
+    rollback_rc=$?
+  fi
+  assert_eq "$rollback_rc" "88" "second-file switch failure is surfaced"
+  assert_eq "$(sha256sum "$SANDBOX/usr/local/sbin/novelforge-release" | cut -d' ' -f1)" \
+    "$old_release_hash" "controller restored after pair switch failure"
+  assert_eq "$(sha256sum "$SANDBOX/usr/local/sbin/novelforge-ops" | cut -d' ' -f1)" \
+    "$old_wrapper_hash" "wrapper restored after pair switch failure"
+
   # Lock contention: a held release lock must make the upgrader refuse (75).
-  (
+  local lock_rc=0
+  if (
     export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     export NOVELFORGE_ROOT="$ROOT" NOVELFORGE_CONF="$CONF" NOVELFORGE_LOCK="$ROOT/lock/nf.lock"
     export NOVELFORGE_OPS_TARGET="$SANDBOX/usr/local/sbin/novelforge-release"
@@ -602,8 +740,12 @@ s11_safe_controller_upgrade() {
     exec 9>"$ROOT/lock/nf.lock"
     flock 9
     bash "$UPGRADER" "$SHA2"
-  ) >"$SANDBOX/lock-output" 2>&1
-  assert_eq "$?" "75" "concurrent lock contention refused"
+  ) >"$SANDBOX/lock-output" 2>&1; then
+    lock_rc=0
+  else
+    lock_rc=$?
+  fi
+  assert_eq "$lock_rc" "75" "concurrent lock contention refused"
 }
 
 s12_migration_failure_no_change() {
@@ -616,10 +758,19 @@ s12_migration_failure_no_change() {
   run_controller deploy "$SHA2" >/dev/null 2>&1
   assert_eq "$(current_release_sha)" "$SHA1" "symlink unchanged"
   if docker_log | grep -q 'CMD=up ARGS='; then
-    CURRENT_FAILED=$((CURRENT_FAILED + 1))
-    say "  assert-fail: migration failure still ran production up"
+    assert_fail_record "migration failure still ran production up"
   fi
   assert_contains "$(docker_log)" "pg_dump" "backup happened before migration"
+
+  # A failed application activation after switching must still restore the
+  # previous symlink and enter the normal rollback path.
+  ALEMBIC_RC=0
+  PROD_UP_RC=1
+  run_controller deploy "$SHA2" >/dev/null 2>&1
+  assert_eq "$OUT_RC" "70" "application activation failure rejects deploy"
+  assert_eq "$(current_release_sha)" "$SHA1" "activation failure restores previous symlink"
+  assert_contains "$(last_output)" '"rollback":"failed"' \
+    "activation failure reports rollback result structurally"
 }
 
 s13_health_failure_rollback() {
@@ -630,7 +781,7 @@ s13_health_failure_rollback() {
   HEALTH_FAIL=1
   run_controller deploy "$SHA2" >/dev/null 2>&1
   assert_eq "$(current_release_sha)" "$SHA1" "symlink rolled back"
-  assert_contains "$(docker_log)" "CMD=up ARGS=-d --remove-orphans" \
+  assert_contains "$(docker_log)" "CMD=up ARGS=-d --no-deps api worker web" \
     "rollback restarted previous services"
   assert_contains "$(last_output)" '"rollback":"failed"' \
     "rollback failure reported structurally"
@@ -661,10 +812,24 @@ EOF
 {"Name":"novelforge-postgres-1","Service":"postgres","Image":"novelforge-postgres:16-config-v2","Labels":"com.docker.compose.project.working_dir=$ROOT/releases/$SHA1/deploy"}
 {"Name":"novelforge-redis-1","Service":"redis","Image":"novelforge-redis:7-config-v2","Labels":"com.docker.compose.project.working_dir=$ROOT/releases/$SHA1/deploy"}
 EOF
-  STUB_PS_OUTPUT="$SANDBOX/ps.json" run_controller status >/dev/null 2>&1
+  {
+    printf '['
+    paste -sd, "$SANDBOX/ps.json"
+    printf ']\n'
+  } >"$SANDBOX/ps-array.json"
+  STUB_PS_OUTPUT="$SANDBOX/ps-array.json" run_controller status >/dev/null 2>&1
   assert_contains "$(last_output)" '"mixed_release":false' "consistent provenance"
   assert_contains "$(last_output)" '"provenance_complete":true' "complete provenance"
   assert_contains "$(last_output)" '"unexpected_services":[]' "no unexpected services"
+
+  sed -i '/"Service":"worker"/ s#"Labels":"[^"]*"#"Labels":""#' "$SANDBOX/ps.json"
+  STUB_PS_OUTPUT="$SANDBOX/ps.json" run_controller status >/dev/null 2>&1
+  assert_contains "$(last_output)" '"invalid_provenance_services":["worker"]' \
+    "present service with missing release label is invalid"
+  assert_contains "$(last_output)" '"provenance_complete":false' \
+    "missing provenance label prevents completeness"
+  assert_contains "$(last_output)" '"mixed_release":true' \
+    "missing app provenance is fail-closed as mixed"
 }
 
 # ── precise scenario accounting (§10.2-14) ─────────────────────────────────
@@ -676,40 +841,51 @@ STDERR_ERROR_RE='no such file|unbound variable|unterminated|permission denied|in
 scenario() { # $1=name $2=fn
   CURRENT_TEST=$1
   SCENARIOS=$((SCENARIOS + 1))
-  : >"$SANDBOX/assert-failures"
-  : >"$SANDBOX/scenario.err"
+  TEST_HARNESS=$(mktemp -d)
+  : >"$TEST_HARNESS/assert-failures"
+  : >"$TEST_HARNESS/scenario.err"
   local rc=0
+  # Do not put the strict subshell on the left side of `||`/`if`: Bash would
+  # silently disable errexit inside every scenario function. Temporarily
+  # relax only the parent while the child enforces its own -e contract.
+  set +e
   (
     set -Eeuo pipefail
     trap 'echo "uncaught error at line $LINENO (rc=$?)" >&2' ERR
     "$2"
-  ) >"$SANDBOX/last-output" 2>"$SANDBOX/scenario.err" || rc=$?
+  ) >"$TEST_HARNESS/scenario.out" 2>"$TEST_HARNESS/scenario.err"
+  rc=$?
+  set -e
 
   local failures=0
-  if [ -s "$SANDBOX/assert-failures" ]; then
-    failures=$(grep -c . "$SANDBOX/assert-failures")
+  if [ -s "$TEST_HARNESS/assert-failures" ]; then
+    failures=$(grep -c . "$TEST_HARNESS/assert-failures")
   fi
   local dirty=""
-  if [ -s "$SANDBOX/scenario.err" ]     && grep -qiE "$STDERR_ERROR_RE" "$SANDBOX/scenario.err"; then
+  if [ -s "$TEST_HARNESS/scenario.err" ] \
+    && grep -qiE "$STDERR_ERROR_RE" "$TEST_HARNESS/scenario.err"; then
     dirty=yes
   fi
 
   if [ "$rc" -eq 0 ] && [ "$failures" = "0" ] && [ -z "$dirty" ]; then
     PASSED=$((PASSED + 1))
-    say "PASS [$SCENARIOS/16] $CURRENT_TEST"
+    say "PASS [$SCENARIOS/17] $CURRENT_TEST"
   else
     FAILED=$((FAILED + 1))
-    say "FAIL [$SCENARIOS/16] $CURRENT_TEST (rc=$rc assertions=$failures dirty_stderr=$dirty)"
-    sed -n '1,10p' "$SANDBOX/assert-failures" 2>/dev/null
-    grep -iE "$STDERR_ERROR_RE" "$SANDBOX/scenario.err" 2>/dev/null | sed -n '1,4p'
-    [ -f "$SANDBOX/last-output" ] && say "  last-output: $(head -c 300 "$SANDBOX/last-output")"
+    say "FAIL [$SCENARIOS/17] $CURRENT_TEST (rc=$rc assertions=$failures dirty_stderr=$dirty)"
+    sed -n '1,10p' "$TEST_HARNESS/assert-failures" 2>/dev/null
+    { grep -iE "$STDERR_ERROR_RE" "$TEST_HARNESS/scenario.err" 2>/dev/null || true; } \
+      | sed -n '1,4p'
+    [ -f "$TEST_HARNESS/scenario.out" ] \
+      && say "  scenario-output: $(head -c 300 "$TEST_HARNESS/scenario.out")"
   fi
   if [ "${KEEP_FAILED:-0}" = "1" ]     && { [ "$rc" -ne 0 ] || [ "$failures" != "0" ] || [ -n "$dirty" ]; }; then
-    say "  (sandbox kept: $SANDBOX)"
+    say "  (sandbox kept: $TEST_HARNESS)"
   else
-    [ -n "$SANDBOX" ] && rm -rf "$SANDBOX"
+    rm -rf "$TEST_HARNESS"
   fi
   SANDBOX=""
+  TEST_HARNESS=""
 }
 
 scenario "same-SHA pass then build failure -> deploy rejects" s01_build_fail_reject
@@ -725,6 +901,7 @@ scenario "missing/failed/stale envelopes -> deploy rejects with zero backups" s0
 scenario "real PostgreSQL restore + alembic migrate keeps data and reaches head" s16_real_postgres_snapshot_migration
 scenario "malformed/wrong-sha envelopes -> deploy rejects with zero backups" s10_malformed_wrong_sha_envelopes
 scenario "safe controller upgrade with zero production compose calls" s11_safe_controller_upgrade
+scenario "candidate-produced envelope completes a successful deploy" s17_candidate_to_deploy_success
 scenario "migration failure leaves current and services unchanged" s12_migration_failure_no_change
 scenario "health failure rolls back and reports structurally" s13_health_failure_rollback
 scenario "status provenance variants incl. infra version and missing services" s14_status_provenance_variants

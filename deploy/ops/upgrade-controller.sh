@@ -86,17 +86,39 @@ grep -q 'novelforge-release' "$release/deploy/ops/novelforge-ops" \
   || die 65 "forced-command wrapper does not reference the controller"
 
 # 4) transactional two-file install (§8.2/§8.3): stage both files, verify
-# their hashes against the release sources, then mv them into place. If the
-# second mv fails, the first is restored from its staged copy so the pair is
-# never left mixed old/new.
+# their hashes against the release sources, preserve BOTH old targets, then
+# switch the pair. Any error during either mv or post-install verification
+# restores both old targets (or removes both when this is the first install).
 install -d -m 0755 "$(dirname "$OPS_TARGET")" "$(dirname "$OPS_WRAPPER_TARGET")"
 stage_release=$(mktemp "$OPS_TARGET.new.XXXXXX")
 stage_wrapper=$(mktemp "$OPS_WRAPPER_TARGET.new.XXXXXX")
-restore_release=""
-cleanup_stage() {
-  rm -f "$stage_release" "$stage_wrapper"
+backup_release=$(mktemp "$OPS_TARGET.previous.XXXXXX")
+backup_wrapper=$(mktemp "$OPS_WRAPPER_TARGET.previous.XXXXXX")
+had_release=false
+had_wrapper=false
+switch_started=false
+install_complete=false
+
+finish_install() {
+  local rc=$?
+  trap - EXIT
+  set +e
+  if [ "$switch_started" = "true" ] && [ "$install_complete" != "true" ]; then
+    if [ "$had_release" = "true" ]; then
+      mv -f "$backup_release" "$OPS_TARGET"
+    else
+      rm -f "$OPS_TARGET"
+    fi
+    if [ "$had_wrapper" = "true" ]; then
+      mv -f "$backup_wrapper" "$OPS_WRAPPER_TARGET"
+    else
+      rm -f "$OPS_WRAPPER_TARGET"
+    fi
+  fi
+  rm -f "$stage_release" "$stage_wrapper" "$backup_release" "$backup_wrapper"
+  exit "$rc"
 }
-trap cleanup_stage EXIT
+trap finish_install EXIT
 
 install -o root -g root -m 0755 "$release/deploy/ops/novelforge-release" "$stage_release"
 install -o root -g root -m 0755 "$release/deploy/ops/novelforge-ops" "$stage_wrapper"
@@ -111,27 +133,27 @@ source_wrapper_hash=$(sha256sum "$release/deploy/ops/novelforge-ops" | cut -d' '
   || die 70 "staged wrapper hash mismatch"
 
 if [ -f "$OPS_TARGET" ]; then
-  cp -f "$OPS_TARGET" "$OPS_TARGET.prev"
-  restore_release=1
+  cp -p "$OPS_TARGET" "$backup_release"
+  had_release=true
 fi
-install_ok=false
-if mv -f "$stage_release" "$OPS_TARGET"; then
-  if mv -f "$stage_wrapper" "$OPS_WRAPPER_TARGET"; then
-    install_ok=true
-  else
-    [ "$restore_release" = "1" ] && mv -f "$OPS_TARGET.prev" "$OPS_TARGET"
-  fi
+if [ -f "$OPS_WRAPPER_TARGET" ]; then
+  cp -p "$OPS_WRAPPER_TARGET" "$backup_wrapper"
+  had_wrapper=true
 fi
+
+switch_started=true
+mv -f "$stage_release" "$OPS_TARGET"
+mv -f "$stage_wrapper" "$OPS_WRAPPER_TARGET"
 
 after_release=$(sha256sum "$OPS_TARGET" 2>/dev/null | cut -d' ' -f1 || true)
 after_wrapper=$(sha256sum "$OPS_WRAPPER_TARGET" 2>/dev/null | cut -d' ' -f1 || true)
 
-if [ "$install_ok" != "true" ] \
-  || [ "$after_release" != "$source_release_hash" ] \
+if [ "$after_release" != "$source_release_hash" ] \
   || [ "$after_wrapper" != "$source_wrapper_hash" ]; then
   echo '{"ok":false,"action":"upgrade-controller","installed":false}' >&2
   exit 70
 fi
+install_complete=true
 
 printf '{"ok":true,"action":"upgrade-controller","sha":"%s","before_release_sha256":"%s","after_release_sha256":"%s","before_wrapper_sha256":"%s","after_wrapper_sha256":"%s","source_release_sha256":"%s","source_wrapper_sha256":"%s"}\n' \
   "$SHA" "${before_release:-null}" "$after_release" \

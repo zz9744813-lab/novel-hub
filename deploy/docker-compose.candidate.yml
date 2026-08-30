@@ -21,6 +21,8 @@
 # - web never runs during candidacy; its host port binding is cleared anyway.
 services:
   api:
+    env_file: !override
+      - ${CANDIDATE_ENV_FILE:?candidate env snapshot is required}
     volumes: !override
       - candidate_books:/app/data/books
       - candidate_exports:/app/data/exports
@@ -28,6 +30,8 @@ services:
       - candidate_imports:/app/data/imports
 
   worker:
+    env_file: !override
+      - ${CANDIDATE_ENV_FILE:?candidate env snapshot is required}
     volumes: !override
       - candidate_books:/app/data/books
       - candidate_exports:/app/data/exports
@@ -36,6 +40,8 @@ services:
 
   postgres:
     image: !override novelforge-candidate-postgres:candidate
+    env_file: !override
+      - ${CANDIDATE_ENV_FILE:?candidate env snapshot is required}
     volumes: !override
       - candidate_pg_data:/var/lib/postgresql/data
 

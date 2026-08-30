@@ -147,7 +147,13 @@ async def _seed_book(outline_nos: list[int], *, superseded_nos: list[int] | None
         return book_id, ov_new.id, nodes, (ov_old.id if ov_old else None), old_nodes
 
 
-async def _seed_session(db, book_id: uuid.UUID, *, status: str = "running") -> WritingSession:
+async def _seed_session(
+    db,
+    book_id: uuid.UUID,
+    *,
+    status: str = "running",
+    policy: dict | None = None,
+) -> WritingSession:
     s = WritingSession(
         id=uuid.uuid4(),
         book_id=book_id,
@@ -171,6 +177,7 @@ async def _seed_session(db, book_id: uuid.UUID, *, status: str = "running") -> W
             "bad_first_round_verdicts": ["revise", "reject"],
             "consecutive_bad_limit": 2,
             "deadline_behavior": "finish_current_run",
+            **(policy or {}),
         },
     )
     db.add(s)
@@ -835,3 +842,456 @@ async def test_12_validator_precedence_outline_missing_over_service_error():
                 ],
             )
         )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Re-acceptance round (2026-08-30): stock-orphan recovery, needs_human policy,
+# policy-combination regressions — re-acceptance task §9 items 1–9
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def _seed_stock_orphan():
+    """Production-shaped stock state: session points at a run that was
+    already terminalized as failed/orphaned_chapter_run while its chapter
+    stayed in the intermediate reviewing state."""
+    book_id, ov_id, nodes, _, _ = await _seed_book([1, 2, 3])
+    async with async_session_factory() as db:
+        session = await _seed_session(db, book_id)
+        chapter = await _seed_chapter(db, book_id, 1, "reviewing", nodes[1])
+        run = await _seed_run(
+            db, book_id, chapter, ov_id, status="failed", writing_session_id=session.id
+        )
+        run.error_code = "orphaned_chapter_run"
+        run.error_detail = {"reason": "running row lost its worker lease"}
+        run.finished_at = datetime.now(timezone.utc)
+        session.current_chapter_id = chapter.id
+        session.current_chapter_no = 1
+        session.current_chapter_run_id = run.id
+        await db.commit()
+        return book_id, session.id, run.id, chapter.id
+
+
+async def _pending_outbox_count(sid):
+    async with async_session_factory() as db:
+        return await _scalar(
+            db,
+            select(func.count()).select_from(SessionAdvanceOutbox).where(
+                SessionAdvanceOutbox.writing_session_id == sid,
+                SessionAdvanceOutbox.status == "pending",
+            ),
+        )
+
+
+async def _advance(sid):
+    async with async_session_factory() as db:
+        result = await advance_writing_session(db, sid)
+        await db.commit()
+        return result
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_13_stock_orphan_repaired_in_one_pass(monkeypatch):
+    """§9-1: run=failed/orphaned_chapter_run + chapter=reviewing (the exact
+    production stock state) -> ONE reconcile pass sets chapter=failed with an
+    audit event carrying the original run_id, and pokes the advance."""
+    import app.services.session_reconciler as reconciler_mod
+
+    monkeypatch.setattr(reconciler_mod, "CLAIM_LIMIT", 500)
+    book_id, sid, run_id, chapter_id = await _seed_stock_orphan()
+
+    report = await reconcile_sessions()
+    assert report["repaired"] >= 1
+
+    async with async_session_factory() as db:
+        chapter = (
+            await db.execute(select(Chapter).where(Chapter.id == chapter_id))
+        ).scalar_one()
+        assert chapter.status == "failed"
+
+        event = (
+            await db.execute(
+                select(ChapterStateEvent)
+                .where(
+                    ChapterStateEvent.chapter_id == chapter_id,
+                    ChapterStateEvent.to_state == "failed",
+                )
+                .order_by(ChapterStateEvent.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one()
+        assert event.from_state == "reviewing"
+        assert event.run_id == run_id
+        assert event.actor == "session_reconciler"
+
+        outbox = (
+            await db.execute(
+                select(func.count()).select_from(SessionAdvanceOutbox).where(
+                    SessionAdvanceOutbox.writing_session_id == sid
+                )
+            )
+        ).scalar()
+        assert int(outbox) >= 1  # same-pass advance poke
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_14_stock_orphan_end_to_end_resume(monkeypatch):
+    """§9-2: reconcile + advance on the stock state must reuse the ORIGINAL
+    Chapter 1, create exactly one new run + one dispatch outbox, and never
+    raise CHAPTER_STATE_INCONSISTENT."""
+    import app.services.session_reconciler as reconciler_mod
+
+    monkeypatch.setattr(reconciler_mod, "CLAIM_LIMIT", 500)
+    book_id, sid, old_run_id, chapter_id = await _seed_stock_orphan()
+
+    await reconcile_sessions()
+    result = await _advance(sid)  # must not raise
+
+    assert result["action"] == "start_next"
+    async with async_session_factory() as db:
+        chapters = (
+            await db.execute(
+                select(Chapter).where(
+                    Chapter.book_id == book_id, Chapter.chapter_no == 1
+                )
+            )
+        ).scalars().all()
+        assert len(chapters) == 1 and chapters[0].id == chapter_id
+
+        runs = (
+            await db.execute(
+                select(ChapterRun).where(ChapterRun.chapter_id == chapter_id)
+            )
+        ).scalars().all()
+        assert len(runs) == 2
+        new_runs = [r for r in runs if r.id != old_run_id]
+        assert len(new_runs) == 1 and new_runs[0].status == "queued"
+
+        dispatches = (
+            await db.execute(
+                select(func.count()).select_from(ChapterDispatchOutbox).where(
+                    ChapterDispatchOutbox.chapter_run_id == new_runs[0].id
+                )
+            )
+        ).scalar()
+        assert int(dispatches) == 1
+
+        session = (
+            await db.execute(select(WritingSession).where(WritingSession.id == sid))
+        ).scalar_one()
+        assert str(session.current_chapter_run_id) == str(new_runs[0].id)
+        assert session.status == "running"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_15_stock_orphan_recovery_is_idempotent(monkeypatch):
+    """§9-3: repeated reconcile/advance after recovery must not grow chapters,
+    runs, dispatch outboxes, failed-transition events, or pending pokes."""
+    import app.services.session_reconciler as reconciler_mod
+
+    monkeypatch.setattr(reconciler_mod, "CLAIM_LIMIT", 500)
+    book_id, sid, old_run_id, chapter_id = await _seed_stock_orphan()
+    await reconcile_sessions()
+    await _advance(sid)
+
+    async def _snapshot():
+        async with async_session_factory() as db:
+            return {
+                "chapters": await _scalar(
+                    db, select(func.count()).select_from(Chapter).where(Chapter.book_id == book_id)
+                ),
+                "runs": await _scalar(
+                    db, select(func.count()).select_from(ChapterRun).where(ChapterRun.book_id == book_id)
+                ),
+                "dispatches": await _scalar(
+                    db,
+                    select(func.count()).select_from(ChapterDispatchOutbox).where(
+                        ChapterDispatchOutbox.chapter_run_id.in_(
+                            select(ChapterRun.id).where(ChapterRun.book_id == book_id)
+                        )
+                    ),
+                ),
+                "failed_events": await _scalar(
+                    db,
+                    select(func.count()).select_from(ChapterStateEvent).where(
+                        ChapterStateEvent.chapter_id == chapter_id,
+                        ChapterStateEvent.to_state == "failed",
+                    ),
+                ),
+                "pending_outbox": await _pending_outbox_count(sid),
+            }
+
+    before = await _snapshot()
+    for _ in range(3):
+        await reconcile_sessions()
+        await _advance(sid)
+    after = await _snapshot()
+    assert before == after
+    assert after["chapters"] == 1 and after["runs"] == 2 and after["dispatches"] == 1
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_16_generic_intermediate_state_blocks_stably():
+    """§9-4: a non-orphan intermediate chapter with no active run fails the
+    session closed as a STABLE block — the advance never throws, and repeated
+    advances neither create runs nor pile up events."""
+    book_id, _, nodes, _, _ = await _seed_book([1, 2, 3])
+    async with async_session_factory() as db:
+        session = await _seed_session(db, book_id)
+        await _seed_chapter(db, book_id, 1, "reviewing", nodes[1])
+        await db.commit()
+        sid = session.id
+
+    first = await _advance(sid)
+    assert first["action"] == "block"
+    assert first["reason"] == "chapter state inconsistent"
+    assert first["status"] == "blocked"
+
+    second = await _advance(sid)  # must not raise
+    assert second["action"] == "block"
+
+    async with async_session_factory() as db:
+        s = (await db.execute(select(WritingSession).where(WritingSession.id == sid))).scalar_one()
+        assert s.status == "blocked" and s.stop_reason == "chapter_state_inconsistent"
+        runs = await _scalar(
+            db,
+            select(func.count()).select_from(ChapterRun).where(ChapterRun.book_id == book_id),
+        )
+        assert runs == 0
+        dispatches = await _scalar(
+            db,
+            select(func.count()).select_from(ChapterDispatchOutbox).where(
+                ChapterDispatchOutbox.chapter_run_id.in_(
+                    select(ChapterRun.id).where(ChapterRun.book_id == book_id)
+                )
+            ),
+        )
+        assert dispatches == 0
+        events = await _scalar(
+            db,
+            select(func.count()).select_from(WritingSessionEvent).where(
+                WritingSessionEvent.session_id == sid,
+                WritingSessionEvent.event_type == "chapter_state_inconsistent_blocked",
+            ),
+        )
+        assert events == 1  # deduped across repeated advances
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_17_needs_human_default_blocks_without_new_runs():
+    """§9-5: stop_on_needs_human=true (default) -> stable block, zero new
+    runs, zero dispatch outboxes, idempotent needs_human_blocked event."""
+    book_id, _, nodes, _, _ = await _seed_book([1, 2, 3])
+    async with async_session_factory() as db:
+        session = await _seed_session(db, book_id)
+        await _seed_chapter(db, book_id, 1, "needs_human", nodes[1])
+        await db.commit()
+        sid = session.id
+
+    result = await _advance(sid)
+    assert result["action"] == "block"
+    assert result["reason"] == "NEEDS_HUMAN"
+
+    repeat = await _advance(sid)
+    assert repeat["action"] == "block"
+
+    async with async_session_factory() as db:
+        s = (await db.execute(select(WritingSession).where(WritingSession.id == sid))).scalar_one()
+        assert s.status == "blocked" and s.stop_reason == "needs_human"
+        runs = await _scalar(
+            db,
+            select(func.count()).select_from(ChapterRun).where(ChapterRun.book_id == book_id),
+        )
+        assert runs == 0
+        dispatches = await _scalar(
+            db,
+            select(func.count()).select_from(ChapterDispatchOutbox).where(
+                ChapterDispatchOutbox.chapter_run_id.in_(
+                    select(ChapterRun.id).where(ChapterRun.book_id == book_id)
+                )
+            ),
+        )
+        assert dispatches == 0
+        events = await _scalar(
+            db,
+            select(func.count()).select_from(WritingSessionEvent).where(
+                WritingSessionEvent.session_id == sid,
+                WritingSessionEvent.event_type == "needs_human_blocked",
+            ),
+        )
+        assert events == 1
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_18_needs_human_explicit_continue_requeues_then_runs():
+    """§9-6: stop_on_needs_human=false -> audited needs_human->queued
+    transition, then exactly one runnable run + dispatch outbox; a repeated
+    advance re-attaches instead of stacking."""
+    book_id, _, nodes, _, _ = await _seed_book([1, 2, 3])
+    async with async_session_factory() as db:
+        session = await _seed_session(
+            db, book_id, policy={"stop_on_needs_human": False}
+        )
+        await _seed_chapter(db, book_id, 1, "needs_human", nodes[1])
+        await db.commit()
+        sid = session.id
+
+    result = await _advance(sid)
+    assert result["action"] == "start_next"
+
+    async with async_session_factory() as db:
+        event = (
+            await db.execute(
+                select(ChapterStateEvent)
+                .where(
+                    ChapterStateEvent.to_state == "queued",
+                    ChapterStateEvent.from_state == "needs_human",
+                )
+                .order_by(ChapterStateEvent.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one()
+        assert event.actor == "writing_session"
+
+        chapter = (
+            await db.execute(
+                select(Chapter).where(
+                    Chapter.book_id == book_id, Chapter.chapter_no == 1
+                )
+            )
+        ).scalar_one()
+        assert chapter.status == "queued"
+        runs = (
+            await db.execute(
+                select(ChapterRun).where(ChapterRun.chapter_id == chapter.id)
+            )
+        ).scalars().all()
+        assert len(runs) == 1 and runs[0].status == "queued"
+        dispatches = (
+            await db.execute(
+                select(func.count()).select_from(ChapterDispatchOutbox).where(
+                    ChapterDispatchOutbox.chapter_run_id == runs[0].id
+                )
+            )
+        ).scalar()
+        assert int(dispatches) == 1
+
+    repeat = await _advance(sid)
+    assert repeat["action"] == "wait_current"
+    async with async_session_factory() as db:
+        runs = await _scalar(
+            db,
+            select(func.count()).select_from(ChapterRun).where(ChapterRun.book_id == book_id),
+        )
+        assert runs == 1  # no stacked run
+
+
+@requires_db
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "causal,resource,error_code,expected_action,expected_stop",
+    [
+        (True, True, "ILLEGAL_KNOWLEDGE", "block", "causal_hard_failure"),
+        (True, False, "ILLEGAL_KNOWLEDGE", "block", "causal_hard_failure"),
+        (False, True, "PROVIDER_UNAVAILABLE", "block", "resource_blocked"),
+        (False, False, "PROVIDER_UNAVAILABLE", "start_next", None),
+    ],
+)
+async def test_19_policy_combinations(causal, resource, error_code, expected_action, expected_stop):
+    """§9-7/8: the 2x2 stop_on_causal_failure/stop_on_resource_block matrix.
+    causal=false + resource=true used to raise UnboundLocalError on
+    latest_run; the resource gate must still block."""
+    book_id, ov_id, nodes, _, _ = await _seed_book([1, 2, 3])
+    async with async_session_factory() as db:
+        session = await _seed_session(
+            db,
+            book_id,
+            policy={
+                "stop_on_causal_failure": causal,
+                "stop_on_resource_block": resource,
+            },
+        )
+        ch = await _seed_chapter(db, book_id, 2, "failed", nodes[2])
+        await _seed_run(db, book_id, ch, ov_id, status="failed")
+        await db.commit()
+        sid = session.id
+
+    async with async_session_factory() as db:
+        run = (
+            await db.execute(
+                select(ChapterRun)
+                .where(ChapterRun.book_id == book_id)
+                .order_by(ChapterRun.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one()
+        run.error_code = error_code
+        await db.commit()
+
+    result = await _advance(sid)
+    assert result["action"] == expected_action
+    if expected_stop is not None:
+        assert result["status"] == "blocked"
+        async with async_session_factory() as db:
+            s = (
+                await db.execute(select(WritingSession).where(WritingSession.id == sid))
+            ).scalar_one()
+            assert s.stop_reason == expected_stop
+    else:
+        assert result["status"] == "running"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_20_vanished_run_repair_and_advance_in_same_pass(monkeypatch):
+    """§9-9: a pointer to a run row that no longer exists -> one reconcile
+    pass clears the pointer, fails the chapter with an audit event, and
+    writes the advance outbox without waiting for the next timer."""
+    import app.services.session_reconciler as reconciler_mod
+
+    monkeypatch.setattr(reconciler_mod, "CLAIM_LIMIT", 500)
+    book_id, ov_id, nodes, _, _ = await _seed_book([1, 2, 3])
+    async with async_session_factory() as db:
+        session = await _seed_session(db, book_id)
+        chapter = await _seed_chapter(db, book_id, 1, "reviewing", nodes[1])
+        session.current_chapter_id = chapter.id
+        session.current_chapter_no = 1
+        session.current_chapter_run_id = uuid.uuid4()  # run row vanished
+        await db.commit()
+        sid, chapter_id = session.id, chapter.id
+
+    report = await reconcile_sessions()
+    assert report["repaired"] >= 1
+
+    async with async_session_factory() as db:
+        s = (await db.execute(select(WritingSession).where(WritingSession.id == sid))).scalar_one()
+        assert s.current_chapter_run_id is None
+        chapter = (
+            await db.execute(select(Chapter).where(Chapter.id == chapter_id))
+        ).scalar_one()
+        assert chapter.status == "failed"
+        event = (
+            await db.execute(
+                select(ChapterStateEvent)
+                .where(
+                    ChapterStateEvent.chapter_id == chapter_id,
+                    ChapterStateEvent.to_state == "failed",
+                )
+                .order_by(ChapterStateEvent.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one()
+        assert event.run_id is None
+        assert "vanished" in (event.reason or "")
+        outbox = (
+            await db.execute(
+                select(func.count()).select_from(SessionAdvanceOutbox).where(
+                    SessionAdvanceOutbox.writing_session_id == sid
+                )
+            )
+        ).scalar()
+        assert int(outbox) >= 1  # same-pass poke

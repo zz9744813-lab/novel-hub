@@ -158,6 +158,9 @@ async def reconcile_sessions() -> dict:
                         session.current_chapter_run_id = None
                         session.current_chapter_id = None
                         session.current_chapter_no = None
+                        # Poke the advance in the SAME pass: recovery must not
+                        # depend on the next reconcile timer.
+                        touched += 1
                         repaired += 1
                     elif run.status == "succeeded":
                         # 2) run succeeded but its advance outbox is missing (spec §36)
@@ -221,6 +224,23 @@ async def reconcile_sessions() -> dict:
                             session.id,
                             run.chapter_id,
                         )
+                    elif (
+                        run.status == "failed"
+                        and run.error_code == "orphaned_chapter_run"
+                    ):
+                        # Stock state left by earlier versions: the run was
+                        # already terminalized as orphaned while its chapter
+                        # stayed in an intermediate state (production P0).
+                        # Sync the chapter in THIS pass and poke the advance
+                        # so recovery never waits another reconcile cycle.
+                        if await _fail_chapter_of_orphaned_run(
+                            db,
+                            run,
+                            run.chapter_id,
+                            reason="stock orphaned chapter run: syncing chapter to failed",
+                        ):
+                            repaired += 1
+                        touched += 1
                     elif run.status not in ACTIVE_RUN_STATUSES | {"paused"}:
                         # terminal-but-uncleaned run: nudge controller to clear pointer
                         touched += 1

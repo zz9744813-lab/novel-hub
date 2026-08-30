@@ -38,6 +38,7 @@ from app.models import (
     WritingSession,
     WritingSessionEvent,
 )
+from app.engine.state_transition import transition_chapter
 from app.services.next_chapter_selector import (
     NextChapterDecision,
     NextChapterSelectionError,
@@ -471,6 +472,14 @@ async def evaluate_session(db: AsyncSession, session: WritingSession) -> Session
         return SessionDecision("complete", "deadline reached")
 
     # ── 06/07/08 current run ──
+    # Keep the pre-evaluation pointer breadcrumb: if selection later fails
+    # closed on an inconsistent chapter state, the pointer is restored so the
+    # session reconciler's orphan-repair chain can still find the chapter.
+    pointed_state = (
+        session.current_chapter_run_id,
+        session.current_chapter_id,
+        session.current_chapter_no,
+    )
     if session.current_chapter_run_id:
         run = (
             await db.execute(
@@ -533,16 +542,20 @@ async def evaluate_session(db: AsyncSession, session: WritingSession) -> Session
             "block", "NEEDS_HUMAN", {"chapter_no": chapter.chapter_no}
         )
 
-    # ── 10 CCNE Hard Block ──
+    # ── 10 CCNE Hard Block / 11 Resource Hard Block ──
+    # The latest run is queried exactly once and shared by both hard-block
+    # gates: the resource gate must also work when stop_on_causal_failure is
+    # disabled (a legal policy combination that used to raise UnboundLocalError).
+    latest_run = (
+        await db.execute(
+            select(ChapterRun)
+            .where(ChapterRun.book_id == session.book_id)
+            .order_by(ChapterRun.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
     if policy.get("stop_on_causal_failure", True):
-        latest_run = (
-            await db.execute(
-                select(ChapterRun)
-                .where(ChapterRun.book_id == session.book_id)
-                .order_by(ChapterRun.created_at.desc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
         if latest_run is not None and (latest_run.error_code or "") in CCNE_HARD_CODES:
             session.status = "blocked"
             session.stop_reason = "causal_hard_failure"
@@ -696,6 +709,29 @@ async def evaluate_session(db: AsyncSession, session: WritingSession) -> Session
                 dedupe_key=f"outline_node_missing:{chapter_no}",
             )
             return SessionDecision("block", "outline node missing", {"chapter_no": chapter_no})
+        if code == "CHAPTER_STATE_INCONSISTENT":
+            # Fail closed as a STABLE block instead of re-raising: an advance
+            # job that keeps throwing would loop in ARQ forever. Restore the
+            # pre-evaluation pointer breadcrumb so the session reconciler's
+            # orphan-repair chain can find and heal the chapter.
+            session.status = "blocked"
+            session.stop_reason = "chapter_state_inconsistent"
+            session.stop_detail = {"chapter_no": chapter_no}
+            (
+                session.current_chapter_run_id,
+                session.current_chapter_id,
+                session.current_chapter_no,
+            ) = pointed_state
+            await _record_event(
+                db,
+                session.id,
+                "chapter_state_inconsistent_blocked",
+                {"chapter_no": chapter_no},
+                dedupe_key=f"chapter_state_inconsistent:{chapter_no}",
+            )
+            return SessionDecision(
+                "block", "chapter state inconsistent", {"chapter_no": chapter_no}
+            )
         raise
 
     # ── 17 start next chapter ──
@@ -727,6 +763,35 @@ async def evaluate_session(db: AsyncSession, session: WritingSession) -> Session
         return SessionDecision(
             "wait_current",
             f"chapter {decision.chapter_no} already has an active run",
+        )
+    if decision.action == "needs_human":
+        # The selector found an unfinished chapter that requires a human.
+        # Creating a run here would hang: the worker refuses to re-enter a
+        # needs_human chapter, so the run would sit queued forever.
+        if policy.get("stop_on_needs_human", True):
+            session.status = "blocked"
+            session.stop_reason = "needs_human"
+            session.stop_detail = {
+                "chapter_no": decision.chapter_no,
+                "chapter_id": str(decision.chapter_id),
+            }
+            await _record_event(
+                db,
+                session.id,
+                "needs_human_blocked",
+                {"chapter_no": decision.chapter_no},
+                dedupe_key=f"needs_human_blocked:{decision.chapter_id}",
+            )
+            return SessionDecision("block", "NEEDS_HUMAN", {"chapter_no": decision.chapter_no})
+        # Explicit continue: a needs_human chapter may only be re-run after a
+        # legal, audited requeue through the state machine.
+        await transition_chapter(
+            decision.chapter_id,
+            "queued",
+            expected_states={"needs_human"},
+            reason="policy stop_on_needs_human=false: requeue for a fresh run",
+            actor="writing_session",
+            db=db,
         )
     await _prepare_chapter_and_run(db, session, decision, now)
     return SessionDecision("start_next", f"chapter {decision.chapter_no} started")

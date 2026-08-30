@@ -30,7 +30,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import func, select
+import pytest_asyncio
+from sqlalchemy import delete, func, select, update
 
 from app.database import async_session_factory
 from app.engine.pipeline import (
@@ -96,6 +97,97 @@ DB_AVAILABLE = _db_available()
 requires_db = pytest.mark.skipif(not DB_AVAILABLE, reason="PostgreSQL not reachable")
 
 pytestmark = [pytest.mark.asyncio, requires_db]
+
+# All books seeded by this file share this title; the autouse cleanup fixture
+# deletes exactly these rows after every test so repeated suite runs never
+# re-accumulate the thousands of leftover sessions/outboxes that made
+# reconciler claim scans degrade from ~58s to ~13 minutes (re-acceptance §3.1).
+SEED_BOOK_TITLE = "会话恢复测试书"
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _cleanup_recovery_seed_rows():
+    """Re-acceptance §7-10: clean this file's own seeds after each test."""
+    yield
+    async with async_session_factory() as db:
+        book_ids = (
+            await db.execute(select(Book.id).where(Book.title == SEED_BOOK_TITLE))
+        ).scalars().all()
+        if not book_ids:
+            return
+        chapter_ids = (
+            await db.execute(select(Chapter.id).where(Chapter.book_id.in_(book_ids)))
+        ).scalars().all()
+        run_ids = (
+            await db.execute(select(ChapterRun.id).where(ChapterRun.book_id.in_(book_ids)))
+        ).scalars().all()
+        session_ids = (
+            await db.execute(
+                select(WritingSession.id).where(WritingSession.book_id.in_(book_ids))
+            )
+        ).scalars().all()
+        if chapter_ids and run_ids:
+            # chapters.active_run_id -> chapter_runs FK must be cleared first
+            await db.execute(
+                update(Chapter)
+                .where(
+                    Chapter.id.in_(chapter_ids),
+                    Chapter.active_run_id.in_(run_ids),
+                )
+                .values(active_run_id=None)
+            )
+        if run_ids:
+            await db.execute(
+                delete(ChapterDispatchOutbox).where(
+                    ChapterDispatchOutbox.chapter_run_id.in_(run_ids)
+                )
+            )
+            await db.execute(
+                delete(ChapterStepRun).where(ChapterStepRun.chapter_run_id.in_(run_ids))
+            )
+            await db.execute(delete(ChapterRun).where(ChapterRun.id.in_(run_ids)))
+        if chapter_ids:
+            await db.execute(
+                delete(ChapterStateEvent).where(
+                    ChapterStateEvent.chapter_id.in_(chapter_ids)
+                )
+            )
+        if session_ids:
+            await db.execute(
+                delete(SessionAdvanceOutbox).where(
+                    SessionAdvanceOutbox.writing_session_id.in_(session_ids)
+                )
+            )
+            await db.execute(
+                delete(WritingSessionEvent).where(
+                    WritingSessionEvent.session_id.in_(session_ids)
+                )
+            )
+            await db.execute(
+                delete(WritingSession).where(WritingSession.id.in_(session_ids))
+            )
+        if chapter_ids:
+            await db.execute(delete(Chapter).where(Chapter.id.in_(chapter_ids)))
+        await db.execute(delete(OutlineNode).where(OutlineNode.book_id.in_(book_ids)))
+        await db.execute(
+            delete(OutlineVersion).where(OutlineVersion.book_id.in_(book_ids))
+        )
+        await db.execute(delete(Book).where(Book.id.in_(book_ids)))
+        await db.commit()
+
+
+async def _expire_reconcile_leases(book_id):
+    """Force the next reconcile_sessions() to re-claim this book's sessions,
+    simulating the next real timer pass after the 60s claim lease lapses."""
+    async with async_session_factory() as db:
+        await db.execute(
+            update(WritingSession)
+            .where(WritingSession.book_id == book_id)
+            .values(
+                reconcile_lease_until=datetime.now(timezone.utc) - timedelta(seconds=1)
+            )
+        )
+        await db.commit()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1024,7 +1116,12 @@ async def test_15_stock_orphan_recovery_is_idempotent(monkeypatch):
 
     before = await _snapshot()
     for _ in range(3):
-        await reconcile_sessions()
+        # Expire the 60s reconcile claim lease so every pass really re-claims
+        # the session — the previous version of this loop never crossed a
+        # lease boundary and proved nothing about timer-driven idempotency.
+        await _expire_reconcile_leases(book_id)
+        report = await reconcile_sessions()
+        assert report["claimed"] >= 1
         await _advance(sid)
     after = await _snapshot()
     assert before == after
@@ -1295,3 +1392,156 @@ async def test_20_vanished_run_repair_and_advance_in_same_pass(monkeypatch):
             )
         ).scalar()
         assert int(outbox) >= 1  # same-pass poke
+# ─────────────────────────────────────────────────────────────────────────────
+# Re-acceptance round 2 (2026-08-30): reconciler poke idempotency across real
+# reconcile-lease expiry — final rework task §6/§7
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_21_reconcile_only_idempotent_across_lease_expiry(monkeypatch):
+    """§7-1..6: stock orphan -> first reconcile pokes exactly ONE pending
+    advance; with the outbox UNCONSUMED and the 60s claim lease explicitly
+    expired, three further reconcile passes each re-claim the session yet
+    never grow the poke, the audit event, or the chapter/run counts."""
+    import app.services.session_reconciler as reconciler_mod
+
+    monkeypatch.setattr(reconciler_mod, "CLAIM_LIMIT", 50)
+    book_id, sid, run_id, chapter_id = await _seed_stock_orphan()
+
+    await reconcile_sessions()
+    assert await _pending_outbox_count(sid) == 1
+
+    lease_values = []
+    for _ in range(3):
+        await _expire_reconcile_leases(book_id)
+        report = await reconcile_sessions()
+        assert report["claimed"] >= 1
+        async with async_session_factory() as db:
+            s = (
+                await db.execute(select(WritingSession).where(WritingSession.id == sid))
+            ).scalar_one()
+            # proof of a real claim: the lease was re-issued into the future
+            assert s.reconcile_lease_until is not None
+            assert s.reconcile_lease_until > datetime.now(timezone.utc)
+            lease_values.append(s.reconcile_lease_until)
+        assert await _pending_outbox_count(sid) == 1
+
+    assert len(set(lease_values)) == 3  # three independent claims happened
+
+    async with async_session_factory() as db:
+        failed_events = await _scalar(
+            db,
+            select(func.count()).select_from(ChapterStateEvent).where(
+                ChapterStateEvent.chapter_id == chapter_id,
+                ChapterStateEvent.to_state == "failed",
+            ),
+        )
+        chapters = await _scalar(
+            db, select(func.count()).select_from(Chapter).where(Chapter.book_id == book_id)
+        )
+        runs = await _scalar(
+            db, select(func.count()).select_from(ChapterRun).where(ChapterRun.book_id == book_id)
+        )
+    assert failed_events == 1 and chapters == 1 and runs == 1
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_22_vanished_run_poke_idempotent_across_lease_expiry(monkeypatch):
+    """§7-7: the vanished-run branch must not accumulate pokes either — two
+    lease-expired reconcile-only rounds keep exactly one pending advance."""
+    import app.services.session_reconciler as reconciler_mod
+
+    monkeypatch.setattr(reconciler_mod, "CLAIM_LIMIT", 50)
+    book_id, ov_id, nodes, _, _ = await _seed_book([1, 2, 3])
+    async with async_session_factory() as db:
+        session = await _seed_session(db, book_id)
+        chapter = await _seed_chapter(db, book_id, 1, "reviewing", nodes[1])
+        session.current_chapter_id = chapter.id
+        session.current_chapter_no = 1
+        session.current_chapter_run_id = uuid.uuid4()  # run row vanished
+        await db.commit()
+        sid, chapter_id = session.id, chapter.id
+
+    await reconcile_sessions()
+    assert await _pending_outbox_count(sid) == 1
+
+    for _ in range(2):
+        await _expire_reconcile_leases(book_id)
+        report = await reconcile_sessions()
+        assert report["claimed"] >= 1
+        assert await _pending_outbox_count(sid) == 1
+
+    async with async_session_factory() as db:
+        chapter = (
+            await db.execute(select(Chapter).where(Chapter.id == chapter_id))
+        ).scalar_one()
+        assert chapter.status == "failed"
+        failed_events = await _scalar(
+            db,
+            select(func.count()).select_from(ChapterStateEvent).where(
+                ChapterStateEvent.chapter_id == chapter_id,
+                ChapterStateEvent.to_state == "failed",
+            ),
+        )
+    assert failed_events == 1
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_23_dead_poke_row_gets_one_controlled_rearm(monkeypatch):
+    """§7-8: a dead poke row is re-armed to pending exactly once (controlled
+    retry, never a second row), and stays untouched while it is pending."""
+    import app.services.session_reconciler as reconciler_mod
+
+    monkeypatch.setattr(reconciler_mod, "CLAIM_LIMIT", 50)
+    book_id, sid, run_id, chapter_id = await _seed_stock_orphan()
+
+    await reconcile_sessions()
+    async with async_session_factory() as db:
+        row = (
+            await db.execute(
+                select(SessionAdvanceOutbox).where(
+                    SessionAdvanceOutbox.writing_session_id == sid,
+                    SessionAdvanceOutbox.status == "pending",
+                )
+            )
+        ).scalar_one()
+        row.status = "dead"
+        row.attempts = 5
+        row.last_error = "redis down (simulated)"
+        await db.commit()
+        dead_key = row.dedupe_key
+
+    await _expire_reconcile_leases(book_id)
+    await reconcile_sessions()
+
+    async with async_session_factory() as db:
+        rows = (
+            await db.execute(
+                select(SessionAdvanceOutbox).where(
+                    SessionAdvanceOutbox.dedupe_key == dead_key
+                )
+            )
+        ).scalars().all()
+        assert len(rows) == 1  # re-armed in place, never a second row
+        assert rows[0].status == "pending"
+        assert rows[0].attempts == 0
+        assert rows[0].last_error is None
+
+    # A further pass must not re-arm again while the row is pending.
+    await _expire_reconcile_leases(book_id)
+    await reconcile_sessions()
+    async with async_session_factory() as db:
+        rows = (
+            await db.execute(
+                select(SessionAdvanceOutbox).where(
+                    SessionAdvanceOutbox.dedupe_key == dead_key
+                )
+            )
+        ).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].status == "pending"
+        assert rows[0].attempts == 0

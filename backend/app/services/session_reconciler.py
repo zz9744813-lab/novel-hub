@@ -135,6 +135,13 @@ async def reconcile_sessions() -> dict:
                     continue
                 report["claimed"] += 1
                 repaired = touched = 0
+                # Deterministic poke identity for this pass. The key carries
+                # the stable recovery reason and generation (the driving run
+                # id, or a session-fixed state tag), so repeated reconcile
+                # passes cannot pile up equivalent advance outbox rows while
+                # the signal is unconsumed.
+                poke_key: str | None = None
+                poke_reason: str | None = None
 
                 # 1) stale run pointer: run row vanished
                 if session.current_chapter_run_id:
@@ -155,6 +162,12 @@ async def reconcile_sessions() -> dict:
                             session.current_chapter_id,
                             reason="chapter run row vanished while chapter in progress",
                         )
+                        # After the repair the session state IS "running
+                        # without an active run", so share that stable key:
+                        # later passes of the same arc dedupe onto one row
+                        # instead of stacking a second key per state change.
+                        poke_key = f"session-reconcile:{session.id}:no-active-run"
+                        poke_reason = "vanished-run"
                         session.current_chapter_run_id = None
                         session.current_chapter_id = None
                         session.current_chapter_no = None
@@ -218,6 +231,8 @@ async def reconcile_sessions() -> dict:
                         run.lease_expires_at = None
                         repaired += 1
                         touched += 1
+                        poke_key = f"session-reconcile:{session.id}:run:{run.id}"
+                        poke_reason = "stale-run"
                         logger.warning(
                             "terminalized stale chapter run id=%s session=%s chapter=%s",
                             run.id,
@@ -241,13 +256,19 @@ async def reconcile_sessions() -> dict:
                         ):
                             repaired += 1
                         touched += 1
+                        poke_key = f"session-reconcile:{session.id}:run:{run.id}"
+                        poke_reason = "orphaned-run"
                     elif run.status not in ACTIVE_RUN_STATUSES | {"paused"}:
                         # terminal-but-uncleaned run: nudge controller to clear pointer
                         touched += 1
+                        poke_key = f"session-reconcile:{session.id}:run:{run.id}"
+                        poke_reason = "terminal-run"
                 else:
                     # 3) running session with no active run → re-evaluate soon
                     if session.status == "running":
                         touched += 1
+                        poke_key = f"session-reconcile:{session.id}:no-active-run"
+                        poke_reason = poke_reason or "no-active-run"
 
                 # 4) waiting_editorial may be resolved (spec §24)
                 if session.status == "waiting_editorial":
@@ -255,10 +276,18 @@ async def reconcile_sessions() -> dict:
                     backlog = await count_editorial_backlog(db, session.book_id)
                     if backlog < limit:
                         touched += 1
+                        poke_key = poke_key or (
+                            f"session-reconcile:{session.id}:waiting-editorial"
+                        )
+                        poke_reason = poke_reason or "waiting-editorial"
 
                 # 5) control_requested resolvable without an active run
                 if session.control_requested in ("pause", "cancel") and not session.current_chapter_run_id:
                     touched += 1
+                    poke_key = poke_key or (
+                        f"session-reconcile:{session.id}:control-{session.control_requested}"
+                    )
+                    poke_reason = poke_reason or f"control-{session.control_requested}"
 
                 # 6) deadline passed without an active run
                 if (
@@ -267,8 +296,19 @@ async def reconcile_sessions() -> dict:
                     and not session.current_chapter_run_id
                 ):
                     touched += 1
+                    poke_key = poke_key or f"session-reconcile:{session.id}:deadline"
+                    poke_reason = poke_reason or "deadline"
 
                 if touched:
+                    poke_key = poke_key or f"session-reconcile:{session.id}:reconcile"
+                    poke_reason = poke_reason or "reconcile"
+                    # Idempotent poke: one row per (session, recovery
+                    # reason/generation). An unconsumed pending/dispatching
+                    # row is left exactly as it is (the dispatcher owns its
+                    # retry/backoff semantics). A consumed (dispatched) or
+                    # dead row is re-armed once — the controlled retry that
+                    # keeps recovery alive after infrastructure failures
+                    # without ever growing a second equivalent row.
                     await db.execute(
                         pg_insert(SessionAdvanceOutbox)
                         .values(
@@ -276,12 +316,31 @@ async def reconcile_sessions() -> dict:
                             writing_session_id=session.id,
                             completed_run_id=None,
                             event_type="advance_writing_session",
-                            dedupe_key=f"session-reconcile:{session.id}:{uuid.uuid4().hex[:10]}",
-                            payload={"session_id": str(session.id), "kind": "reconcile"},
+                            dedupe_key=poke_key,
+                            payload={
+                                "session_id": str(session.id),
+                                "kind": "reconcile",
+                                "reason": poke_reason,
+                            },
                             status="pending",
                             available_at=datetime.now(timezone.utc),
                         )
-                        .on_conflict_do_nothing(index_elements=["dedupe_key"])
+                        .on_conflict_do_update(
+                            index_elements=["dedupe_key"],
+                            set_={
+                                "status": "pending",
+                                "attempts": 0,
+                                "available_at": datetime.now(timezone.utc),
+                                "locked_at": None,
+                                "locked_by": None,
+                                "dispatched_at": None,
+                                "last_error": None,
+                            },
+                            # Only re-arm consumed (dispatched) or dead rows;
+                            # pending/dispatching rows keep their own retry
+                            # state and are never touched.
+                            where=SessionAdvanceOutbox.status.in_(("dispatched", "dead")),
+                        )
                     )
 
                 report["repaired"] += repaired

@@ -14,11 +14,12 @@ Lock order here:
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,16 +35,18 @@ from app.models import (
     ChapterRun,
     ChapterVersion,
     OutlineNode,
-    SessionAdvanceOutbox,
     WritingSession,
     WritingSessionEvent,
 )
+from app.engine.state_transition import transition_chapter
 from app.services.next_chapter_selector import (
     NextChapterDecision,
     NextChapterSelectionError,
     select_next_chapter,
 )
 from app.workers.outbox_dispatcher import create_run_and_outbox
+
+logger = logging.getLogger("novelforge.writing_session")
 
 TERMINAL_SESSION_STATUSES = frozenset({"completed", "cancelled", "failed"})
 # 'created' is included so a just-created session already owns the book
@@ -228,8 +231,16 @@ async def _prepare_chapter_and_run(
     decision: NextChapterDecision,
     now: datetime,
 ) -> ChapterRun:
-    """create_chapter path: materialize Chapter + ChapterRun + dispatch outbox."""
+    """Materialize (or reuse) the Chapter, then attach a fresh ChapterRun + dispatch outbox.
+
+    A reused chapter created under a superseded OutlineVersion is rebound to
+    the currently approved node before the new run is created, and the rebind
+    is audited as a session event. The new run always carries the approved
+    outline_version_id and starts from scratch — no step checkpoints are
+    inherited from runs of the old outline.
+    """
     chapter_id = decision.chapter_id
+    chapter: Chapter | None = None
     if chapter_id is None:
         node = (
             await db.execute(
@@ -247,6 +258,49 @@ async def _prepare_chapter_and_run(
         db.add(chapter)
         await db.flush()
         chapter_id = chapter.id
+    else:
+        # Lock the chapter before creating the run (lock order: Chapter → ChapterRun).
+        chapter = (
+            await db.execute(
+                select(Chapter).where(Chapter.id == chapter_id).with_for_update()
+            )
+        ).scalar_one_or_none()
+        if chapter is not None and chapter.outline_node_id != decision.outline_node_id:
+            if chapter.status == "finalized":
+                logger.error(
+                    "refusing to rebind finalized chapter %s to outline node %s",
+                    chapter.id,
+                    decision.outline_node_id,
+                )
+            else:
+                old_node_id = chapter.outline_node_id
+                chapter.outline_node_id = decision.outline_node_id
+                logger.warning(
+                    "rebound chapter %s (no=%s) outline node %s -> %s (outline_version %s)",
+                    chapter.id,
+                    decision.chapter_no,
+                    old_node_id,
+                    decision.outline_node_id,
+                    decision.outline_version_id,
+                )
+                await _record_event(
+                    db,
+                    session.id,
+                    "chapter_outline_rebound",
+                    {
+                        "chapter_id": str(chapter.id),
+                        "chapter_no": decision.chapter_no,
+                        "old_outline_node_id": str(old_node_id) if old_node_id else None,
+                        "new_outline_node_id": str(decision.outline_node_id),
+                        "outline_version_id": str(decision.outline_version_id),
+                        "reason": "rebind to the currently approved outline version",
+                    },
+                    dedupe_key=(
+                        f"chapter_outline_rebound:{chapter.id}:{decision.outline_node_id}"
+                    ),
+                    source_type="chapter",
+                    source_id=str(chapter.id),
+                )
 
     run = await create_run_and_outbox(
         db,
@@ -260,11 +314,6 @@ async def _prepare_chapter_and_run(
     )
 
     # Compat ChapterTask row for the legacy worker path
-    chapter = (
-        await db.execute(
-            select(Chapter).where(Chapter.id == chapter_id).with_for_update()
-        )
-    ).scalar_one_or_none()
     if chapter is not None:
         chapter.active_run_id = run.id
     existing_task = (
@@ -340,6 +389,12 @@ async def evaluate_session(db: AsyncSession, session: WritingSession) -> Session
             ).scalar_one_or_none()
             if run is not None and run.status in ACTIVE_RUN_STATUSES | {"paused"}:
                 return SessionDecision("wait_current", "pause requested; current run finishing")
+            if run is not None:
+                # Terminal run: tally progress and clear the pointer before
+                # pausing. A paused session holding a dead-run pointer would
+                # otherwise be poked by the reconciler forever (each poke
+                # inserting a new advance outbox row).
+                await _handle_terminal_run(db, session, run, now)
         session.status = "paused"
         session.control_requested = "none"
         session.paused_at = now
@@ -357,6 +412,8 @@ async def evaluate_session(db: AsyncSession, session: WritingSession) -> Session
             ).scalar_one_or_none()
             if run is not None and run.status in ACTIVE_RUN_STATUSES | {"paused"}:
                 return SessionDecision("wait_current", "cancel requested; current run finishing")
+            if run is not None:
+                await _handle_terminal_run(db, session, run, now)
         session.status = "cancelled"
         session.control_requested = "none"
         session.completed_at = now
@@ -415,6 +472,14 @@ async def evaluate_session(db: AsyncSession, session: WritingSession) -> Session
         return SessionDecision("complete", "deadline reached")
 
     # ── 06/07/08 current run ──
+    # Keep the pre-evaluation pointer breadcrumb: if selection later fails
+    # closed on an inconsistent chapter state, the pointer is restored so the
+    # session reconciler's orphan-repair chain can still find the chapter.
+    pointed_state = (
+        session.current_chapter_run_id,
+        session.current_chapter_id,
+        session.current_chapter_no,
+    )
     if session.current_chapter_run_id:
         run = (
             await db.execute(
@@ -477,16 +542,20 @@ async def evaluate_session(db: AsyncSession, session: WritingSession) -> Session
             "block", "NEEDS_HUMAN", {"chapter_no": chapter.chapter_no}
         )
 
-    # ── 10 CCNE Hard Block ──
+    # ── 10 CCNE Hard Block / 11 Resource Hard Block ──
+    # The latest run is queried exactly once and shared by both hard-block
+    # gates: the resource gate must also work when stop_on_causal_failure is
+    # disabled (a legal policy combination that used to raise UnboundLocalError).
+    latest_run = (
+        await db.execute(
+            select(ChapterRun)
+            .where(ChapterRun.book_id == session.book_id)
+            .order_by(ChapterRun.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
     if policy.get("stop_on_causal_failure", True):
-        latest_run = (
-            await db.execute(
-                select(ChapterRun)
-                .where(ChapterRun.book_id == session.book_id)
-                .order_by(ChapterRun.created_at.desc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
         if latest_run is not None and (latest_run.error_code or "") in CCNE_HARD_CODES:
             session.status = "blocked"
             session.stop_reason = "causal_hard_failure"
@@ -640,12 +709,90 @@ async def evaluate_session(db: AsyncSession, session: WritingSession) -> Session
                 dedupe_key=f"outline_node_missing:{chapter_no}",
             )
             return SessionDecision("block", "outline node missing", {"chapter_no": chapter_no})
+        if code == "CHAPTER_STATE_INCONSISTENT":
+            # Fail closed as a STABLE block instead of re-raising: an advance
+            # job that keeps throwing would loop in ARQ forever. Restore the
+            # pre-evaluation pointer breadcrumb so the session reconciler's
+            # orphan-repair chain can find and heal the chapter.
+            session.status = "blocked"
+            session.stop_reason = "chapter_state_inconsistent"
+            session.stop_detail = {"chapter_no": chapter_no}
+            (
+                session.current_chapter_run_id,
+                session.current_chapter_id,
+                session.current_chapter_no,
+            ) = pointed_state
+            await _record_event(
+                db,
+                session.id,
+                "chapter_state_inconsistent_blocked",
+                {"chapter_no": chapter_no},
+                dedupe_key=f"chapter_state_inconsistent:{chapter_no}",
+            )
+            return SessionDecision(
+                "block", "chapter state inconsistent", {"chapter_no": chapter_no}
+            )
         raise
 
     # ── 17 start next chapter ──
     if session.status != "running":
         session.status = "running"
         session.resumed_at = now
+    if decision.action == "open_active_run" and decision.active_run_id is not None:
+        # A live run already owns this chapter (e.g. a concurrent advance won
+        # the book lock and dispatched first). Re-attach the session pointer to
+        # it instead of stacking a second run + dispatch outbox on the same
+        # chapter; the event dedupe keeps the re-attach idempotent.
+        session.current_chapter_id = decision.chapter_id
+        session.current_chapter_no = decision.chapter_no
+        session.current_chapter_run_id = decision.active_run_id
+        await _record_event(
+            db,
+            session.id,
+            "chapter_run_attached",
+            {
+                "run_id": str(decision.active_run_id),
+                "chapter_id": str(decision.chapter_id),
+                "chapter_no": decision.chapter_no,
+                "kind": "reattach_active_run",
+            },
+            dedupe_key=f"chapter_run_attached:{decision.active_run_id}",
+            source_type="chapter_run",
+            source_id=str(decision.active_run_id),
+        )
+        return SessionDecision(
+            "wait_current",
+            f"chapter {decision.chapter_no} already has an active run",
+        )
+    if decision.action == "needs_human":
+        # The selector found an unfinished chapter that requires a human.
+        # Creating a run here would hang: the worker refuses to re-enter a
+        # needs_human chapter, so the run would sit queued forever.
+        if policy.get("stop_on_needs_human", True):
+            session.status = "blocked"
+            session.stop_reason = "needs_human"
+            session.stop_detail = {
+                "chapter_no": decision.chapter_no,
+                "chapter_id": str(decision.chapter_id),
+            }
+            await _record_event(
+                db,
+                session.id,
+                "needs_human_blocked",
+                {"chapter_no": decision.chapter_no},
+                dedupe_key=f"needs_human_blocked:{decision.chapter_id}",
+            )
+            return SessionDecision("block", "NEEDS_HUMAN", {"chapter_no": decision.chapter_no})
+        # Explicit continue: a needs_human chapter may only be re-run after a
+        # legal, audited requeue through the state machine.
+        await transition_chapter(
+            decision.chapter_id,
+            "queued",
+            expected_states={"needs_human"},
+            reason="policy stop_on_needs_human=false: requeue for a fresh run",
+            actor="writing_session",
+            db=db,
+        )
     await _prepare_chapter_and_run(db, session, decision, now)
     return SessionDecision("start_next", f"chapter {decision.chapter_no} started")
 

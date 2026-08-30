@@ -10,7 +10,7 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Book, Chapter, ChapterRun, OutlineNode, OutlineVersion
@@ -81,6 +81,14 @@ async def select_next_chapter(
 ) -> NextChapterDecision:
     """Select the only chapter the next-chapter workflow is allowed to write.
 
+    Chapter identity is ``(book_id, chapter_no)``. The selector walks the
+    current approved OutlineVersion's chapter numbers in ascending order and
+    binds any existing Chapter row by that number — never by outline_node_id,
+    so chapters created under a superseded outline version stay visible for
+    rebinding instead of being silently recreated (production P0). Rows whose
+    chapter_no is outside the approved outline (e.g. chapter 9999 test rows)
+    never influence selection.
+
     The caller keeps the transaction open after this function returns. The book row
     lock serializes concurrent next-chapter requests for the same book.
     """
@@ -108,43 +116,61 @@ async def select_next_chapter(
             "请先批准大纲后再写作",
         )
 
-    approved_node_ids = select(OutlineNode.id).where(
-        OutlineNode.book_id == book_id,
-        OutlineNode.outline_version_id == outline_version.id,
-    )
-    unfinished = (
+    outline_nodes = (
+        await db.execute(
+            select(OutlineNode.chapter_no, OutlineNode.id)
+            .where(
+                OutlineNode.book_id == book_id,
+                OutlineNode.outline_version_id == outline_version.id,
+            )
+            .order_by(OutlineNode.chapter_no.asc())
+        )
+    ).all()
+
+    existing_chapters = (
         await db.execute(
             select(Chapter)
             .where(
                 Chapter.book_id == book_id,
-                Chapter.status.in_(UNFINISHED_CHAPTER_STATES),
-                Chapter.outline_node_id.in_(approved_node_ids),
+                Chapter.chapter_no.in_([int(no) for no, _ in outline_nodes]),
             )
             .order_by(Chapter.chapter_no.asc())
         )
     ).scalars().all()
+    chapters_by_no = {int(c.chapter_no): c for c in existing_chapters}
 
-    if unfinished:
-        chapter = unfinished[0]
-        chapter_no = int(chapter.chapter_no)
-        existing_node = (
-            await db.execute(
-                select(OutlineNode)
-                .where(
-                    OutlineNode.book_id == book_id,
-                    OutlineNode.outline_version_id == outline_version.id,
-                    OutlineNode.chapter_no == chapter_no,
-                )
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        if existing_node is None:
+    next_no = 1
+    for raw_no, node_id in outline_nodes:
+        node_no = int(raw_no)
+        if node_no > next_no:
+            # A hole in the approved outline itself is a data gap, not a
+            # writable slot (spec §31).
             raise NextChapterSelectionError(
                 "OUTLINE_NODE_MISSING",
-                chapter_no,
-                f"第{chapter_no}章没有已批准章纲",
+                next_no,
+                f"第{next_no}章没有已批准章纲",
             )
 
+        chapter = chapters_by_no.get(node_no)
+        if chapter is not None and chapter.status == ChapterState.FINALIZED.value:
+            next_no = node_no + 1
+            continue
+
+        if chapter is None:
+            # Only an explicitly missing Chapter row may be created; an
+            # existing row for this identity can never yield create_chapter.
+            return NextChapterDecision(
+                book_id=book_id,
+                chapter_no=node_no,
+                chapter_id=None,
+                outline_node_id=node_id,
+                action="create_chapter",
+                active_run_id=None,
+                reason="no chapter row for the first unresolved outline number",
+                outline_version_id=outline_version.id,
+            )
+
+        # The chapter exists and is not finalized: a live run owns it.
         active_run = (
             await db.execute(
                 select(ChapterRun)
@@ -159,92 +185,46 @@ async def select_next_chapter(
         if active_run is not None:
             return NextChapterDecision(
                 book_id=book_id,
-                chapter_no=chapter_no,
+                chapter_no=node_no,
                 chapter_id=chapter.id,
-                outline_node_id=existing_node.id,
+                outline_node_id=node_id,
                 action="open_active_run",
                 active_run_id=active_run.id,
                 reason="existing chapter has an active run",
                 outline_version_id=outline_version.id,
             )
 
-        if chapter.status == ChapterState.NEEDS_HUMAN.value:
-            action: NextChapterAction = "needs_human"
-            reason = "unfinished chapter requires human intervention"
-        else:
-            action = "resume_unfinished"
-            reason = "reuse the smallest unfinished chapter"
-        return NextChapterDecision(
-            book_id=book_id,
-            chapter_no=chapter_no,
-            chapter_id=chapter.id,
-            outline_node_id=existing_node.id,
-            action=action,
-            active_run_id=None,
-            reason=reason,
-            outline_version_id=outline_version.id,
-        )
-
-    # v9.4: OUTLINE_EXHAUSTED vs OUTLINE_NODE_MISSING (spec §31). Only the
-    # "new chapter" path can be exhausted; unfinished-chapter reuse is checked
-    # above and raises OUTLINE_NODE_MISSING on a real gap.
-    max_outline_no = (
-        await db.execute(
-            select(func.max(OutlineNode.chapter_no)).where(
-                OutlineNode.book_id == book_id,
-                OutlineNode.outline_version_id == outline_version.id,
+        if chapter.status in UNFINISHED_CHAPTER_STATES:
+            if chapter.status == ChapterState.NEEDS_HUMAN.value:
+                action: NextChapterAction = "needs_human"
+                reason = "unfinished chapter requires human intervention"
+            else:
+                action = "resume_unfinished"
+                reason = "reuse the smallest unfinished chapter"
+            return NextChapterDecision(
+                book_id=book_id,
+                chapter_no=node_no,
+                chapter_id=chapter.id,
+                outline_node_id=node_id,
+                action=action,
+                active_run_id=None,
+                reason=reason,
+                outline_version_id=outline_version.id,
             )
-        )
-    ).scalar_one_or_none()
-    max_outline_no = int(max_outline_no or 0)
 
-    finalized_no = (
-        await db.execute(
-            select(Chapter.chapter_no)
-            .where(
-                Chapter.book_id == book_id,
-                Chapter.status == ChapterState.FINALIZED.value,
-            )
-            .order_by(Chapter.chapter_no.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    chapter_no = int(finalized_no or 0) + 1
-
-    if chapter_no > max_outline_no:
+        # Intermediate state (planning/drafting/reviewing/...) with no live
+        # run: fail closed. The session reconciler repairs this to failed;
+        # silently creating a duplicate chapter is never allowed.
         raise NextChapterSelectionError(
-            "OUTLINE_EXHAUSTED",
-            chapter_no,
-            f"已批准大纲仅覆盖到第{max_outline_no}章",
+            "CHAPTER_STATE_INCONSISTENT",
+            node_no,
+            f"第{node_no}章处于中间状态 {chapter.status} 且没有活动 run，等待会话协调器修复",
         )
 
-    node = (
-        await db.execute(
-            select(OutlineNode)
-            .where(
-                OutlineNode.book_id == book_id,
-                OutlineNode.outline_version_id == outline_version.id,
-                OutlineNode.chapter_no == chapter_no,
-            )
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    if node is None:
-        raise NextChapterSelectionError(
-            "OUTLINE_NODE_MISSING",
-            chapter_no,
-            f"第{chapter_no}章没有已批准章纲",
-        )
-
-    return NextChapterDecision(
-        book_id=book_id,
-        chapter_no=chapter_no,
-        chapter_id=None,
-        outline_node_id=node.id,
-        action="create_chapter",
-        active_run_id=None,
-        reason="next number after the highest finalized chapter",
-        outline_version_id=outline_version.id,
+    raise NextChapterSelectionError(
+        "OUTLINE_EXHAUSTED",
+        next_no,
+        f"已批准大纲仅覆盖到第{next_no - 1}章",
     )
 
 

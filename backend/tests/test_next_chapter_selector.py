@@ -1,4 +1,8 @@
-"""Regression tests for deterministic next-chapter selection."""
+"""Regression tests for deterministic next-chapter selection.
+
+Mock-level logic checks; real-database behaviour (identity binding, outline
+rebinding, concurrency) is covered by test_session_recovery_db.py.
+"""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -24,6 +28,16 @@ class ScalarResult:
         return self.value
 
 
+class RowListResult:
+    """Result of a column select: .all() returns (chapter_no, node_id) rows."""
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    def all(self):
+        return self.rows
+
+
 class ScalarListResult:
     def __init__(self, values):
         self.values = values
@@ -33,7 +47,6 @@ class ScalarListResult:
 
     def all(self):
         return self.values
-
 
 
 def db_for(*results):
@@ -63,17 +76,15 @@ def run(chapter_id, status="running"):
 
 
 @pytest.mark.asyncio
-async def test_500_outline_nodes_and_zero_chapters_select_chapter_one():
+async def test_outline_nodes_and_zero_chapters_select_chapter_one():
     b = book()
     ov = outline(b.id)
     n1 = node(b.id, ov.id, 1)
     db = db_for(
         ScalarResult(b),
         ScalarResult(ov),
+        RowListResult([(1, n1.id)]),
         ScalarListResult([]),
-        ScalarResult(500),  # max approved outline chapter_no
-        ScalarResult(None),  # no finalized chapters
-        ScalarResult(n1),
     )
 
     decision = await select_next_chapter(db, b.id)
@@ -81,22 +92,20 @@ async def test_500_outline_nodes_and_zero_chapters_select_chapter_one():
     assert decision.action == "create_chapter"
     assert decision.chapter_no == 1
     assert decision.outline_node_id == n1.id
-    # v9.4: selector now checks max(outline_nodes.chapter_no) for exhaustion.
-    assert db.execute.await_count == 6
+    assert decision.chapter_id is None
+    assert db.execute.await_count == 4
 
 
 @pytest.mark.asyncio
 async def test_finalized_one_to_seven_selects_eighth():
     b = book()
     ov = outline(b.id)
-    n8 = node(b.id, ov.id, 8)
+    finalized = [chapter(b.id, no, "finalized") for no in range(1, 8)]
     db = db_for(
         ScalarResult(b),
         ScalarResult(ov),
-        ScalarListResult([]),
-        ScalarResult(8),  # max outline chapter_no
-        ScalarResult(7),  # finalized 1..7
-        ScalarResult(n8),
+        RowListResult([(no, node(b.id, ov.id, no).id) for no in range(1, 9)]),
+        ScalarListResult(finalized),
     )
 
     decision = await select_next_chapter(db, b.id)
@@ -110,13 +119,14 @@ async def test_failed_chapter_four_is_reused_before_next_number():
     b = book()
     ov = outline(b.id)
     c4 = chapter(b.id, 4, "failed")
-    n4 = node(b.id, ov.id, 4)
+    nodes = {no: node(b.id, ov.id, no) for no in range(1, 5)}
+    finalized = [chapter(b.id, no, "finalized") for no in range(1, 4)]
     db = db_for(
         ScalarResult(b),
         ScalarResult(ov),
-        ScalarListResult([c4]),
-        ScalarResult(n4),
-        ScalarResult(None),
+        RowListResult([(no, nodes[no].id) for no in range(1, 5)]),
+        ScalarListResult(finalized + [c4]),
+        ScalarResult(None),  # no active run
     )
 
     decision = await select_next_chapter(db, b.id)
@@ -124,6 +134,8 @@ async def test_failed_chapter_four_is_reused_before_next_number():
     assert decision.action == "resume_unfinished"
     assert decision.chapter_no == 4
     assert decision.chapter_id == c4.id
+    # The decision carries the CURRENT approved node for rebinding.
+    assert decision.outline_node_id == nodes[4].id
 
 
 @pytest.mark.asyncio
@@ -131,13 +143,14 @@ async def test_active_run_is_opened_without_creating_another():
     b = book()
     ov = outline(b.id)
     c4 = chapter(b.id, 4, "running")
-    n4 = node(b.id, ov.id, 4)
+    nodes = {no: node(b.id, ov.id, no) for no in range(1, 5)}
+    finalized = [chapter(b.id, no, "finalized") for no in range(1, 4)]
     active = run(c4.id)
     db = db_for(
         ScalarResult(b),
         ScalarResult(ov),
-        ScalarListResult([c4]),
-        ScalarResult(n4),
+        RowListResult([(no, nodes[no].id) for no in range(1, 5)]),
+        ScalarListResult(finalized + [c4]),
         ScalarResult(active),
     )
 
@@ -149,27 +162,24 @@ async def test_active_run_is_opened_without_creating_another():
 
 
 @pytest.mark.asyncio
-async def test_missing_approved_outline_node_is_blocked():
+async def test_outline_numbering_gap_is_blocked():
+    """A hole in the approved outline numbering is OUTLINE_NODE_MISSING."""
     b = book()
     ov = outline(b.id)
+    n2 = node(b.id, ov.id, 2)
     db = db_for(
         ScalarResult(b),
         ScalarResult(ov),
+        RowListResult([(2, n2.id)]),  # node numbering starts at 2: gap at 1
         ScalarListResult([]),
-        ScalarResult(1),  # outline has a chapter-1 node…
-        ScalarResult(None),  # …but nothing finalized -> next = 1
-        ScalarResult(None),  # node missing -> OUTLINE_NODE_MISSING
     )
 
     with pytest.raises(NextChapterSelectionError) as exc:
         await select_next_chapter(db, b.id)
 
     assert exc.value.status_code == 422
-    assert exc.value.detail == {
-        "code": "OUTLINE_NODE_MISSING",
-        "chapter_no": 1,
-        "message": "第1章没有已批准章纲",
-    }
+    assert exc.value.detail["code"] == "OUTLINE_NODE_MISSING"
+    assert exc.value.detail["chapter_no"] == 1
 
 
 @pytest.mark.asyncio
@@ -184,7 +194,29 @@ async def test_unapproved_outline_is_blocked_without_fallback():
 
 
 @pytest.mark.asyncio
-async def test_high_numbered_test_chapter_without_approved_node_is_ignored():
+async def test_intermediate_state_without_active_run_fails_closed():
+    """A reviewing chapter with no live run must never yield create_chapter."""
+    b = book()
+    ov = outline(b.id)
+    c1 = chapter(b.id, 1, "reviewing")
+    n1 = node(b.id, ov.id, 1)
+    db = db_for(
+        ScalarResult(b),
+        ScalarResult(ov),
+        RowListResult([(1, n1.id)]),
+        ScalarListResult([c1]),
+        ScalarResult(None),  # no active run
+    )
+
+    with pytest.raises(NextChapterSelectionError) as exc:
+        await select_next_chapter(db, b.id)
+
+    assert exc.value.detail["code"] == "CHAPTER_STATE_INCONSISTENT"
+    assert exc.value.detail["chapter_no"] == 1
+
+
+@pytest.mark.asyncio
+async def test_high_numbered_test_chapter_is_ignored():
     b = book()
     ov = outline(b.id)
     n1 = node(b.id, ov.id, 1)
@@ -192,15 +224,14 @@ async def test_high_numbered_test_chapter_without_approved_node_is_ignored():
     db = db_for(
         ScalarResult(b),
         ScalarResult(ov),
-        # The selector's approved-node subquery excludes the synthetic chapter.
+        RowListResult([(1, n1.id)]),
+        # The selector's chapter_no filter excludes the synthetic chapter.
         ScalarListResult([]),
-        ScalarResult(1),  # max approved chapter_no
-        ScalarResult(None),  # nothing finalized -> next = 1
-        ScalarResult(n1),
     )
 
     decision = await select_next_chapter(db, b.id)
 
     assert decision.chapter_no == 1
     assert decision.chapter_id is None
+    assert decision.action == "create_chapter"
     assert test_chapter.chapter_no == 9999

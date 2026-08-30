@@ -137,9 +137,15 @@ def _db_available() -> bool:
         from app.config import settings
 
         dsn = settings.database_url.replace("postgresql+asyncpg://", "postgresql://")
-        conn = asyncio.run(asyncpg.connect(dsn=dsn, timeout=3))
-        asyncio.run(conn.close())
-        return True
+
+        async def _probe() -> bool:
+            # Connect and close on ONE loop: closing on a second asyncio.run
+            # uses a transport bound to a dead loop and silently skips tests.
+            conn = await asyncpg.connect(dsn=dsn, timeout=3)
+            await conn.close()
+            return True
+
+        return bool(asyncio.run(_probe()))
     except Exception:  # noqa: BLE001 - no PG here means skip
         return False
 
@@ -192,11 +198,26 @@ async def test_v96_health_zero_rate_retained():
     import uuid
     from datetime import datetime, timezone
 
+    from sqlalchemy import delete, select
+
     from app.database import async_session_factory
     from app.model_autopilot.health import upsert_health_snapshot
     from app.models import ModelCatalog, ModelHealthProbe, ModelHealthSnapshot
 
     async with async_session_factory() as db:
+        # Shared test DB: drop this test's fixed-identity leftovers first so
+        # re-running the suite never trips the catalog unique constraint.
+        stale = (await db.execute(
+            select(ModelCatalog).where(
+                ModelCatalog.provider == "p", ModelCatalog.model_id == "m-0pct"
+            )
+        )).scalars().all()
+        for c in stale:
+            await db.execute(delete(ModelHealthProbe).where(ModelHealthProbe.model_catalog_id == c.id))
+            await db.execute(delete(ModelHealthSnapshot).where(ModelHealthSnapshot.model_catalog_id == c.id))
+            await db.execute(delete(ModelCatalog).where(ModelCatalog.id == c.id))
+        await db.commit()
+
         catalog = ModelCatalog(
             id=uuid.uuid4(),
             provider="p",

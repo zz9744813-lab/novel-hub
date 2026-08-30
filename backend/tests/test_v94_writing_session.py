@@ -17,6 +17,7 @@ from app.models import (
     Book,
     Chapter,
     ChapterRun,
+    ChapterVersion,
     EditorialAnnotation,
     EditorialReviewRound,
     OutlineNode,
@@ -29,11 +30,9 @@ from app.services.next_chapter_selector import (
     select_next_chapter,
 )
 from app.services.writing_session_controller import (
-    ACTIVE_SESSION_STATUSES,
     CCNE_HARD_CODES,
     DEFAULT_POLICY,
     RESOURCE_HARD_CODES,
-    advance_writing_session,
     evaluate_session,
     serialize_session,
 )
@@ -41,7 +40,6 @@ from app.services.writing_session_service import (
     _build_policy,
     _resolve_until_datetime,
     create_writing_session,
-    poke_waiting_editorial_sessions,
 )
 from app.schemas.writing_session import WritingSessionCreateRequest
 
@@ -53,9 +51,16 @@ def _db_available() -> bool:
         from app.config import settings
 
         dsn = settings.database_url.replace("postgresql+asyncpg://", "postgresql://")
-        conn = asyncio.run(asyncpg.connect(dsn=dsn, timeout=3))
-        asyncio.run(conn.close())
-        return True
+
+        async def _probe() -> bool:
+            # Connect and close on ONE loop: closing on a second asyncio.run
+            # uses a transport bound to a dead loop (NoneType.send) and made
+            # every DB-backed test silently skip.
+            conn = await asyncpg.connect(dsn=dsn, timeout=3)
+            await conn.close()
+            return True
+
+        return bool(asyncio.run(_probe()))
     except Exception:  # noqa: BLE001 - any failure means "no DB here"
         return False
 
@@ -175,49 +180,8 @@ async def test_session_advance_runs_preflight_after_committing_marker(monkeypatc
     assert result == {"status": "running"}
 
 
-class _Scalar:
-    def __init__(self, value):
-        self.value = value
-
-    def scalar_one_or_none(self):
-        return self.value
-
-
-class _List:
-    def __init__(self, values):
-        self.values = values
-
-    def scalars(self):
-        return self
-
-    def all(self):
-        return self.values
-
-
-class _MockDb:
-    def __init__(self, results):
-        self.calls = 0
-        self.results = list(results)
-
-    async def execute(self, *args, **kwargs):
-        self.calls += 1
-        return self.results.pop(0)
-
-
-def _ns(**kw):
-    return type("NS", (), kw)()
-
-
 def _test_policy() -> dict:
     return dict(DEFAULT_POLICY)
-
-
-def _mock_node(book_id, ov_id, no):
-    return _ns(id=uuid.uuid4(), book_id=book_id, outline_version_id=ov_id, chapter_no=no)
-
-
-def _mock_book():
-    return _ns(id=uuid.uuid4())
 
 
 def test_build_policy_defaults():
@@ -271,40 +235,35 @@ def test_serialize_session_shape():
 
 
 @pytest.mark.asyncio
+@requires_db
 async def test_selector_outline_exhausted():
-    b = _mock_book()
-    ov = _ns(id=uuid.uuid4(), book_id=b.id, version=1, status="approved")
-    db = _MockDb(
-        [
-            _Scalar(b),
-            _Scalar(ov),
-            _List([]),
-            _Scalar(30),  # max outline chapter_no
-            _Scalar(30),  # finalized 1..30
-        ]
-    )
-    with pytest.raises(NextChapterSelectionError) as exc:
-        await select_next_chapter(db, b.id)
+    """All approved chapters finalized -> OUTLINE_EXHAUSTED (spec §31)."""
+    from app.database import async_session_factory
+
+    book_id, _ov_id = await _seed_book(nodes=30)
+    async with async_session_factory() as db:
+        for no in range(1, 31):
+            await _seed_finalized_chapter(db, book_id, no)
+        await db.commit()
+        with pytest.raises(NextChapterSelectionError) as exc:
+            await select_next_chapter(db, book_id)
     assert exc.value.detail["code"] == "OUTLINE_EXHAUSTED"
     assert exc.value.detail["chapter_no"] == 31
 
 
 @pytest.mark.asyncio
+@requires_db
 async def test_selector_outline_gap():
-    b = _mock_book()
-    ov = _ns(id=uuid.uuid4(), book_id=b.id, version=1, status="approved")
-    db = _MockDb(
-        [
-            _Scalar(b),
-            _Scalar(ov),
-            _List([]),
-            _Scalar(30),  # outline has nodes 1..30 (18 missing)
-            _Scalar(17),  # finalized 1..17
-            _Scalar(None),  # node 18 missing
-        ]
-    )
-    with pytest.raises(NextChapterSelectionError) as exc:
-        await select_next_chapter(db, b.id)
+    """A numbering hole in the approved outline blocks with OUTLINE_NODE_MISSING."""
+    from app.database import async_session_factory
+
+    book_id, _ov_id = await _seed_book(nodes=30, missing={18})
+    async with async_session_factory() as db:
+        for no in range(1, 18):
+            await _seed_finalized_chapter(db, book_id, no)
+        await db.commit()
+        with pytest.raises(NextChapterSelectionError) as exc:
+            await select_next_chapter(db, book_id)
     assert exc.value.detail["code"] == "OUTLINE_NODE_MISSING"
     assert exc.value.detail["chapter_no"] == 18
 
@@ -340,6 +299,36 @@ async def _seed_book(nodes: int = 30, missing: set[int] | None = None):
             )
         await db.commit()
         return book_id, ov.id
+
+
+async def _seed_finalized_chapter(db, book_id: uuid.UUID, no: int) -> Chapter:
+    """Finalized chapter satisfying INV-01 (final pointer) and the editorial
+    backlog gate (accepted), so global invariant tests stay green on the
+    shared accumulating test DB."""
+    ch = Chapter(
+        id=uuid.uuid4(),
+        book_id=book_id,
+        chapter_no=no,
+        outline_node_id=uuid.uuid4(),
+        status="finalized",
+        editorial_status="accepted",
+        finalized_version=1,
+    )
+    db.add(ch)
+    await db.flush()
+    db.add(
+        ChapterVersion(
+            id=uuid.uuid4(),
+            book_id=book_id,
+            chapter_id=ch.id,
+            version=1,
+            content=f"第{no}章定稿",
+            word_count=100,
+            source_run_id=uuid.uuid4(),
+            version_kind="final",
+        )
+    )
+    return ch
 
 
 async def _seed_session(db, book_id: uuid.UUID, *, status="running", **kw) -> WritingSession:
@@ -397,7 +386,7 @@ async def test_50_1_finalizer_does_not_race():
             chapter_no=1,
             outline_version_id=ov_id,
             pipeline_version="pipeline-v2",
-            status="finalizing",
+            status="running",  # real run vocabulary: active run -> wait_current
             request_id="t-50-1",
             writing_session_id=sid,
         )
@@ -450,15 +439,18 @@ async def test_50_3_redis_failure_backoff():
     book_id, _ = await _seed_book()
     from app.database import async_session_factory
 
-    sid = uuid.uuid4()
     async with async_session_factory() as db:
+        s = await _seed_session(db, book_id)
+        sid = s.id
         db.add(
             SessionAdvanceOutbox(
                 id=uuid.uuid4(),
                 writing_session_id=sid,
                 completed_run_id=None,
                 event_type="advance_writing_session",
-                dedupe_key="session-first:t-50-3",
+                # sid is fresh per run: the shared test DB keeps rows forever,
+                # so a fixed dedupe_key would collide on the second run
+                dedupe_key=f"session-first:{sid}",
                 payload={},
                 status="pending",
                 available_at=datetime.now(timezone.utc),
@@ -470,19 +462,33 @@ async def test_50_3_redis_failure_backoff():
         raise ConnectionError("redis down")
 
     sod.enqueue_advance_arq = _boom
-    report = await sod.dispatch_session_outbox_once(limit=10)
-    assert report["failed"] == 1
-    assert report["dispatched"] == 0
-
+    # The shared test DB accumulates pending outbox rows from other tests;
+    # dispatch repeatedly (redis always fails) until THIS row has been
+    # attempted at least once, then assert the backoff contract on it.
+    report = {"dispatched": 0, "failed": 0}
     async with async_session_factory() as db:
         row = (
             await db.execute(
-                select(SessionAdvanceOutbox).where(SessionAdvanceOutbox.dedupe_key == "session-first:t-50-3")
+                select(SessionAdvanceOutbox).where(SessionAdvanceOutbox.dedupe_key == f"session-first:{sid}")
             )
         ).scalar_one()
-        assert row.status == "pending"  # backoff path, not dead
-        assert int(row.attempts or 0) >= 1
-        assert row.locked_by is None
+    for _ in range(10):
+        report = await sod.dispatch_session_outbox_once(limit=500)
+        async with async_session_factory() as db:
+            row = (
+                await db.execute(
+                    select(SessionAdvanceOutbox).where(SessionAdvanceOutbox.dedupe_key == f"session-first:{sid}")
+                )
+            ).scalar_one()
+        if int(row.attempts or 0) >= 1:
+            break
+    # The contract: nothing dispatches while redis is down, and this row
+    # backs off (attempts counted, still pending, lock released).
+    assert report["dispatched"] == 0
+    assert report["failed"] >= 1
+    assert row.status == "pending"  # backoff path, not dead
+    assert int(row.attempts or 0) >= 1
+    assert row.locked_by is None
 
 
 @requires_db
@@ -669,8 +675,14 @@ async def test_50_7_double_advance_single_row():
 
 @requires_db
 @pytest.mark.asyncio
-async def test_50_8_reconciler_repairs_missing_outbox():
-    from app.workers.arq_worker import _insert_session_advance_outbox
+async def test_50_8_reconciler_repairs_missing_outbox(monkeypatch):
+
+    # The shared test DB accumulates active sessions from other tests; the
+    # reconciler claims LIMIT sessions per pass ordered by last_reconciled_at,
+    # so a small limit makes this test flaky. Raise it for this process.
+    import app.services.session_reconciler as reconciler_mod
+
+    monkeypatch.setattr(reconciler_mod, "CLAIM_LIMIT", 500)
 
     book_id, ov_id = await _seed_book()
     from app.database import async_session_factory
@@ -679,11 +691,7 @@ async def test_50_8_reconciler_repairs_missing_outbox():
     async with async_session_factory() as db:
         s = await _seed_session(db, book_id)
         sid = s.id
-        ch = Chapter(
-            id=uuid.uuid4(), book_id=book_id, chapter_no=1, outline_node_id=uuid.uuid4(), status="finalized"
-        )
-        db.add(ch)
-        await db.flush()
+        ch = await _seed_finalized_chapter(db, book_id, 1)
         run = ChapterRun(
             id=uuid.uuid4(),
             book_id=book_id,
@@ -701,7 +709,6 @@ async def test_50_8_reconciler_repairs_missing_outbox():
         s.current_chapter_no = 1
         s.current_chapter_run_id = run.id
         await db.commit()
-        run_id = run.id
     assert await _outbox_count(sid) == 0
 
     from app.services.session_reconciler import reconcile_sessions
@@ -723,26 +730,9 @@ async def test_50_9_backlog_counts_revision_states():
     async with async_session_factory() as db:
         states = ["pending_review", "in_review", "revision_requested", "revising", "awaiting_recheck"]
         for i, st in enumerate(states, start=1):
-            db.add(
-                Chapter(
-                    id=uuid.uuid4(),
-                    book_id=book_id,
-                    chapter_no=i,
-                    outline_node_id=uuid.uuid4(),
-                    status="finalized",
-                    editorial_status=st,
-                )
-            )
-        db.add(
-            Chapter(
-                id=uuid.uuid4(),
-                book_id=book_id,
-                chapter_no=99,
-                outline_node_id=uuid.uuid4(),
-                status="finalized",
-                editorial_status="accepted",
-            )
-        )
+            ch = await _seed_finalized_chapter(db, book_id, i)
+            ch.editorial_status = st
+        await _seed_finalized_chapter(db, book_id, 99)  # accepted -> not backlog
         await db.commit()
     async with async_session_factory() as db:
         backlog = await count_editorial_backlog(db, book_id)
@@ -766,18 +756,31 @@ async def test_50_10_recent_first_pass_yield_window():
                 chapter_no=no,
                 outline_node_id=uuid.uuid4(),
                 status="finalized",
+                finalized_version=1,
             )
             db.add(ch)
             await db.flush()
             ch_ids.append(ch.id)
         # first 4 chapters accepted, last 6 accepted → 10/10 = 1.0; then re-flag 4 as revised
         for no, cid in enumerate(ch_ids, start=1):
+            ver = ChapterVersion(
+                id=uuid.uuid4(),
+                book_id=book_id,
+                chapter_id=cid,
+                version=1,
+                content=f"第{no}章内容",
+                word_count=100,
+                source_run_id=uuid.uuid4(),
+                version_kind="final",
+            )
+            db.add(ver)
+            await db.flush()
             db.add(
                 EditorialReviewRound(
                     id=uuid.uuid4(),
                     book_id=book_id,
                     chapter_id=cid,
-                    chapter_version_id=uuid.uuid4(),
+                    chapter_version_id=ver.id,
                     round_no=1,
                     status="submitted",
                     verdict="accept",
@@ -810,28 +813,43 @@ async def test_50_11_accept_with_notes_blocking_not_good():
                 outline_node_id=uuid.uuid4(),
                 status="finalized",
                 editorial_status="accepted_with_notes",
+                finalized_version=1,
             )
         )
+        await db.flush()
+        ver = ChapterVersion(
+            id=uuid.uuid4(),
+            book_id=book_id,
+            chapter_id=cid,
+            version=1,
+            content="第1章内容",
+            word_count=100,
+            source_run_id=uuid.uuid4(),
+            version_kind="final",
+        )
+        db.add(ver)
+        await db.flush()
         rid = uuid.uuid4()
         db.add(
             EditorialReviewRound(
                 id=rid,
                 book_id=book_id,
                 chapter_id=cid,
-                chapter_version_id=uuid.uuid4(),
+                chapter_version_id=ver.id,
                 round_no=1,
                 status="submitted",
                 verdict="accept_with_notes",
                 submitted_at=datetime.now(timezone.utc),
             )
         )
+        await db.flush()
         db.add(
             EditorialAnnotation(
                 id=uuid.uuid4(),
                 review_round_id=rid,
                 book_id=book_id,
                 chapter_id=cid,
-                chapter_version_id=uuid.uuid4(),
+                chapter_version_id=ver.id,
                 annotation_type="issue",
                 severity="major",
                 is_blocking=True,
@@ -852,15 +870,7 @@ async def test_50_12_outline_exhausted_completes_session():
     book_id, ov_id = await _seed_book(nodes=30)
     async with async_session_factory() as db:
         for no in range(1, 31):
-            db.add(
-                Chapter(
-                    id=uuid.uuid4(),
-                    book_id=book_id,
-                    chapter_no=no,
-                    outline_node_id=uuid.uuid4(),
-                    status="finalized",
-                )
-            )
+            await _seed_finalized_chapter(db, book_id, no)
         s = await _seed_session(db, book_id)
         await db.commit()
         sid = s.id
@@ -884,15 +894,7 @@ async def test_50_13_outline_gap_blocks_session():
     book_id, _ = await _seed_book(nodes=30, missing={18})
     async with async_session_factory() as db:
         for no in range(1, 18):
-            db.add(
-                Chapter(
-                    id=uuid.uuid4(),
-                    book_id=book_id,
-                    chapter_no=no,
-                    outline_node_id=uuid.uuid4(),
-                    status="finalized",
-                )
-            )
+            await _seed_finalized_chapter(db, book_id, no)
         s = await _seed_session(db, book_id)
         await db.commit()
         sid = s.id

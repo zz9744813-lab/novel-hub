@@ -17,7 +17,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.database import async_session_factory
 from app.editorial.session_metrics import count_editorial_backlog
-from app.models import ChapterRun, SessionAdvanceOutbox, WritingSession
+from app.models import Chapter, ChapterRun, SessionAdvanceOutbox, WritingSession
+from app.engine.state_transition import transition_chapter
+from app.state_machine import ChapterState
 from app.services.writing_session_controller import (
     ACTIVE_RUN_STATUSES,
     ACTIVE_SESSION_STATUSES,
@@ -46,6 +48,49 @@ def chapter_run_is_stale(run: ChapterRun, now: datetime) -> bool:
     if last_seen.tzinfo is None:
         last_seen = last_seen.replace(tzinfo=timezone.utc)
     return last_seen < now - timedelta(seconds=RUN_STALE_GRACE_SECONDS)
+
+
+async def _fail_chapter_of_orphaned_run(
+    db,
+    run: ChapterRun | None,
+    chapter_id,
+    *,
+    reason: str,
+) -> bool:
+    """Sync the chapter to a legal failed state when its run is orphaned.
+
+    Terminalizing only the ChapterRun while the Chapter stays in an
+    intermediate state (e.g. reviewing) is the production P0 that blinded the
+    next-chapter selector and recreated chapter 1 in a loop. The transition
+    goes through transition_chapter() in the SAME transaction, leaving a
+    ChapterStateEvent with actor/reason/run_id as audit evidence. Finalized
+    chapters are never regressed; an already-failed chapter gets no duplicate
+    event.
+    """
+    if chapter_id is None:
+        return False
+    chapter = (
+        await db.execute(select(Chapter).where(Chapter.id == chapter_id).with_for_update())
+    ).scalar_one_or_none()
+    if chapter is None:
+        return False
+    current = chapter.status or "queued"
+    if current in (ChapterState.FINALIZED.value, ChapterState.FAILED.value):
+        return False
+    await transition_chapter(
+        chapter.id,
+        ChapterState.FAILED,
+        reason=reason,
+        actor="session_reconciler",
+        run_id=run.id if run is not None else None,
+        db=db,
+    )
+    logger.warning(
+        "reconciler synced chapter %s to failed (orphaned run %s)",
+        chapter.id,
+        run.id if run is not None else None,
+    )
+    return True
 
 
 async def reconcile_sessions() -> dict:
@@ -90,6 +135,13 @@ async def reconcile_sessions() -> dict:
                     continue
                 report["claimed"] += 1
                 repaired = touched = 0
+                # Deterministic poke identity for this pass. The key carries
+                # the stable recovery reason and generation (the driving run
+                # id, or a session-fixed state tag), so repeated reconcile
+                # passes cannot pile up equivalent advance outbox rows while
+                # the signal is unconsumed.
+                poke_key: str | None = None
+                poke_reason: str | None = None
 
                 # 1) stale run pointer: run row vanished
                 if session.current_chapter_run_id:
@@ -101,9 +153,27 @@ async def reconcile_sessions() -> dict:
                         )
                     ).scalar_one_or_none()
                     if run is None:
+                        # The run row is gone but the chapter may still sit in
+                        # an intermediate state — sync it before clearing the
+                        # pointer so the selector can see and resume it.
+                        await _fail_chapter_of_orphaned_run(
+                            db,
+                            None,
+                            session.current_chapter_id,
+                            reason="chapter run row vanished while chapter in progress",
+                        )
+                        # After the repair the session state IS "running
+                        # without an active run", so share that stable key:
+                        # later passes of the same arc dedupe onto one row
+                        # instead of stacking a second key per state change.
+                        poke_key = f"session-reconcile:{session.id}:no-active-run"
+                        poke_reason = "vanished-run"
                         session.current_chapter_run_id = None
                         session.current_chapter_id = None
                         session.current_chapter_no = None
+                        # Poke the advance in the SAME pass: recovery must not
+                        # depend on the next reconcile timer.
+                        touched += 1
                         repaired += 1
                     elif run.status == "succeeded":
                         # 2) run succeeded but its advance outbox is missing (spec §36)
@@ -141,9 +211,16 @@ async def reconcile_sessions() -> dict:
                         # An unhandled worker exception used to leave the run
                         # as RUNNING after its lease disappeared.  Such a row
                         # blocks the session forever and is never eligible for
-                        # chapter outbox backfill.  Terminalize it, then let the
-                        # normal session outbox/controller recovery path decide
+                        # chapter outbox backfill.  Terminalize it, keep the
+                        # chapter in lockstep (failed), then let the normal
+                        # session outbox/controller recovery path decide
                         # whether to retry the chapter.
+                        await _fail_chapter_of_orphaned_run(
+                            db,
+                            run,
+                            run.chapter_id,
+                            reason="orphaned chapter run terminalized: running row lost its worker lease",
+                        )
                         run.status = "failed"
                         run.error_code = run.error_code or "orphaned_chapter_run"
                         run.error_detail = run.error_detail or {
@@ -154,18 +231,44 @@ async def reconcile_sessions() -> dict:
                         run.lease_expires_at = None
                         repaired += 1
                         touched += 1
+                        poke_key = f"session-reconcile:{session.id}:run:{run.id}"
+                        poke_reason = "stale-run"
                         logger.warning(
-                            "terminalized stale chapter run id=%s session=%s",
+                            "terminalized stale chapter run id=%s session=%s chapter=%s",
                             run.id,
                             session.id,
+                            run.chapter_id,
                         )
+                    elif (
+                        run.status == "failed"
+                        and run.error_code == "orphaned_chapter_run"
+                    ):
+                        # Stock state left by earlier versions: the run was
+                        # already terminalized as orphaned while its chapter
+                        # stayed in an intermediate state (production P0).
+                        # Sync the chapter in THIS pass and poke the advance
+                        # so recovery never waits another reconcile cycle.
+                        if await _fail_chapter_of_orphaned_run(
+                            db,
+                            run,
+                            run.chapter_id,
+                            reason="stock orphaned chapter run: syncing chapter to failed",
+                        ):
+                            repaired += 1
+                        touched += 1
+                        poke_key = f"session-reconcile:{session.id}:run:{run.id}"
+                        poke_reason = "orphaned-run"
                     elif run.status not in ACTIVE_RUN_STATUSES | {"paused"}:
                         # terminal-but-uncleaned run: nudge controller to clear pointer
                         touched += 1
+                        poke_key = f"session-reconcile:{session.id}:run:{run.id}"
+                        poke_reason = "terminal-run"
                 else:
                     # 3) running session with no active run → re-evaluate soon
                     if session.status == "running":
                         touched += 1
+                        poke_key = f"session-reconcile:{session.id}:no-active-run"
+                        poke_reason = poke_reason or "no-active-run"
 
                 # 4) waiting_editorial may be resolved (spec §24)
                 if session.status == "waiting_editorial":
@@ -173,10 +276,18 @@ async def reconcile_sessions() -> dict:
                     backlog = await count_editorial_backlog(db, session.book_id)
                     if backlog < limit:
                         touched += 1
+                        poke_key = poke_key or (
+                            f"session-reconcile:{session.id}:waiting-editorial"
+                        )
+                        poke_reason = poke_reason or "waiting-editorial"
 
                 # 5) control_requested resolvable without an active run
                 if session.control_requested in ("pause", "cancel") and not session.current_chapter_run_id:
                     touched += 1
+                    poke_key = poke_key or (
+                        f"session-reconcile:{session.id}:control-{session.control_requested}"
+                    )
+                    poke_reason = poke_reason or f"control-{session.control_requested}"
 
                 # 6) deadline passed without an active run
                 if (
@@ -185,8 +296,19 @@ async def reconcile_sessions() -> dict:
                     and not session.current_chapter_run_id
                 ):
                     touched += 1
+                    poke_key = poke_key or f"session-reconcile:{session.id}:deadline"
+                    poke_reason = poke_reason or "deadline"
 
                 if touched:
+                    poke_key = poke_key or f"session-reconcile:{session.id}:reconcile"
+                    poke_reason = poke_reason or "reconcile"
+                    # Idempotent poke: one row per (session, recovery
+                    # reason/generation). An unconsumed pending/dispatching
+                    # row is left exactly as it is (the dispatcher owns its
+                    # retry/backoff semantics). A consumed (dispatched) or
+                    # dead row is re-armed once — the controlled retry that
+                    # keeps recovery alive after infrastructure failures
+                    # without ever growing a second equivalent row.
                     await db.execute(
                         pg_insert(SessionAdvanceOutbox)
                         .values(
@@ -194,12 +316,31 @@ async def reconcile_sessions() -> dict:
                             writing_session_id=session.id,
                             completed_run_id=None,
                             event_type="advance_writing_session",
-                            dedupe_key=f"session-reconcile:{session.id}:{uuid.uuid4().hex[:10]}",
-                            payload={"session_id": str(session.id), "kind": "reconcile"},
+                            dedupe_key=poke_key,
+                            payload={
+                                "session_id": str(session.id),
+                                "kind": "reconcile",
+                                "reason": poke_reason,
+                            },
                             status="pending",
                             available_at=datetime.now(timezone.utc),
                         )
-                        .on_conflict_do_nothing(index_elements=["dedupe_key"])
+                        .on_conflict_do_update(
+                            index_elements=["dedupe_key"],
+                            set_={
+                                "status": "pending",
+                                "attempts": 0,
+                                "available_at": datetime.now(timezone.utc),
+                                "locked_at": None,
+                                "locked_by": None,
+                                "dispatched_at": None,
+                                "last_error": None,
+                            },
+                            # Only re-arm consumed (dispatched) or dead rows;
+                            # pending/dispatching rows keep their own retry
+                            # state and are never touched.
+                            where=SessionAdvanceOutbox.status.in_(("dispatched", "dead")),
+                        )
                     )
 
                 report["repaired"] += repaired

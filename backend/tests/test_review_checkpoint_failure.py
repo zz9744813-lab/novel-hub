@@ -103,10 +103,17 @@ def test_step_runner_signature_supports_bounded_retries():
     assert sig.parameters["max_retryable_attempts"].default is None
 
 
-def test_step_runner_counts_failures_for_exhaustion():
-    """count_failed_steps feeds the bounded-retry decision; keep its contract
-    stable (run_id + step_key + error_codes -> int)."""
+def test_step_runner_counts_total_failures_for_exhaustion():
+    """The bounded-retry decision must count ALL failed attempts of a
+    (run, step_key) regardless of error code (acceptance report §7.2);
+    only pause/cancel and lease-lost bookkeeping rows are excluded."""
     import inspect
-    from app.engine.step_runner import count_failed_steps
-    sig = inspect.signature(count_failed_steps)
-    assert list(sig.parameters) == ["chapter_run_id", "step_key", "error_codes"]
+    from app.engine.step_runner import (
+        NON_RETRYABLE_FAILURE_CODES,
+        count_retryable_failed_attempts,
+    )
+
+    sig = inspect.signature(count_retryable_failed_attempts)
+    assert list(sig.parameters) == ["chapter_run_id", "step_key"]
+    assert "control_requested" in NON_RETRYABLE_FAILURE_CODES
+    assert "lease_lost" in NON_RETRYABLE_FAILURE_CODES

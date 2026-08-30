@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from typing import Any, Awaitable, Callable
 
-from sqlalchemy import select, update, func
+from sqlalchemy import select, update, func, or_
 
 from app.database import async_session_factory
 from app.models import ChapterRun, ChapterStepRun
@@ -151,12 +151,22 @@ async def find_reusable_checkpoint(
         return result.scalar_one_or_none()
 
 
-async def count_failed_steps(
+# Bookkeeping failures that are not model/service attempts and must not
+# consume the retryable-attempt budget of a step (pause/cancel, lease takeover).
+NON_RETRYABLE_FAILURE_CODES = frozenset({"control_requested", "lease_lost"})
+
+
+async def count_retryable_failed_attempts(
     chapter_run_id: uuid.UUID,
     step_key: str,
-    error_codes: list[str],
 ) -> int:
-    """Count prior failed attempts for one step key and error codes."""
+    """Count ALL prior failed attempts for one step key regardless of error code.
+
+    The retryable-attempt budget is per (chapter_run_id, step_key), not per
+    error code: alternating error codes must still hit the same total cap
+    (acceptance report §7.2). Only pause/cancel and lease-lost bookkeeping
+    failures are excluded.
+    """
     async with async_session_factory() as db:
         result = await db.execute(
             select(func.count())
@@ -165,7 +175,10 @@ async def count_failed_steps(
                 ChapterStepRun.chapter_run_id == chapter_run_id,
                 ChapterStepRun.step_key == step_key,
                 ChapterStepRun.status == "failed",
-                ChapterStepRun.error_code.in_(error_codes),
+                or_(
+                    ChapterStepRun.error_code.is_(None),
+                    ChapterStepRun.error_code.not_in(NON_RETRYABLE_FAILURE_CODES),
+                ),
             )
         )
         return int(result.scalar() or 0)
@@ -400,6 +413,22 @@ async def run_step(
     await honor_control_request(ctx.run_id)
     await ensure_lease_alive(ctx.run_id, ctx.worker_id)
 
+    async def _enforce_retry_budget(code: str) -> None:
+        """Terminate the step once its TOTAL retryable attempts are exhausted.
+
+        The budget counts every failed attempt of this (run, step_key)
+        regardless of error code, so alternating codes cannot stretch the
+        cap (acceptance report §7.2).
+        """
+        if max_retryable_attempts is None or not retry_exhausted_code:
+            return
+        total = await count_retryable_failed_attempts(ctx.run_id, step_key)
+        if total >= max_retryable_attempts:
+            raise PermanentStepError(
+                retry_exhausted_code,
+                {"last_error_code": code, "attempts": total},
+            )
+
     try:
         output = await execute_fn(input_payload)
         if validate_fn:
@@ -414,15 +443,7 @@ async def run_step(
         raise
     except RetryableStepError as exc:
         await persist_failure(step.id, error_code=exc.code, error_detail=exc.detail)
-        if max_retryable_attempts is not None and retry_exhausted_code:
-            prior = await count_failed_steps(
-                ctx.run_id, step_key, [exc.code]
-            )
-            if prior >= max_retryable_attempts:
-                raise PermanentStepError(
-                    retry_exhausted_code,
-                    {"code": exc.code, "attempts": prior},
-                ) from exc
+        await _enforce_retry_budget(exc.code)
         raise
     except PermanentStepError as exc:
         await persist_failure(step.id, error_code=exc.code, error_detail=exc.detail)
@@ -444,7 +465,9 @@ async def run_step(
             error_code="step_exception",
             error_detail={"type": type(exc).__name__, "message": str(exc)[:500]},
         )
-        raise RetryableStepError("step_exception", {"message": str(exc)[:500]}) from exc
+        code = "step_exception"
+        await _enforce_retry_budget(code)
+        raise RetryableStepError(code, {"message": str(exc)[:500]}) from exc
 
 
 async def acquire_run_lease(

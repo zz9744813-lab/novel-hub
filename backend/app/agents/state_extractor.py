@@ -19,6 +19,48 @@ from app.contracts.narrative import ReactionAttribution, ReactionEvidence
 logger = logging.getLogger("novelforge.state_extractor")
 
 
+def _normalize_commit_eligible_events(
+    events: list | None,
+    legal_provisional_event_keys: set[str],
+) -> list[dict]:
+    """Return only events that can actually enter hard canon.
+
+    Early-stop decisions and the final extraction result must use the same
+    validation path.  In particular, an event that merely says
+    ``certainty=explicit`` but fails ``ExtractedStoryEvent`` validation must
+    not suppress the bounded repair call.
+    """
+    from app.contracts.narrative import ExtractedStoryEvent
+
+    normalized: list[dict] = []
+    for i, event in enumerate(events or []):
+        if not isinstance(event, dict):
+            continue
+        if not event.get("event_key"):
+            event = {**event, "event_key": f"evt-{i + 1:02d}"}
+        try:
+            event_model = ExtractedStoryEvent.model_validate(event)
+        except Exception:
+            logger.warning("drop malformed extracted event: %s", str(event)[:120])
+            continue
+        item = event_model.model_dump(mode="json")
+        if item.get("certainty") is None:
+            item["certainty"] = "unknown"
+        if item["certainty"] != "explicit":
+            continue
+        # v9.1 §9.1: invalid provisional key references are stripped, not trusted
+        provisional_key = item.get("realized_provisional_event_key")
+        if provisional_key is not None and str(provisional_key) not in legal_provisional_event_keys:
+            logger.warning(
+                "strip unknown realized_provisional_event_key %r from %s",
+                provisional_key,
+                item.get("event_key"),
+            )
+            item["realized_provisional_event_key"] = None
+        normalized.append(item)
+    return normalized
+
+
 async def extract_candidates(
     *,
     book_id: uuid.UUID,
@@ -187,30 +229,24 @@ async def extract_candidates(
 
         call_results.append((candidate, candidate_meta))
 
-        # Stop early only when the model supplied at least one event explicitly
-        # marked for canon. Malformed/subjective/inferred-only responses get
-        # the one repair pass as well.
-        has_explicit = bool(
+        # Stop early only when the model supplied at least one event that the
+        # final canon normalizer can commit. Malformed/subjective/inferred-only
+        # responses get the one repair pass as well.
+        has_commit_eligible_event = bool(
             isinstance(candidate, dict)
-            and any(
-                isinstance(event, dict) and event.get("certainty") == "explicit"
-                for event in (candidate.get("events") or [])
-            )
+            and _normalize_commit_eligible_events(candidate.get("events"), set(provisional_event_keys))
         )
-        if has_explicit:
+        if has_commit_eligible_event:
             break
 
-    # Prefer the first response that contains an explicit candidate; otherwise
+    # Prefer the first response that contains a commit-eligible candidate; otherwise
     # keep the final response so its gateway metadata remains diagnostic.
     selected_index = next(
         (
             index
             for index, (candidate, _meta) in enumerate(call_results)
             if isinstance(candidate, dict)
-            and any(
-                isinstance(event, dict) and event.get("certainty") == "explicit"
-                for event in (candidate.get("events") or [])
-            )
+            and _normalize_commit_eligible_events(candidate.get("events"), set(provisional_event_keys))
         ),
         None,
     )
@@ -258,36 +294,11 @@ async def extract_candidates(
         logger.warning("StateExtractor found %s conflicts with L4", len(conflicts))
 
     # v9.1 §13 certainty fail-closed: only "explicit" enters hard canon.
-    # missing certainty becomes "unknown"; subjective/inferred/unknown are
-    # observable but never auto-upgraded to explicit.
-    from app.contracts.narrative import ExtractedStoryEvent
-
-    legal_prov_keys = set(provisional_event_keys)
-    normalized: list[dict] = []
-    for i, e in enumerate(events or []):
-        if not isinstance(e, dict):
-            continue
-        if not e.get("event_key"):
-            e = {**e, "event_key": f"evt-{i+1:02d}"}
-        try:
-            evt_model = ExtractedStoryEvent.model_validate(e)
-        except Exception:
-            logger.warning("drop malformed extracted event: %s", str(e)[:120])
-            continue
-        evt = evt_model.model_dump(mode="json")
-        if evt.get("certainty") is None:
-            evt["certainty"] = "unknown"
-        if evt["certainty"] != "explicit":
-            continue
-        # v9.1 §9.1: invalid provisional key references are stripped, not trusted
-        rpk = evt.get("realized_provisional_event_key")
-        if rpk is not None and str(rpk) not in legal_prov_keys:
-            logger.warning(
-                "strip unknown realized_provisional_event_key %r from %s",
-                rpk, evt.get("event_key"),
-            )
-            evt["realized_provisional_event_key"] = None
-        normalized.append(evt)
+    # Early-stop and final commit share this exact normalization path.
+    normalized = _normalize_commit_eligible_events(
+        events,
+        set(provisional_event_keys),
+    )
 
     # Spec: expected_state_changes present but empty extract → cannot finalize
     if expected and not normalized:
@@ -308,6 +319,7 @@ async def extract_candidates(
     legal_rel_set = set(legal_relationship_refs)
     # attribution causes may cite this chapter's provisional events OR the
     # actual event keys produced by this very extraction
+    legal_prov_keys = set(provisional_event_keys)
     legal_cause_set = legal_prov_keys | {
         str(e.get("event_key")) for e in normalized if e.get("event_key")
     }

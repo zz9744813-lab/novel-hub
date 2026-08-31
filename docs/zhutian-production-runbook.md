@@ -35,7 +35,7 @@ ssh-keygen -t ed25519 -a 64 -f "$env:USERPROFILE\.ssh\novelforge_ops" -C "novelf
 
 ```bash
 curl --fail --show-error --location --output /tmp/n raw.githubusercontent.com/zz9744813-lab/novel-hub/<40位主干SHA>/deploy/ops/bootstrap-console.sh
-bash /tmp/n
+OPS_COMMIT=<同一个40位主干SHA> bash /tmp/n
 ```
 
 控制台末尾必须出现 `NOVELFORGE_BOOTSTRAP_OK` 才算成功。该专用脚本内置的只是可公开的 `novelforge-ops` 公钥，不含私钥或密码；它固定下载经审核的三个运维脚本，并从原部署目录迁移 `.env`，可安全重复运行。需要为其他机器安装不同公钥时，也可显式传入 Ed25519 公钥主体作为唯一参数。
@@ -62,23 +62,33 @@ status
 deploy <40位主干提交SHA>
 rollback <已存在的40位主干提交SHA>
 logs <web|api|worker|postgres|redis> <1..500>
-candidate <已准备的40位主干提交SHA>
+candidate <40位主干提交SHA>
 novel <validate|qualify|install|start|status|audit|export|download>
 ```
 
-`candidate` 只读取指定已准备版本的 Compose 状态和最近 200 行 PostgreSQL 日志，且会核对工作树 HEAD 与 SHA 完全一致；它用于首次受管发布尚未建立 `current` 链接时的失败诊断，不提供任意服务名、路径或 shell。
+`candidate` 不是只读状态查询。它会自行拉取并校验指定主干 SHA、建立 release 工作树，在按尝试编号完全隔离的 Compose 项目中构建候选镜像，启动一次性 PostgreSQL/Redis，执行 fresh migration、生产备份恢复迁移、生产包验证和模型资格门，并把通过证据与镜像摘要写入候选 envelope。候选项目使用独立镜像、卷和网络；共享参考目录只读挂载，生产数据库、容器、`current` 链接和 release tag 不会被改动。失败或退出时隔离栈与临时密钥快照会被清理。该命令不提供任意服务名、路径或 shell。
+
+合并原子发布控制器后的第一次启用不能借旧控制器执行 `deploy`。应在提供商 root/noVNC 控制台下载并运行同一主干 SHA 的一次性升级器：
+
+```bash
+curl --fail --show-error --location --output /tmp/u raw.githubusercontent.com/zz9744813-lab/novel-hub/<40位主干SHA>/deploy/ops/upgrade-controller.sh
+bash /tmp/u <同一个40位主干SHA>
+```
+
+升级器只准备工作树、执行 shell 语法检查并事务式替换两个受限控制器；不调用 Compose、不迁移数据库、不运行模型资格门，也不切换 `current`。成功后先执行 `ssh novel-hub status`，确认新状态中出现 `mixed_release`、`provenance_complete` 和 `infra_version` 字段，再进入候选门。
 
 先确认该通道多次可用，再从控制台决定是否关闭 root 远程登录。引导脚本不会替你冒险关闭最后一个入口，也不会修改本机 v2rayN、TUN 或网络栈。
 
 ## 3. 按主干 SHA 发布
 
-PR 合并后取得完整 40 位主干 SHA：
+PR 合并后取得完整 40 位主干 SHA。先运行隔离候选门，只有它成功生成仍在有效期内且与当前 `.env` 哈希一致的 passed envelope 后，才允许部署：
 
 ```powershell
+ssh novel-hub "candidate <merge-commit-sha>"
 ssh novel-hub "deploy <merge-commit-sha>"
 ```
 
-服务器只接受 `origin/main` 上的提交。流程依次执行镜像拉取、独立版本目录、目标机 Compose 配置展开校验、PostgreSQL 就绪检查与迁移前自定义格式逻辑备份、镜像构建、Alembic 升级、配置模型文本握手与版本化资格证据、生产包校验、原子切换、容器启动和 `/health/ready` 验收。模型证据键未变化时资格步骤只写缓存命中审计，模型调用数为 0；只有模型身份、套件或评测器版本变化时才重新评测。首次接管时，若 `/srv/novelforge/current` 是旧目录或旧链接而不是受管的 40 位主干 SHA 链接，切换过程会先将它原子移动到 `/srv/novelforge/legacy/current-<UTC时间>/` 留存，不会覆盖或递归删除。备份保存在 root 专用的 `/srv/novelforge/shared/data/backups/`；Compose 配置无效、模型资格失败或备份失败时都不会切换版本。应用启动失败时 `current` 自动切回上一个版本。数据库不会自动降级或自动恢复备份，因此迁移仍须保持前后版本可兼容，恢复操作必须在提供商控制台人工确认后进行。
+服务器只接受 `origin/main` 上的提交。`candidate` 阶段负责镜像构建、fresh/快照迁移、配置模型文本握手与版本化资格证据、生产包校验；模型证据键未变化时能力与上下文资格复用既有证据，只执行到期的轻量健康探测。`deploy` 阶段严格解析候选 envelope，复核 SHA、时效、当前 `.env` 哈希、两类迁移证据和三个应用镜像摘要；任何不匹配都在生产备份前拒绝。通过后才执行迁移前自定义格式逻辑备份、发布候选镜像摘要、一次性 Alembic 升级、原子切换、容器启动和 `/health/ready` 验收。首次接管时，若 `/srv/novelforge/current` 是旧目录或旧链接而不是受管的 40 位主干 SHA 链接，切换过程会先将它原子移动到 `/srv/novelforge/legacy/current-<UTC时间>/` 留存，不会覆盖或递归删除。备份保存在 root 专用的 `/srv/novelforge/shared/data/backups/`；候选门、摘要复核、备份或迁移失败时都不会切换版本。应用启动失败时 `current` 自动切回上一个版本。数据库不会自动降级或自动恢复备份，因此迁移仍须保持前后版本可兼容，恢复操作必须在提供商控制台人工确认后进行。
 
 资格步骤也可由受限运维账号显式重试：
 

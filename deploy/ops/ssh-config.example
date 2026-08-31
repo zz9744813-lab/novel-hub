@@ -10,6 +10,7 @@ Host novel-hub
     ServerAliveInterval 20
     ServerAliveCountMax 6
     TCPKeepAlive yes
-    ControlMaster auto
-    ControlPersist 10m
-    ControlPath ~/.ssh/cm-%C
+    # Windows OpenSSH clients do not provide a dependable ControlMaster
+    # socket. Each restricted command is short and the remote job owns its
+    # resumability, so keep multiplexing disabled for the documented client.
+    ControlMaster no

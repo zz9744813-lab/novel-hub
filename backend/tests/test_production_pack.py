@@ -6,6 +6,7 @@ import importlib.util
 import inspect
 import json
 from pathlib import Path
+import re
 import uuid
 
 import pytest
@@ -161,9 +162,19 @@ def test_restricted_release_runs_model_evidence_before_switching():
     assert "candidate)" in release
     assert "candidate)" in forced
     assert 'git -C "$release" rev-parse HEAD' in release
-    assert 'logs --no-color --tail 200 postgres' in release
-    assert release.index("if ! wait_postgres") < release.index(
-        "backup=$(backup_database"
+    assert 'release HEAD mismatch: expected $sha, found $actual_sha' in release
+    assert 'git -C "$release" diff --quiet --' in release
+    assert 'git -C "$release" diff --cached --quiet --' in release
+    assert 'compose "$release" logs --no-color --tail "$lines" "$service"' in release
+    assert '^(web|api|worker|postgres|redis)$' in release
+    assert release.index('check_candidate_passed "$sha"') < release.index(
+        'publish_release_artifacts "$sha" "$attempt"'
+    )
+    assert release.index("backup=$(backup_database") < release.index(
+        'compose "$release" run --rm --no-deps api alembic upgrade head'
+    )
+    assert release.index("backup=$(backup_database") < release.index(
+        'switch_to "$release"'
     )
     assert '[ -L "$CURRENT" ]' in release
     assert '[[ $release =~ ^${RELEASES}/[0-9a-f]{40}$ ]]' in release
@@ -192,7 +203,9 @@ def test_production_monitor_is_read_only():
 def test_console_bootstrap_is_pinned_and_never_interprets_the_key_as_shell():
     bootstrap = CONSOLE_BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
 
-    assert "OPS_COMMIT=587b5a8111d8d5f0e3a473210f55e7f6bfd75f4d" in bootstrap
+    assert "readonly OPS_COMMIT=${OPS_COMMIT:?set OPS_COMMIT" in bootstrap
+    assert "[[ $OPS_COMMIT =~ ^[0-9a-f]{40}$ ]]" in bootstrap
+    assert not re.search(r"OPS_COMMIT=[0-9a-f]{40}", bootstrap)
     assert "DEFAULT_KEY_BODY=AAAAC3NzaC1lZDI1NTE5AAAAI" in bootstrap
     assert "KEY_BODY=${1:-$DEFAULT_KEY_BODY}" in bootstrap
     assert "[[ $# -le 1 ]]" in bootstrap

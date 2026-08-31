@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Stub flock: the real flock cannot lock files on Windows test filesystems.
+# The controller only needs mutual exclusion within a single host; tests run
+# scenarios sequentially, so a no-op lock is sufficient.
+exit 0

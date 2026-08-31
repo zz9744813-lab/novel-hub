@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# install(1) stub for behavior tests: mkdir/cp/chmod inside the sandbox; the
+# controller self-install into /usr/local/sbin is recorded, not performed.
+set -u
+DOCKER_CALL_LOG=${DOCKER_CALL_LOG:?}
+mode=0644
+is_dir=0
+paths=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -d) is_dir=1 ;;
+    -m) mode=$2; shift ;;
+    -o|-g) shift ;;
+    -*) ;;
+    *) paths+=("$1") ;;
+  esac
+  shift
+done
+if [ "${#paths[@]}" -eq 0 ]; then
+  echo "stub-install: no destination" >&2
+  exit 64
+fi
+if [ "$is_dir" = "1" ]; then
+  mkdir -p "${paths[@]}"
+  exit 0
+fi
+src=${paths[0]}
+dst=${paths[1]:-}
+case "$dst" in
+  /usr/local/*)
+    printf 'CONTROLLER_INSTALLED src=%s dst=%s
+' "$src" "$dst" >>"$DOCKER_CALL_LOG"
+    exit 0
+    ;;
+esac
+cp -f "$src" "$dst"
+chmod "$mode" "$dst" 2>/dev/null || true
+exit 0

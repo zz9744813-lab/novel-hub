@@ -1,0 +1,234 @@
+#!/usr/bin/env bash
+# Stub `docker` used by the release-controller behavior tests.
+#
+# Emulates just enough of `docker compose` / `docker image inspect` for
+# deploy/ops/tests/run_tests.sh to exercise novelforge-release end to end
+# without a docker daemon. Every invocation is appended to $DOCKER_CALL_LOG:
+#   PROJECT=<prod|candidate-xxxx> ENVFILES=<colon list> CMD=<sub> ARGS=<rest>
+# plus ONEOFF_CMD=... for `run` payloads and CONTROLLER_INSTALLED for the
+# controller self-install.
+set -u
+
+DOCKER_CALL_LOG=${DOCKER_CALL_LOG:?DOCKER_CALL_LOG must be set}
+DOCKER_STUB_DIR=${DOCKER_STUB_DIR:?DOCKER_STUB_DIR must be set}
+DOCKER_IMAGE_STATE=${DOCKER_IMAGE_STATE:?DOCKER_IMAGE_STATE must be set}
+
+lookup_id() { # $1=file $2=reference
+  [ -f "$1" ] || return 1
+  awk -v ref="$2" '$1 == ref { value=$2 } END { if (value != "") print value; else exit 1 }' "$1"
+}
+
+resolve_image_id() { # explicit scenario map is an allow-list; state precedes fallback
+  local ref=$1 id
+  if [ -n "${STUB_IMAGE_IDS:-}" ] && [ -f "$STUB_IMAGE_IDS" ]; then
+    lookup_id "$STUB_IMAGE_IDS" "$ref"
+    return
+  fi
+  if id=$(lookup_id "$DOCKER_IMAGE_STATE" "$ref" 2>/dev/null); then
+    printf '%s\n' "$id"
+    return 0
+  fi
+  printf 'sha256:%s\n' "$(printf '%s' "$ref" | sha256sum | cut -d' ' -f1)"
+}
+
+# docker image inspect [--format FMT] REF -> image id (exit 1 when absent)
+if [ "${1:-}" = "image" ] && [ "${2:-}" = "inspect" ]; then
+  shift 2
+  ref=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --format|-q) shift 2 ;;
+      *) ref=$1; shift ;;
+    esac
+  done
+  resolve_image_id "$ref"
+  exit $?
+fi
+
+# docker tag SOURCE TARGET -> retain SOURCE's exact image id for TARGET.
+if [ "${1:-}" = "tag" ] && [ "$#" -eq 3 ]; then
+  source_ref=$2
+  target_ref=$3
+  source_id=$(resolve_image_id "$source_ref") || exit 1
+  printf '%s %s\n' "$target_ref" "$source_id" >>"$DOCKER_IMAGE_STATE"
+  printf 'IMAGE_TAG SOURCE=%s TARGET=%s ID=%s\n' \
+    "$source_ref" "$target_ref" "$source_id" >>"$DOCKER_CALL_LOG"
+  exit 0
+fi
+
+[ "${1:-}" = "compose" ] || { echo "stub-docker: unsupported: $*" >&2; exit 64; }
+shift
+
+project=prod
+envfiles=""
+subcommand=""
+args=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --env-file)
+      # P0-A: a missing env file makes REAL compose fail before build; the
+      # stub must fail the same way or the tests stay green on broken flows.
+      if [ ! -f "$2" ]; then
+        echo "stub-docker: env file missing: $2" >&2
+        exit 70
+      fi
+      envfiles="$envfiles:$2"
+      shift 2
+      ;;
+    --project-directory) shift 2 ;;
+    -f)
+      case "$(basename "${2:-}")" in
+        docker-compose.candidate.yml) project=candidate ;;
+      esac
+      shift 2
+      ;;
+    -p)
+      project=$2
+      shift 2
+      ;;
+    *)
+      subcommand=$1
+      shift
+      args=("$@")
+      break
+      ;;
+  esac
+done
+
+log_call() {
+  local release_tag="" file value
+  local envfile_list=${envfiles#:}
+  local IFS=':'
+  for file in $envfile_list; do
+    [ -f "$file" ] || continue
+    value=$(sed -n 's/^RELEASE_TAG=//p' "$file" | tail -1)
+    [ -n "$value" ] && release_tag=$value
+  done
+  printf 'PROJECT=%s CMD=%s ARGS=%s ENVFILES=%s RELEASE_TAG=%s\n' \
+    "$project" "$subcommand" "$*" "$envfiles" "$release_tag" >>"$DOCKER_CALL_LOG"
+}
+
+run_oneoff() {
+  # args: [--rm] [--no-deps] [-e K=V] [-v MOUNT] service cmd...
+  local cmd="" service_seen=0
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --rm|--no-deps) shift ;;
+      -e|-v) shift 2 ;;
+      -*)
+        shift
+        ;;
+      *)
+        if [ "$service_seen" = "0" ]; then
+          service_seen=1
+          shift
+          continue
+        fi
+        cmd="$cmd $1"
+        shift
+        ;;
+    esac
+  done
+  printf 'ONEOFF_CMD=%s\n' "$cmd" >>"$DOCKER_CALL_LOG"
+  case "$cmd" in
+    *alembic*)
+      return "${STUB_ALEMBIC_RC:-0}"
+      ;;
+    *pg_restore*|*createdb*)
+      return "${STUB_SNAPSHOT_RESTORE_RC:-0}"
+      ;;
+    *production_pack.py*qualify*)
+      if [ -n "${STUB_ROTATE_ENV_FILE:-}" ] && [ -n "${STUB_ROTATE_ENV_VALUE:-}" ] \
+        && [ ! -f "${STUB_ROTATE_ENV_FILE}.rotated" ]; then
+        sed -i "s/^PRIMARY_API_KEY=.*/PRIMARY_API_KEY=${STUB_ROTATE_ENV_VALUE}/" \
+          "$STUB_ROTATE_ENV_FILE"
+        : >"${STUB_ROTATE_ENV_FILE}.rotated"
+      fi
+      if [ "${STUB_ENV_PROBE:-0}" = "1" ] && [ -n "${STUB_ENV_PROBE_KEY:-}" ]; then
+        # Source the shared .env exactly like compose interpolation would, so
+        # tests can prove which credentials a candidate one-off would see.
+        envfile=${envfiles#:}
+        envfile=${envfile%%:*}
+    # shellcheck disable=SC1090
+        [ -n "$envfile" ] && . "$envfile"
+        key_value=$(eval "printf '%s' \"\${$STUB_ENV_PROBE_KEY:-}\"")
+        printf '{"validation":{"passed":true},"model_evidence":{"passed":true,"observed":{"%s":"%s"}},"passed":true}\n' \
+          "$STUB_ENV_PROBE_KEY" "$key_value"
+        return 0
+      fi
+      [ -n "${STUB_QUALIFY_OUTPUT:-}" ] && cat "$STUB_QUALIFY_OUTPUT"
+      return "${STUB_QUALIFY_RC:-0}"
+      ;;
+    *production_pack.py*validate*)
+      [ -n "${STUB_VALIDATE_OUTPUT:-}" ] && cat "$STUB_VALIDATE_OUTPUT"
+      return "${STUB_VALIDATE_RC:-0}"
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
+case "$subcommand" in
+  config)
+    log_call "${args[*]:-}"
+    exit 0
+    ;;
+  build)
+    log_call "${args[*]:-}"
+    exit "${STUB_BUILD_RC:-0}"
+    ;;
+  up)
+    log_call "${args[*]:-}"
+    if [ "$project" = "prod" ]; then
+      exit "${STUB_PROD_UP_RC:-0}"
+    fi
+    exit "${STUB_UP_RC:-0}"
+    ;;
+  start)
+    log_call "${args[*]:-}"
+    exit "${STUB_START_RC:-0}"
+    ;;
+  down)
+    log_call "${args[*]:-}"
+    exit 0
+    ;;
+  run)
+    log_call "${args[*]:-}"
+    run_oneoff "${args[@]}"
+    exit $?
+    ;;
+  exec)
+    log_call "${args[*]:-}"
+    case "${args[*]}" in
+      *pg_isready*) exit 0 ;;
+      *pg_restore*)
+        cat >/dev/null || true
+        exit "${STUB_SNAPSHOT_RESTORE_RC:-0}"
+        ;;
+      *pg_dump*)
+        if [ -n "${STUB_PG_DUMP_FILE:-}" ] && [ -f "$STUB_PG_DUMP_FILE" ]; then
+          cat "$STUB_PG_DUMP_FILE"
+        else
+          printf 'PGDMP-FAKE-BACKUP-CONTENT\n'
+        fi
+        exit "${STUB_PG_DUMP_RC:-0}"
+        ;;
+      *) exit 0 ;;
+    esac
+    ;;
+  ps)
+    log_call "${args[*]:-}"
+    [ -n "${STUB_PS_OUTPUT:-}" ] && cat "$STUB_PS_OUTPUT"
+    exit 0
+    ;;
+  logs)
+    log_call "${args[*]:-}"
+    exit 0
+    ;;
+  *)
+    log_call "${args[*]:-}"
+    echo "stub-docker: unsupported subcommand: $subcommand" >&2
+    exit 64
+    ;;
+esac

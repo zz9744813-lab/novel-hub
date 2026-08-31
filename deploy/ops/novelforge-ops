@@ -4,6 +4,7 @@ set -eu
 set -f
 
 original=${SSH_ORIGINAL_COMMAND:-status}
+# shellcheck disable=SC2086 # intentional whitespace tokenization; globbing is disabled above
 set -- $original
 
 case "${1:-}" in

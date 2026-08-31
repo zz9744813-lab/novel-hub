@@ -1,0 +1,65 @@
+# Candidate isolation overrides (deploy atomicity, ops rework task A/B).
+#
+# Applied ONLY by the candidate gate in deploy/ops/novelforge-release via
+#   docker compose -p novelforge-candidate-<attempt> \
+#     -f docker-compose.yml -f docker-compose.candidate.yml
+#
+# Isolation contract (acceptance §5/§10):
+# - The candidate runs under its own per-attempt compose project name, so
+#   implicitly named volumes/networks/containers cannot collide with
+#   production or with a previous crashed attempt.
+# - postgres/redis have EXPLICIT shared image tags in the base file; they are
+#   overridden here so a candidate build can never retag the images production
+#   relies on (infra images follow the separate version contract documented in
+#   deploy/ops/README-deploy-atomicity.md).
+# - api/worker volumes are REPLACED (!override): the production data bind
+#   mounts (books/exports/imports) become per-attempt named volumes, and
+#   references stays mounted strictly READ-ONLY. postgres loses the production
+#   backups bind mount entirely.
+# - The explicit production network name (novelforge_internal) is replaced by
+#   a per-attempt network.
+# - web never runs during candidacy; its host port binding is cleared anyway.
+services:
+  api:
+    env_file: !override
+      - ${CANDIDATE_ENV_FILE:?candidate env snapshot is required}
+    volumes: !override
+      - candidate_books:/app/data/books
+      - candidate_exports:/app/data/exports
+      - ../data/references:/data/references:ro
+      - candidate_imports:/app/data/imports
+
+  worker:
+    env_file: !override
+      - ${CANDIDATE_ENV_FILE:?candidate env snapshot is required}
+    volumes: !override
+      - candidate_books:/app/data/books
+      - candidate_exports:/app/data/exports
+      - ../data/references:/data/references:ro
+      - candidate_imports:/app/data/imports
+
+  postgres:
+    image: !override novelforge-candidate-postgres:candidate
+    env_file: !override
+      - ${CANDIDATE_ENV_FILE:?candidate env snapshot is required}
+    volumes: !override
+      - candidate_pg_data:/var/lib/postgresql/data
+
+  redis:
+    image: !override novelforge-candidate-redis:candidate
+
+  web:
+    ports: !override []
+
+networks:
+  internal:
+    # Unique per attempt: CANDIDATE_ATTEMPT is injected through the attempt
+    # env file, so a crashed attempt's network can never be reused.
+    name: novelforge_candidate_${CANDIDATE_ATTEMPT:-unset}
+    driver: bridge
+
+volumes:
+  candidate_books: {}
+  candidate_exports: {}
+  candidate_imports: {}
+  candidate_pg_data: {}

@@ -44,8 +44,8 @@ from app.engine.final_artifact import (
     finalization_key,
     canon_candidates_hash,
     sha256_text,
-    SCENE_JOIN,
 )
+from app.engine.event_evidence import validate_explicit_event_evidence
 from app.engine.memory import _latest_l4_state, compute_source_hash
 from app.engine.narrative_state import normalize_state, set_path
 
@@ -86,28 +86,11 @@ def _validate_event_against_paragraphs(
     evt: dict,
     para_by_key: dict[str, Paragraph],
 ) -> str | None:
-    cert = evt.get("certainty")
-    if cert != "explicit":
-        return "certainty_not_explicit"
-    key = evt.get("evidence_paragraph_key") or (
-        (evt.get("evidence_paragraph_keys") or [None])[0]
+    return validate_explicit_event_evidence(
+        evt,
+        para_by_key,
+        allow_without_paragraphs=True,
     )
-    if key and key in para_by_key:
-        para = para_by_key[key]
-        eh = evt.get("evidence_hash")
-        if eh and eh != para.content_hash:
-            return "evidence_hash_mismatch"
-        return None
-    # If no key, require evidence excerpt substring of some paragraph
-    excerpt = (evt.get("evidence") or evt.get("evidence_excerpt") or "").strip()
-    if excerpt and any(excerpt in (p.content or "") for p in para_by_key.values()):
-        return None
-    if not key:
-        # Soft: allow events without evidence key when no paragraphs indexed
-        if not para_by_key:
-            return None
-        return "evidence_key_missing"
-    return "evidence_key_not_found"
 
 
 MAX_CAUSAL_EDGES_PER_CHAPTER = 200

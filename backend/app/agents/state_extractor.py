@@ -9,12 +9,14 @@ No writable Session. Does not write StoryEvent / L4 / L1.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import uuid
 
 from app.agents.caller import call_agent
 from app.contracts.narrative import ReactionAttribution, ReactionEvidence
+from app.engine.event_evidence import validate_explicit_event_evidence
 
 logger = logging.getLogger("novelforge.state_extractor")
 
@@ -22,6 +24,7 @@ logger = logging.getLogger("novelforge.state_extractor")
 def _normalize_commit_eligible_events(
     events: list | None,
     legal_provisional_event_keys: set[str],
+    paragraphs_by_key: dict[str, dict],
 ) -> list[dict]:
     """Return only events that can actually enter hard canon.
 
@@ -48,6 +51,17 @@ def _normalize_commit_eligible_events(
             item["certainty"] = "unknown"
         if item["certainty"] != "explicit":
             continue
+        evidence_error = validate_explicit_event_evidence(
+            item,
+            paragraphs_by_key,
+        )
+        if evidence_error:
+            logger.warning(
+                "drop ungrounded extracted event %s: %s",
+                item.get("event_key"),
+                evidence_error,
+            )
+            continue
         # v9.1 §9.1: invalid provisional key references are stripped, not trusted
         provisional_key = item.get("realized_provisional_event_key")
         if provisional_key is not None and str(provisional_key) not in legal_provisional_event_keys:
@@ -59,6 +73,73 @@ def _normalize_commit_eligible_events(
             item["realized_provisional_event_key"] = None
         normalized.append(item)
     return normalized
+
+
+def _body_paragraph_index(
+    scenes: list[dict],
+    chapter_content: str,
+) -> dict[str, dict]:
+    """Build the exact paragraph evidence index exposed to the model.
+
+    Pipeline callers supply final-artifact paragraph keys.  The fallback body
+    chunks keep excerpt grounding available for older callers that only pass
+    chapter text; their synthetic keys are not advertised as canonical keys.
+    """
+    paragraphs: dict[str, dict] = {}
+    body_chunks: list[str] = []
+    for scene in scenes or []:
+        if not isinstance(scene, dict):
+            continue
+        scene_paragraphs = scene.get("paragraphs") or []
+        for paragraph in scene_paragraphs:
+            if not isinstance(paragraph, dict):
+                continue
+            key = str(paragraph.get("paragraph_key") or "").strip()
+            content = str(paragraph.get("content") or "")
+            if content.strip():
+                body_chunks.append(content)
+            if not key or not content.strip():
+                continue
+            paragraphs[key] = {
+                "content": content,
+                "content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            }
+        if not scene_paragraphs:
+            scene_content = str(scene.get("content") or "")
+            body_chunks.extend(
+                part for part in scene_content.split("\n\n") if part.strip()
+            )
+
+    if not body_chunks:
+        body_chunks.extend(
+            part for part in (chapter_content or "").split("\n\n") if part.strip()
+        )
+    for index, content in enumerate(body_chunks, start=1):
+        paragraphs.setdefault(
+            f"__body__{index:04d}",
+            {
+                "content": content,
+                "content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            },
+        )
+    return paragraphs
+
+
+def _prompt_paragraph(paragraph: object) -> dict:
+    content = (
+        str(paragraph.get("content") or "")
+        if isinstance(paragraph, dict)
+        else str(paragraph)
+    )
+    return {
+        "paragraph_key": (
+            paragraph.get("paragraph_key")
+            if isinstance(paragraph, dict)
+            else None
+        ),
+        "excerpt": content[:200],
+        "content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+    }
 
 
 async def extract_candidates(
@@ -144,6 +225,8 @@ async def extract_candidates(
                 if isinstance(ev, dict) and ev.get("event_key"):
                     provisional_event_keys.append(str(ev["event_key"]))
 
+    evidence_paragraphs = _body_paragraph_index(scenes, chapter_content)
+
     user_content = json.dumps(
         {
             "chapter_content": (chapter_content or "")[:6000],
@@ -153,10 +236,7 @@ async def extract_candidates(
                     "summary": sc.get("summary"),
                     "content_excerpt": (sc.get("content") or "")[:800],
                     "paragraphs": [
-                        {
-                            "paragraph_key": p.get("paragraph_key") if isinstance(p, dict) else None,
-                            "excerpt": (p.get("content") if isinstance(p, dict) else str(p))[:200],
-                        }
+                        _prompt_paragraph(p)
                         for p in (sc.get("paragraphs") or [])[:20]
                     ],
                 }
@@ -234,7 +314,11 @@ async def extract_candidates(
         # responses get the one repair pass as well.
         has_commit_eligible_event = bool(
             isinstance(candidate, dict)
-            and _normalize_commit_eligible_events(candidate.get("events"), set(provisional_event_keys))
+            and _normalize_commit_eligible_events(
+                candidate.get("events"),
+                set(provisional_event_keys),
+                evidence_paragraphs,
+            )
         )
         if has_commit_eligible_event:
             break
@@ -246,7 +330,11 @@ async def extract_candidates(
             index
             for index, (candidate, _meta) in enumerate(call_results)
             if isinstance(candidate, dict)
-            and _normalize_commit_eligible_events(candidate.get("events"), set(provisional_event_keys))
+            and _normalize_commit_eligible_events(
+                candidate.get("events"),
+                set(provisional_event_keys),
+                evidence_paragraphs,
+            )
         ),
         None,
     )
@@ -298,6 +386,7 @@ async def extract_candidates(
     normalized = _normalize_commit_eligible_events(
         events,
         set(provisional_event_keys),
+        evidence_paragraphs,
     )
 
     # Spec: expected_state_changes present but empty extract → cannot finalize

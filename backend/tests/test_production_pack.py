@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import hashlib
 import importlib.util
 import inspect
@@ -165,6 +166,9 @@ def test_restricted_release_runs_model_evidence_before_switching():
     assert 'release HEAD mismatch: expected $sha, found $actual_sha' in release
     assert 'git -C "$release" diff --quiet --' in release
     assert 'git -C "$release" diff --cached --quiet --' in release
+    assert "--ignored=matching" in release
+    assert 'verify_release_checkout "$release" "$sha"' in release
+    assert 'verify_release_links "$release"' in release
     assert 'compose "$release" logs --no-color --tail "$lines" "$service"' in release
     assert '^(web|api|worker|postgres|redis)$' in release
     assert release.index('check_candidate_passed "$sha"') < release.index(
@@ -237,6 +241,7 @@ async def test_production_qualification_reuses_current_evidence_without_calls():
         id=uuid.uuid4(),
         model_catalog_id=catalog.id,
         health_status="healthy",
+        last_probe_at=datetime.now(timezone.utc),
     )
 
     class Rows:

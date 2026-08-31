@@ -6,7 +6,7 @@
 # the controller relies on symlinks and flock).
 #
 # Output contract: the final line is exactly
-#   SCENARIOS=18 PASSED=<n> FAILED=<n>
+#   SCENARIOS=19 PASSED=<n> FAILED=<n>
 # where every scenario maps to the rework task §10.2 items.
 set -Eeuo pipefail
 
@@ -859,6 +859,40 @@ s18_reused_release_integrity_is_fail_closed() {
     "tracked modification is explicit"
   assert_eq "$(wc -l <"$SANDBOX/all-calls.log" | tr -d ' ')" "0" \
     "tracked modification causes zero Compose calls"
+
+  # Untracked/ignored residue can also alter a Docker build context and must
+  # be rejected even though ordinary git diff remains clean.
+  git -C "$release" reset --hard "$SHA1" >/dev/null
+  printf 'untracked build-context tamper\n' >"$release/deploy/untracked-tamper"
+  run_controller candidate "$SHA1" >/dev/null 2>&1
+  assert_eq "$OUT_RC" "73" "untracked release residue is rejected"
+  assert_contains "$(last_output)" "untracked or ignored files" \
+    "untracked residue is explicit"
+  assert_eq "$(wc -l <"$SANDBOX/all-calls.log" | tr -d ' ')" "0" \
+    "untracked residue causes zero Compose calls"
+}
+
+s19_rollback_release_integrity_is_fail_closed() {
+  new_sandbox
+  seed_deployed "$SHA1"
+  local release="$ROOT/releases/$SHA1"
+
+  git -C "$release" reset --hard "$SHA2" >/dev/null
+  run_controller rollback "$SHA1" >/dev/null 2>&1
+  assert_eq "$OUT_RC" "73" "rollback rejects mismatched release HEAD"
+  assert_contains "$(last_output)" "release HEAD mismatch" \
+    "rollback HEAD mismatch is explicit"
+  assert_eq "$(wc -l <"$SANDBOX/all-calls.log" | tr -d ' ')" "0" \
+    "rollback mismatch causes zero Compose calls"
+
+  git -C "$release" reset --hard "$SHA1" >/dev/null
+  printf 'rollback tamper\n' >"$release/deploy/untracked-tamper"
+  run_controller rollback "$SHA1" >/dev/null 2>&1
+  assert_eq "$OUT_RC" "73" "rollback rejects untracked release residue"
+  assert_contains "$(last_output)" "untracked or ignored files" \
+    "rollback residue is explicit"
+  assert_eq "$(wc -l <"$SANDBOX/all-calls.log" | tr -d ' ')" "0" \
+    "rollback residue causes zero Compose calls"
 }
 
 # ── precise scenario accounting (§10.2-14) ─────────────────────────────────
@@ -898,10 +932,10 @@ scenario() { # $1=name $2=fn
 
   if [ "$rc" -eq 0 ] && [ "$failures" = "0" ] && [ -z "$dirty" ]; then
     PASSED=$((PASSED + 1))
-    say "PASS [$SCENARIOS/18] $CURRENT_TEST"
+    say "PASS [$SCENARIOS/19] $CURRENT_TEST"
   else
     FAILED=$((FAILED + 1))
-    say "FAIL [$SCENARIOS/18] $CURRENT_TEST (rc=$rc assertions=$failures dirty_stderr=$dirty)"
+    say "FAIL [$SCENARIOS/19] $CURRENT_TEST (rc=$rc assertions=$failures dirty_stderr=$dirty)"
     sed -n '1,10p' "$TEST_HARNESS/assert-failures" 2>/dev/null
     { grep -iE "$STDERR_ERROR_RE" "$TEST_HARNESS/scenario.err" 2>/dev/null || true; } \
       | sed -n '1,4p'
@@ -935,6 +969,7 @@ scenario "migration failure leaves current and services unchanged" s12_migration
 scenario "health failure rolls back and reports structurally" s13_health_failure_rollback
 scenario "status provenance variants incl. infra version and missing services" s14_status_provenance_variants
 scenario "reused release HEAD and tracked bytes are fail-closed" s18_reused_release_integrity_is_fail_closed
+scenario "rollback rejects mismatched or dirty release bytes" s19_rollback_release_integrity_is_fail_closed
 
 # P0-D guard: the test run must never modify the host's /usr/local/sbin.
 if [ "$(id -u)" = "0" ]; then

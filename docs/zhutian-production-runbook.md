@@ -34,7 +34,7 @@ ssh-keygen -t ed25519 -a 64 -f "$env:USERPROFILE\.ssh\novelforge_ops" -C "novelf
 若提供商的 noVNC 会破坏多行粘贴，使用已经合并到主干的完整 SHA，分别执行下面两行。下载命令刻意不写协议头，全部字符均不需要 Shift，避免 noVNC 粘贴 `&&`、管道或大写字符后卡住修饰键：
 
 ```bash
-curl --fail --show-error --location --output /tmp/n raw.githubusercontent.com/zz9744813-lab/novel-hub/<40位主干SHA>/deploy/ops/bootstrap-console.sh
+curl --proto '=https' --tlsv1.2 --fail --show-error --location --connect-timeout 15 --max-time 120 --retry 3 --retry-all-errors --output /tmp/n 'https://raw.githubusercontent.com/zz9744813-lab/novel-hub/<40位主干SHA>/deploy/ops/bootstrap-console.sh'
 OPS_COMMIT=<同一个40位主干SHA> bash /tmp/n
 ```
 
@@ -71,7 +71,7 @@ novel <validate|qualify|install|start|status|audit|export|download>
 合并原子发布控制器后的第一次启用不能借旧控制器执行 `deploy`。应在提供商 root/noVNC 控制台下载并运行同一主干 SHA 的一次性升级器：
 
 ```bash
-curl --fail --show-error --location --output /tmp/u raw.githubusercontent.com/zz9744813-lab/novel-hub/<40位主干SHA>/deploy/ops/upgrade-controller.sh
+curl --proto '=https' --tlsv1.2 --fail --show-error --location --connect-timeout 15 --max-time 120 --retry 3 --retry-all-errors --output /tmp/u 'https://raw.githubusercontent.com/zz9744813-lab/novel-hub/<40位主干SHA>/deploy/ops/upgrade-controller.sh'
 bash /tmp/u <同一个40位主干SHA>
 ```
 

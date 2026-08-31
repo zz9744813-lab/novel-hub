@@ -133,6 +133,10 @@ async def extract_candidates(
             "instruction": (
                 "Return ONLY JSON object: {\"events\":[],\"conflicts\":[],"
                 "\"reaction_evidence\":[],\"attributions\":[]}. "
+                "When outline_node.expected_state_changes is non-empty, inspect "
+                "the正文 and emit at least one evidence-backed event for every "
+                "change that is explicitly realized; never treat the outline "
+                "alone as evidence and never invent an event. "
                 "Each event: event_key, entity_type, entity_id, field, old_value, "
                 "new_value, certainty (must be explicit for commit), scene_no, "
                 "evidence_paragraph_key, evidence_hash, evidence, "
@@ -150,23 +154,86 @@ async def extract_candidates(
         ensure_ascii=False,
     )
 
-    try:
-        run, result, meta = await call_agent(
-            book_id=book_id,
-            agent_role="state_extractor",
-            user_content=user_content,
-            chapter_id=chapter_id,
+    # A valid empty JSON object is not proof that the chapter has no state
+    # changes: structured gateways occasionally return an empty candidate list
+    # after spending the response budget on reasoning, or omit explicit
+    # certainty on the first pass.  Give expected-change chapters one bounded
+    # repair request.  The retry still has to cite observable正文 evidence;
+    # it never promotes outline plans into canon.
+    call_results: list[tuple[object | None, dict]] = []
+    max_calls = 2 if expected else 1
+    retry_instruction = (
+        "\n\n[EMPTY_EXTRACT_RETRY]\n"
+        "上一轮没有提交任何可入正史的 explicit event。请重新逐段核对正文："
+        "对每一项 expected_state_changes，只在正文明确发生或确认且能给出"
+        "evidence_paragraph_key/evidence_hash/evidence 时输出至少一个事件；"
+        "certainty 必须为 explicit。若正文确实没有可观察证据，仍返回空数组，"
+        "不得根据大纲或推测补写事实。只能返回原 JSON 对象。"
+    )
+    for call_no in range(max_calls):
+        prompt = user_content if call_no == 0 else user_content + retry_instruction
+        try:
+            _run, candidate, candidate_meta = await call_agent(
+                book_id=book_id,
+                agent_role="state_extractor",
+                user_content=prompt,
+                chapter_id=chapter_id,
+            )
+            candidate_meta = dict(candidate_meta or {})
+        except Exception as e:
+            logger.error("StateExtractor call exception (attempt %s): %s", call_no + 1, e)
+            candidate = None
+            candidate_meta = {"error": f"extractor_exception:{e}"}
+
+        call_results.append((candidate, candidate_meta))
+
+        # Stop early only when the model supplied at least one event explicitly
+        # marked for canon. Malformed/subjective/inferred-only responses get
+        # the one repair pass as well.
+        has_explicit = bool(
+            isinstance(candidate, dict)
+            and any(
+                isinstance(event, dict) and event.get("certainty") == "explicit"
+                for event in (candidate.get("events") or [])
+            )
         )
-    except Exception as e:
-        logger.error("StateExtractor call exception: %s", e)
-        # Fail closed if outline expects changes or content is large
-        if expected or (chapter_content and len(chapter_content) >= 800):
-            return False, [], [f"extractor_exception:{e}"], extras
-        return True, [], [], extras
+        if has_explicit:
+            break
+
+    # Prefer the first response that contains an explicit candidate; otherwise
+    # keep the final response so its gateway metadata remains diagnostic.
+    selected_index = next(
+        (
+            index
+            for index, (candidate, _meta) in enumerate(call_results)
+            if isinstance(candidate, dict)
+            and any(
+                isinstance(event, dict) and event.get("certainty") == "explicit"
+                for event in (candidate.get("events") or [])
+            )
+        ),
+        None,
+    )
+    if selected_index is None:
+        # Preserve a valid-but-empty payload over a later transport failure so
+        # the final diagnostic remains about extraction, not just the retry.
+        selected_index = next(
+            (
+                index
+                for index in range(len(call_results) - 1, -1, -1)
+                if call_results[index][0] is not None
+            ),
+            len(call_results) - 1,
+        )
+    result, meta = call_results[selected_index]
+    meta = {
+        **(meta or {}),
+        "empty_extract_retry_attempts": len(call_results),
+    }
 
     if not result:
-        # B-07: no soft-pass into finalize when we expected extractable content
-        if expected:
+        # Fail closed if outline expects changes or content is large
+        if expected or (chapter_content and len(chapter_content) >= 800):
             logger.error("StateExtractor empty but expected_state_changes present: %s", meta)
             return False, [], [
                 str((meta or {}).get("block_reason") or (meta or {}).get("error") or "extraction empty")

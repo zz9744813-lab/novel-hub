@@ -46,8 +46,6 @@ def classify_health(
     last_production_error: str | None = None,
 ) -> str:
     """Spec §24 classification."""
-    if not has_valid_probe and prod_15m is None:
-        return "unknown"
     # A successful L1 ping only proves that the endpoint answered a tiny
     # request.  It must not erase a hard production-route failure such as an
     # expired credential or an unavailable model.  The hard error is cleared
@@ -55,6 +53,8 @@ def classify_health(
     # newest production failure, if any).
     if last_error in AUTH_ERROR_CODES | NOT_FOUND_CODES or last_production_error in AUTH_ERROR_CODES | NOT_FOUND_CODES:
         return "unavailable"
+    if not has_valid_probe and prod_15m is None:
+        return "unknown"
     if consecutive_failures >= 3:
         return "unavailable"
     if prod_15m is not None:

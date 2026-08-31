@@ -614,7 +614,7 @@ async def ensure_configured_model_evidence(pack: ProductionPack) -> dict:
                     source_id
                     for source_id in (
                         (evaluation or {}).get("ability", {}).get("source_run_id"),
-                        (evaluation or {}).get("context", {}).get("source_run_id"),
+                        ((evaluation or {}).get("context") or {}).get("source_run_id"),
                     )
                     if source_id
                 ],

@@ -144,6 +144,7 @@ def test_configured_model_absent_from_models_gets_exact_handshake(monkeypatch):
         return report
 
     asyncio.run(run("ok"))
+    asyncio.run(run("failed"))
 
 
 def test_release_gate_blocks_unproven_fallback_route(monkeypatch):

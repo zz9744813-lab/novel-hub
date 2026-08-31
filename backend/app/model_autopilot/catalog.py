@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.model_autopilot.seed import seed_for_model, static_quality_score_for
-from app.models import ModelCapabilityProfile, ModelCatalog
+from app.models import AgentModelBinding, ModelCapabilityProfile, ModelCatalog
 
 logger = logging.getLogger("novelforge.model_autopilot.catalog")
 
@@ -106,6 +106,23 @@ async def sync_catalog_from_provider(
     )
     by_model = {c.model_id: c for c in catalog_rows}
 
+    # A provider's /models response is a discovery hint, not an authoritative
+    # allow-list.  New-API-compatible gateways often omit manually configured
+    # aliases even though the exact model id is callable.  Keep those binding
+    # targets eligible for the explicit configured handshake; otherwise a
+    # transient/partial catalog response would silently turn a working route
+    # into ``missing`` before it can be probed.
+    configured_models = {
+        model
+        for binding in (
+            await db.execute(
+                select(AgentModelBinding).where(AgentModelBinding.provider == provider)
+            )
+        ).scalars().all()
+        for model in (binding.primary_model, binding.fallback_model)
+        if model
+    }
+
     from app.model_autopilot.classification import classify_catalog_model
 
     for item in items:
@@ -164,6 +181,8 @@ async def sync_catalog_from_provider(
 
     for catalog in catalog_rows:
         if catalog.model_id in seen_ids:
+            continue
+        if catalog.model_id in configured_models:
             continue
         if catalog.availability_status in ("missing", "disabled"):
             continue

@@ -153,24 +153,35 @@ async def bootstrap_catalog_and_probes() -> dict:
                 await db.execute(
                     select(ModelCatalog).where(
                         ModelCatalog.enabled.is_(True),
-                        ModelCatalog.availability_status == "available",
                     )
                 )
             ).scalars().all()
         )
         by_key = {(catalog.provider, catalog.model_id): catalog for catalog in catalogs}
-        configured_catalogs = [
-            by_key[key] for key in sorted(configured_keys) if key in by_key
-        ]
-        for provider, model in sorted(configured_keys - set(by_key)):
-            report["errors"].append(
-                {
-                    "provider": provider,
-                    "model": model,
-                    "phase": "configured_catalog",
-                    "error": "configured_model_not_discovered",
-                }
-            )
+        configured_catalogs = []
+        for provider, model in sorted(configured_keys):
+            catalog = by_key.get((provider, model))
+            if catalog is None:
+                # The configured route is an explicit operator decision.  A
+                # provider /models listing may omit aliases, so materialize a
+                # neutral catalog row and let the exact L1 handshake decide
+                # whether it is callable.  No name-based capability or route
+                # eligibility is inferred here.
+                catalog = ModelCatalog(
+                    id=uuid.uuid4(),
+                    provider=provider,
+                    model_id=model,
+                    enabled=True,
+                    auto_route_enabled=False,
+                    availability_status="available",
+                    discovery_source="configured_binding",
+                    model_kind="unknown",
+                    text_generation_eligible=False,
+                )
+                db.add(catalog)
+                await db.flush()
+                by_key[(provider, model)] = catalog
+            configured_catalogs.append(catalog)
 
         configured_ids = {catalog.id for catalog in configured_catalogs}
         other_candidates = sorted(
@@ -204,7 +215,9 @@ async def bootstrap_catalog_and_probes() -> dict:
             if last_probe is not None and last_probe.tzinfo is None:
                 last_probe = last_probe.replace(tzinfo=timezone.utc)
             needs_handshake = configured and (
-                not catalog.text_generation_eligible or not catalog.auto_route_enabled
+                catalog.availability_status != "available"
+                or not catalog.text_generation_eligible
+                or not catalog.auto_route_enabled
             )
             if (
                 not needs_handshake
@@ -221,12 +234,16 @@ async def bootstrap_catalog_and_probes() -> dict:
                 )
                 db.add(probe)
                 if configured and probe.status == "ok" and probe.output_valid:
+                    catalog.availability_status = "available"
                     if not catalog.text_generation_eligible:
                         promote_configured_text_model(catalog)
                         report["promoted_text"] += 1
                     else:
                         catalog.auto_route_enabled = True
                     await ensure_capability_for_catalog(db, catalog)
+                elif configured:
+                    catalog.auto_route_enabled = False
+                    catalog.availability_status = "missing"
                 await db.flush()
                 await upsert_health_snapshot(db, catalog.id)
                 await db.commit()

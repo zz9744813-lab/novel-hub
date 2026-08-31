@@ -43,11 +43,17 @@ def classify_health(
     last_probe_status: str | None,
     last_error: str | None,
     has_valid_probe: bool,
+    last_production_error: str | None = None,
 ) -> str:
     """Spec §24 classification."""
     if not has_valid_probe and prod_15m is None:
         return "unknown"
-    if last_error in AUTH_ERROR_CODES | NOT_FOUND_CODES:
+    # A successful L1 ping only proves that the endpoint answered a tiny
+    # request.  It must not erase a hard production-route failure such as an
+    # expired credential or an unavailable model.  The hard error is cleared
+    # only when a later production attempt succeeds (the caller supplies the
+    # newest production failure, if any).
+    if last_error in AUTH_ERROR_CODES | NOT_FOUND_CODES or last_production_error in AUTH_ERROR_CODES | NOT_FOUND_CODES:
         return "unavailable"
     if consecutive_failures >= 3:
         return "unavailable"
@@ -130,6 +136,11 @@ async def upsert_health_snapshot(db: AsyncSession, catalog_id: uuid.UUID) -> Mod
 
     last_probe_status = l1_ok[0].status if l1_ok else None
     last_error = l1_ok[0].error_code if l1_ok and l1_ok[0].status != "ok" else None
+    last_production_error = (
+        prod_rows[0].error_code
+        if prod_rows and prod_rows[0].status != "ok"
+        else None
+    )
 
     snap.health_status = classify_health(
         probe_ok_recent=recent_probe_ok,
@@ -138,6 +149,7 @@ async def upsert_health_snapshot(db: AsyncSession, catalog_id: uuid.UUID) -> Mod
         last_probe_status=last_probe_status,
         last_error=last_error,
         has_valid_probe=bool(l1_ok),
+        last_production_error=last_production_error,
     )
 
     # health_score: production 70% + probe 30% (spec §52)

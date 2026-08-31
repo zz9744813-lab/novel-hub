@@ -31,7 +31,7 @@ py -3.11 -m pytest backend/tests/test_production_pack.py -q
 ssh-keygen -t ed25519 -a 64 -f "$env:USERPROFILE\.ssh\novelforge_ops" -C "novelforge-ops"
 ```
 
-若提供商的 noVNC 会破坏多行粘贴，使用已经合并到主干的完整 SHA，分别执行下面两行。下载命令刻意不写协议头，全部字符均不需要 Shift，避免 noVNC 粘贴 `&&`、管道或大写字符后卡住修饰键：
+若提供商的 noVNC 会破坏多行粘贴，使用已经合并到主干的完整 SHA，分别执行下面两行。下载命令显式限制为 HTTPS/TLS 1.2 以上；不要把两行拼成含 `&&` 或管道的长命令，避免 noVNC 在粘贴过程中卡住修饰键：
 
 ```bash
 curl --proto '=https' --tlsv1.2 --fail --show-error --location --connect-timeout 15 --max-time 120 --retry 3 --retry-all-errors --output /tmp/n 'https://raw.githubusercontent.com/zz9744813-lab/novel-hub/<40位主干SHA>/deploy/ops/bootstrap-console.sh'

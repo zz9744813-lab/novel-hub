@@ -60,6 +60,14 @@ jobs:
         working-directory: backend
         env:
           DATABASE_URL: "postgresql+asyncpg://novelforge:novelforge_test@127.0.0.1:5432/novelforge_test"
+          # Runtime Settings builds its SQLAlchemy URL from the POSTGRES_*
+          # components.  DATABASE_URL above is retained for Alembic parity;
+          # these values make the pytest process target the same CI service.
+          POSTGRES_HOST: "127.0.0.1"
+          POSTGRES_PORT: "5432"
+          POSTGRES_DB: "novelforge_test"
+          POSTGRES_USER: "novelforge"
+          POSTGRES_PASSWORD: "novelforge_test"
           PRIMARY_BASE_URL: "http://example.invalid/v1"
           PRIMARY_API_KEY: "ci-placeholder-key"
           APP_ENV: test

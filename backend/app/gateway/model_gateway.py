@@ -136,6 +136,20 @@ def _request_model(model: str, *, reasoning_mode: str | None) -> str:
     return requested
 
 
+def _runtime_reasoning_mode(model: str) -> str | None:
+    """Use the stable GLM mode certified by the release qualification.
+
+    GLM-5.2 defaults to thinking upstream. Production calls currently do not
+    persist reasoning controls in route plans or frozen chapter snapshots, so
+    explicitly use the same no-thinking request shape as the ability gate.
+    """
+
+    normalized = str(model or "").casefold().strip()
+    if normalized == "glm-5.2" or normalized.endswith("/glm-5.2"):
+        return "disabled"
+    return None
+
+
 def _get_provider_config(role: str = "primary", provider: str | None = None) -> dict:
     """Read provider config from environment per §2.7.
 
@@ -415,6 +429,7 @@ async def stream_with_retry(
             provider_role=provider_role,
             provider=use_provider,
             response_format=response_format,
+            reasoning_mode=_runtime_reasoning_mode(use_model),
         )
         completed = datetime.now(timezone.utc)
         success = bool(result.final_content and not result.error)

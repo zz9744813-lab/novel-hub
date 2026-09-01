@@ -32,11 +32,11 @@ class Settings(BaseSettings):
     fallback_base_url: str = ""
     fallback_api_key: str = ""
 
-    planner_model: str = "deepseek-v4-flash"
-    writer_model: str = "stepfun-ai/step-3.7-flash"
-    review_model: str = "deepseek-v4-flash"
-    query_model: str = "deepseek-v4-flash"
-    ranker_model: str = "deepseek-v4-flash"
+    planner_model: str = "glm-5.2"
+    writer_model: str = "glm-5.2"
+    review_model: str = "glm-5.2"
+    query_model: str = "glm-5.2"
+    ranker_model: str = "glm-5.2"
 
     global_llm_concurrency: int = 1
     arq_max_jobs: int = 1

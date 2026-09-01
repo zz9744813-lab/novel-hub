@@ -103,7 +103,7 @@ async def _resolve_judge_model(book_id: uuid.UUID | None) -> tuple[str, str, str
             if b:
                 return b.provider, b.primary_model, b.fallback_model
     # Absolute last resort — still explicit, logged by caller
-    return "openrouter", "deepseek-v4-flash", None
+    return "new-api", "glm-5.2", None
 
 
 async def run_aileak_judge(

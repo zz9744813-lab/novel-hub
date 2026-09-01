@@ -13,9 +13,7 @@ from app.model_autopilot.health import upsert_health_snapshot
 from app.model_autopilot.probe import probe_model_ping
 from app.models import (
     ModelCatalog,
-    ModelHealthProbe,
     ModelHealthSnapshot,
-    ModelRoutePlan,
     WritingSession,
 )
 
@@ -91,13 +89,15 @@ async def _route_plan_models_with_kind(db, session: WritingSession) -> list[tupl
     ).scalar_one_or_none()
     if plan is None:
         return []
+    from app.model_autopilot.retired_models import is_retired_production_model
+
     out = []
     for assignment in (plan.assignments_json or {}).values():
         primary = assignment.get("primary") or {}
-        if primary.get("model"):
+        if primary.get("model") and not is_retired_production_model(primary.get("model")):
             out.append((primary.get("provider") or "", primary["model"], "primary"))
         for fb in assignment.get("fallbacks") or []:
-            if fb.get("model"):
+            if fb.get("model") and not is_retired_production_model(fb.get("model")):
                 out.append((fb.get("provider") or "", fb["model"], "fallback"))
     return out
 

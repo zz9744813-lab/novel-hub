@@ -17,7 +17,7 @@ from app.gateway.model_gateway import stream_with_retry
 logger = logging.getLogger("novelforge.import_llm")
 
 # Reuse production model binding for outline_parser when import roles unbound
-DEFAULT_IMPORT_MODEL = "deepseek-v4-flash"
+DEFAULT_IMPORT_MODEL = "glm-5.2"
 DEFAULT_IMPORT_PROVIDER = "new-api"
 
 # process-local throttle to reduce 429 storms across sequential import agents

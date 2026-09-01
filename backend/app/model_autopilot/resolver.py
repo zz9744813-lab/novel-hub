@@ -22,6 +22,11 @@ from app.models import (
     WritingSession,
 )
 from app.v74_utils import ModelBindingService
+from app.model_autopilot.retired_models import (
+    PRODUCTION_MODEL_PROVIDER,
+    is_retired_production_model,
+    normalize_production_model,
+)
 
 logger = logging.getLogger("novelforge.model_autopilot.resolver")
 
@@ -51,11 +56,19 @@ async def resolve_route(
         if run is not None and run.model_binding_snapshot:
             role_snap = (run.model_binding_snapshot.get("roles") or {}).get(agent_role)
             primary = (role_snap or {}).get("primary")
-            if primary and primary.get("model"):
+            if (
+                primary
+                and primary.get("model")
+                and not is_retired_production_model(primary.get("model"))
+            ):
                 return RouteResolution(
                     provider=primary.get("provider", ""),
                     model=primary["model"],
-                    fallbacks=list((role_snap or {}).get("fallbacks") or []),
+                    fallbacks=[
+                        item
+                        for item in list((role_snap or {}).get("fallbacks") or [])
+                        if not is_retired_production_model(item.get("model"))
+                    ],
                     routing_mode=run.model_binding_snapshot.get("routing_mode", "hybrid"),
                     route_plan_id=run.model_binding_snapshot.get("route_plan_id"),
                     frozen_snapshot=True,
@@ -63,7 +76,7 @@ async def resolve_route(
             # legacy single-model snapshot
             provider = run.model_binding_snapshot.get("provider")
             model = run.model_binding_snapshot.get("model")
-            if provider and model:
+            if provider and model and not is_retired_production_model(model):
                 return RouteResolution(provider=provider, model=model, frozen_snapshot=True)
 
     # 2. active session route plan
@@ -90,11 +103,19 @@ async def resolve_route(
         if plan is not None and plan.status == "active":
             assignment = (plan.assignments_json or {}).get(agent_role)
             primary = (assignment or {}).get("primary")
-            if primary and primary.get("model"):
+            if (
+                primary
+                and primary.get("model")
+                and not is_retired_production_model(primary.get("model"))
+            ):
                 return RouteResolution(
                     provider=primary.get("provider", ""),
                     model=primary["model"],
-                    fallbacks=list((assignment or {}).get("fallbacks") or []),
+                    fallbacks=[
+                        item
+                        for item in list((assignment or {}).get("fallbacks") or [])
+                        if not is_retired_production_model(item.get("model"))
+                    ],
                     routing_mode="hybrid",
                     route_plan_id=str(plan.id),
                 )
@@ -103,10 +124,21 @@ async def resolve_route(
     svc = ModelBindingService(db)
     binding = await svc.get_binding(agent_role, book_id)
     if binding is not None:
+        model = normalize_production_model(binding.primary_model)
+        provider = (
+            PRODUCTION_MODEL_PROVIDER
+            if model != binding.primary_model
+            else binding.provider
+        )
         return RouteResolution(
-            provider=binding.provider,
-            model=binding.primary_model,
-            fallbacks=([{"model": binding.fallback_model, "provider": binding.provider}] if binding.fallback_model else []),
+            provider=provider,
+            model=model or binding.primary_model,
+            fallbacks=(
+                [{"model": binding.fallback_model, "provider": binding.provider}]
+                if binding.fallback_model
+                and not is_retired_production_model(binding.fallback_model)
+                else []
+            ),
             routing_mode=getattr(binding, "routing_mode", "manual") or "manual",
             route_plan_id=str(binding.routing_policy_id) if binding.routing_policy_id else None,
         )

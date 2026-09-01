@@ -9,14 +9,12 @@ import uuid
 import hashlib
 import logging
 from datetime import datetime, timezone
-from typing import Any
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.dialects.postgresql import insert
 
-from app.models.tables import AgentModelBinding, ModelChangeLog, ModelRouteEvent, AgentContextPackage, AgentRun
-from app.prompts import PROMPTS, AGENT_MODELS
+from app.models.tables import AgentModelBinding, ModelChangeLog, ModelRouteEvent, AgentContextPackage
+from app.prompts import AGENT_MODELS
 
 logger = logging.getLogger("novelforge.v74")
 
@@ -285,7 +283,7 @@ def layer0_check(final_content: str, reasoning: str | None) -> tuple[bool, str]:
     # Check for tool/usage leakage
     for pattern in [r'"tool_calls"', r'"function"\s*:', r'"usage"\s*:\s*\{']:
         if re.search(pattern, final_content):
-            return True, f"PROTOCOL_OR_STRUCTURE_LEAK: tool/usage in final"
+            return True, "PROTOCOL_OR_STRUCTURE_LEAK: tool/usage in final"
     
     return False, ""
 
@@ -335,8 +333,6 @@ async def call_aileak_judge(
     C-24: Does NOT read reasoning or raw response.
     Only reads target + context + role + prefilter hits.
     """
-    from app.prompts import PROMPTS
-    
     system_prompt = """你是 AI 元评论泄漏判定 Agent。
 
 任务：判断目标段落中的可疑表达，是小说叙事、角色对白、作者式旁白，
@@ -368,7 +364,7 @@ Agent Role: {agent_role}
     result = await model_gateway.stream_with_retry(
         system_prompt=system_prompt,
         user_content=user_content,
-        model="deepseek-v4-flash",  # Fixed model for judge
+        model=AGENT_MODELS["review_agent"],
         temperature=0.0,
         response_format={"type": "json_object"},
     )

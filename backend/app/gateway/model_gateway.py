@@ -111,13 +111,13 @@ def _generation_controls(
 
 
 def _request_model(model: str, *, reasoning_mode: str | None) -> str:
-    """Apply New API's DeepSeek V4 thinking suffix without changing bindings.
+    """Return New API's DeepSeek V4 thinking alias without changing bindings.
 
     New API interprets ``-none``/``-max`` during request conversion and strips
     the suffix before forwarding the canonical upstream model.  The suffix is
     needed because some configured channels ignore a client-supplied
-    ``thinking`` field.  Normal writing calls leave ``reasoning_mode`` unset,
-    so their configured model id and reasoning behavior remain unchanged.
+    ``thinking`` field.  Callers must opt into the returned alias explicitly;
+    routine health probes and normal writing retain the configured base model.
     """
 
     requested = str(model or "").strip()
@@ -202,7 +202,7 @@ async def stream_completion_and_collect(
         "Content-Type": "application/json",
     }
     payload = {
-        "model": _request_model(model, reasoning_mode=reasoning_mode),
+        "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},

@@ -59,6 +59,9 @@ FORCED_COMMAND_SCRIPT = REPOSITORY_ROOT / "deploy" / "ops" / "novelforge-ops"
 CONSOLE_BOOTSTRAP_SCRIPT = (
     REPOSITORY_ROOT / "deploy" / "ops" / "bootstrap-console.sh"
 )
+MANAGEMENT_SSH_SCRIPT = (
+    REPOSITORY_ROOT / "deploy" / "ops" / "enable-management-ssh.sh"
+)
 
 
 def _pack():
@@ -216,8 +219,24 @@ def test_console_bootstrap_is_pinned_and_never_interprets_the_key_as_shell():
     assert "printf 'ssh-ed25519 %s" in bootstrap
     assert "/root/novelforge/deploy/.env /root/novelforge/.env" in bootstrap
     assert "NOVELFORGE_BOOTSTRAP_OK" in bootstrap
+    assert "enable-management-ssh.sh" in bootstrap
+    assert 'bash "$BOOTSTRAP_DIR/enable-management-ssh.sh" 22022' in bootstrap
     assert "eval " not in bootstrap
     assert "bash -c" not in bootstrap
+
+
+def test_management_ssh_is_isolated_and_forced_command_only():
+    script = MANAGEMENT_SSH_SCRIPT.read_text(encoding="utf-8")
+
+    assert "novelforge-sshd-alt.service" in script
+    assert "AllowUsers=novelops" in script
+    assert "PermitRootLogin=no" in script
+    assert "PasswordAuthentication=no" in script
+    assert "KbdInteractiveAuthentication=no" in script
+    assert "AllowTcpForwarding=no" in script
+    assert "primary_ssh_unchanged" in script
+    assert "/etc/ssh/sshd_config" not in script
+    assert "systemctl restart ssh" not in script
 
 
 @pytest.mark.asyncio

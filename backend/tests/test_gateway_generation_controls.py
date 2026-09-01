@@ -8,6 +8,15 @@ def test_deepseek_max_tokens_raised_for_reasoning_headroom():
         "deepseek-v4-flash", max_tokens=16384, reasoning_mode=None
     )
     assert controls["max_tokens"] >= 65536
+    assert "thinking" not in controls
+
+
+def test_deepseek_benchmark_can_disable_reasoning():
+    controls = _generation_controls(
+        "deepseek-v4-flash", max_tokens=16384, reasoning_mode="disabled"
+    )
+    assert controls["thinking"] == {"type": "disabled"}
+    assert controls["max_tokens"] >= 65536
 
 
 def test_non_deepseek_max_tokens_unchanged():

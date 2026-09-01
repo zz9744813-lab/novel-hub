@@ -83,10 +83,11 @@ def _generation_controls(
 ) -> dict:
     """Return provider-compatible optional generation controls.
 
-    GLM reasoning can be disabled for tiny probes and deterministic benchmark
-    cases.  Step 3-family APIs recommend omitting ``max_tokens`` because a cap
-    can consume the whole allowance in reasoning and return no final content.
-    Unknown model families retain the ordinary OpenAI-compatible payload.
+    GLM and DeepSeek reasoning can be disabled for tiny probes and deterministic
+    benchmark cases.  Step 3-family APIs recommend omitting ``max_tokens``
+    because a cap can consume the whole allowance in reasoning and return no
+    final content.  Unknown model families retain the ordinary
+    OpenAI-compatible payload.
     """
 
     normalized = str(model or "").strip().casefold()
@@ -100,7 +101,7 @@ def _generation_controls(
         # ceiling so the final content has room after reasoning completes.
         controls["max_tokens"] = max(int(max_tokens), 65536) if is_deepseek else int(max_tokens)
     is_glm = normalized.startswith("glm-") or "/glm-" in normalized
-    if is_glm and reasoning_mode in {"enabled", "disabled"}:
+    if (is_glm or is_deepseek) and reasoning_mode in {"enabled", "disabled"}:
         controls["thinking"] = {"type": reasoning_mode}
     return controls
 

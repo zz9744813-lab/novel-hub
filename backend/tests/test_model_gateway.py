@@ -35,7 +35,10 @@ class TestGenerationControls:
         final answer; the cap is raised so reasoning cannot consume it all."""
         assert _generation_controls(
             "deepseek-v4-flash", max_tokens=512, reasoning_mode="disabled"
-        ) == {"max_tokens": 65536}
+        ) == {
+            "max_tokens": 65536,
+            "thinking": {"type": "disabled"},
+        }
 
 
 class TestStreamResult:

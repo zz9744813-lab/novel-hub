@@ -51,6 +51,7 @@ allowagentforwarding no
 x11forwarding no
 permittunnel no
 gatewayports no
+listenaddress 0.0.0.0:$port
 OUT
 EOF
   cat >"$SANDBOX/bin/systemctl" <<'EOF'
@@ -174,6 +175,19 @@ scenario_listener_failure_rolls_back() {
     && [[ ! -f $SANDBOX/state/enabled ]]
 }
 
+scenario_loopback_listener_rolls_back() {
+  new_sandbox
+  cat >"$SANDBOX/bin/ss" <<'EOF'
+#!/bin/sh
+[ -f "$NOVELFORGE_SSH_TEST_STATE/listener" ] && printf 'LISTEN 0 128 127.0.0.1:22022 0.0.0.0:*\n'
+exit 0
+EOF
+  chmod +x "$SANDBOX/bin/ss"
+  ! run_script 22022 >/dev/null 2>&1 \
+    && [[ ! -e $SANDBOX/root/etc/systemd/system/novelforge-sshd-alt.service ]] \
+    && [[ ! -f $SANDBOX/state/enabled ]]
+}
+
 scenario_firewall_failure_rolls_back() {
   new_sandbox
   touch "$SANDBOX/state/ufw-fail"
@@ -189,7 +203,8 @@ check 'unrestricted key rejected' scenario_missing_restricted_key
 check 'foreign listener collision rejected' scenario_collision
 check 'restart failure restores previous unit' scenario_restart_failure_rolls_back
 check 'missing listener rolls back new unit' scenario_listener_failure_rolls_back
+check 'loopback-only listener rolls back new unit' scenario_loopback_listener_rolls_back
 check 'firewall failure rolls back new unit' scenario_firewall_failure_rolls_back
 
-printf 'SCENARIOS=8 PASSED=%d FAILED=%d\n' "$PASS" "$FAIL"
+printf 'SCENARIOS=9 PASSED=%d FAILED=%d\n' "$PASS" "$FAIL"
 (( FAIL == 0 ))

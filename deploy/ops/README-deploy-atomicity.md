@@ -130,7 +130,8 @@ wsl -u root -e bash -c "cd <repo>/deploy/ops/tests && bash run_tests.sh"
 
 ## Restricted management SSH fallback
 
-`enable-management-ssh.sh` starts a separate OpenSSH daemon on TCP 22022 for
+`enable-management-ssh.sh` starts a separate OpenSSH daemon bound explicitly
+to `0.0.0.0:22022` for
 the existing `novelops` account. It does not edit or restart the primary SSH
 service on port 22. The listener enforces public-key authentication, denies
 root and every user except `novelops`, disables forwarding and PTYs, and the

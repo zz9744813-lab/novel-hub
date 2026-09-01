@@ -4,6 +4,7 @@ from app.gateway.model_gateway import (
     AttemptRecord,
     _strip_inline_reasoning,
     _generation_controls,
+    _request_model,
     RETRYABLE_ERRORS,
     REASONING_FIELDS,
 )
@@ -36,9 +37,28 @@ class TestGenerationControls:
         assert _generation_controls(
             "deepseek-v4-flash", max_tokens=512, reasoning_mode="disabled"
         ) == {
-            "max_tokens": 65536,
+            "max_tokens": 512,
             "thinking": {"type": "disabled"},
         }
+
+    def test_deepseek_v4_reasoning_mode_uses_new_api_suffix(self):
+        assert _request_model(
+            "deepseek-v4-flash", reasoning_mode="disabled"
+        ) == "deepseek-v4-flash-none"
+        assert _request_model(
+            "deepseek-v4-flash", reasoning_mode="enabled"
+        ) == "deepseek-v4-flash-max"
+        assert _request_model(
+            "deepseek-v4-flash", reasoning_mode=None
+        ) == "deepseek-v4-flash"
+
+    def test_request_model_does_not_duplicate_or_rewrite_unrelated_suffixes(self):
+        assert _request_model(
+            "deepseek-v4-flash-none", reasoning_mode="disabled"
+        ) == "deepseek-v4-flash-none"
+        assert _request_model(
+            "some-unknown-model", reasoning_mode="disabled"
+        ) == "some-unknown-model"
 
 
 class TestStreamResult:

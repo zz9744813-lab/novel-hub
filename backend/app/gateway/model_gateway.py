@@ -99,11 +99,41 @@ def _generation_controls(
         # max_tokens budget with the final answer; a tight cap lets reasoning
         # consume everything (finish=length, final_content_empty).  Raise the
         # ceiling so the final content has room after reasoning completes.
-        controls["max_tokens"] = max(int(max_tokens), 65536) if is_deepseek else int(max_tokens)
+        controls["max_tokens"] = (
+            max(int(max_tokens), 65536)
+            if is_deepseek and reasoning_mode != "disabled"
+            else int(max_tokens)
+        )
     is_glm = normalized.startswith("glm-") or "/glm-" in normalized
     if (is_glm or is_deepseek) and reasoning_mode in {"enabled", "disabled"}:
         controls["thinking"] = {"type": reasoning_mode}
     return controls
+
+
+def _request_model(model: str, *, reasoning_mode: str | None) -> str:
+    """Apply New API's DeepSeek V4 thinking suffix without changing bindings.
+
+    New API interprets ``-none``/``-max`` during request conversion and strips
+    the suffix before forwarding the canonical upstream model.  The suffix is
+    needed because some configured channels ignore a client-supplied
+    ``thinking`` field.  Normal writing calls leave ``reasoning_mode`` unset,
+    so their configured model id and reasoning behavior remain unchanged.
+    """
+
+    requested = str(model or "").strip()
+    normalized = requested.casefold()
+    if not (
+        normalized.startswith("deepseek-v4-")
+        or "/deepseek-v4-" in normalized
+    ):
+        return requested
+    if normalized.endswith(("-none", "-max")):
+        return requested
+    if reasoning_mode == "disabled":
+        return f"{requested}-none"
+    if reasoning_mode == "enabled":
+        return f"{requested}-max"
+    return requested
 
 
 def _get_provider_config(role: str = "primary", provider: str | None = None) -> dict:
@@ -172,7 +202,7 @@ async def stream_completion_and_collect(
         "Content-Type": "application/json",
     }
     payload = {
-        "model": model,
+        "model": _request_model(model, reasoning_mode=reasoning_mode),
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},

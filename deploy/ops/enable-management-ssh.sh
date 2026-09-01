@@ -37,11 +37,12 @@ id novelops >/dev/null 2>&1 || fail 'restricted novelops account is not installe
 grep -Eq '^restrict,command="/usr/local/sbin/novelforge-ops"[[:space:]]+ssh-ed25519[[:space:]]' \
   "$AUTHORIZED_KEYS" || fail 'novelops key is not restricted to novelforge-ops' 78
 
-listener_exists() {
-  ss -H -ltn "sport = :$PORT" 2>/dev/null | grep -q .
+public_listener_exists() {
+  ss -H -ltn "sport = :$PORT" 2>/dev/null \
+    | awk -v suffix=":$PORT" '$4 == "0.0.0.0" suffix || $4 == "*" suffix || $4 == "[::]" suffix { found=1 } END { exit !found }'
 }
 
-if listener_exists; then
+if public_listener_exists; then
   if ! systemctl is-active --quiet "$SERVICE" \
     || [[ ! -f $UNIT_PATH ]] \
     || ! grep -Fq -- "-p $PORT" "$UNIT_PATH"; then
@@ -51,6 +52,7 @@ fi
 
 readonly SSHD_RESTRICTIONS=(
   -p "$PORT"
+  -o "ListenAddress=0.0.0.0:$PORT"
   -o "PidFile=/run/novelforge-sshd-alt-$PORT.pid"
   -o AllowUsers=novelops
   -o PermitRootLogin=no
@@ -74,6 +76,7 @@ EFFECTIVE_SSHD=$(
 
 for expected in \
   "port $PORT" \
+  "listenaddress 0.0.0.0:$PORT" \
   'allowusers novelops' \
   'permitrootlogin no' \
   'passwordauthentication no' \
@@ -140,7 +143,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=$SSHD_BIN -D -e -p $PORT -o PidFile=/run/novelforge-sshd-alt-$PORT.pid -o AllowUsers=novelops -o PermitRootLogin=no -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o PubkeyAuthentication=yes -o PermitTTY=no -o AllowTcpForwarding=no -o AllowAgentForwarding=no -o X11Forwarding=no -o PermitTunnel=no -o GatewayPorts=no
+ExecStart=$SSHD_BIN -D -e -p $PORT -o ListenAddress=0.0.0.0:$PORT -o PidFile=/run/novelforge-sshd-alt-$PORT.pid -o AllowUsers=novelops -o PermitRootLogin=no -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o PubkeyAuthentication=yes -o PermitTTY=no -o AllowTcpForwarding=no -o AllowAgentForwarding=no -o X11Forwarding=no -o PermitTunnel=no -o GatewayPorts=no
 ExecReload=/bin/kill -HUP \$MAINPID
 KillMode=process
 Restart=on-failure
@@ -157,7 +160,7 @@ systemctl daemon-reload
 systemctl enable "$SERVICE"
 systemctl restart "$SERVICE"
 systemctl is-active --quiet "$SERVICE" || fail 'alternate sshd service did not become active' 70
-listener_exists || fail "alternate sshd did not listen on port $PORT" 70
+public_listener_exists || fail "alternate sshd did not listen publicly on port $PORT" 70
 
 FIREWALL=not-managed
 if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -qx 'Status: active'; then

@@ -229,6 +229,7 @@ def test_management_ssh_is_isolated_and_forced_command_only():
     script = MANAGEMENT_SSH_SCRIPT.read_text(encoding="utf-8")
 
     assert "novelforge-sshd-alt.service" in script
+    assert "ListenAddress=0.0.0.0:$PORT" in script
     assert "AllowUsers=novelops" in script
     assert "PermitRootLogin=no" in script
     assert "PasswordAuthentication=no" in script

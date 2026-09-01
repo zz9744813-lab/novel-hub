@@ -193,6 +193,7 @@ async def stream_completion_and_collect(
     provider: str | None = None,
     response_format: dict | None = None,
     reasoning_mode: str | None = None,
+    read_timeout_seconds: int | None = None,
 ) -> StreamResult:
     """Stream and collect all chunks from a single provider attempt."""
     config = _get_provider_config(provider_role, provider=provider)
@@ -227,7 +228,12 @@ async def stream_completion_and_collect(
     inline_parser = InlineReasoningParser()
 
     try:
-        timeout = httpx.Timeout(config["read_timeout"], connect=config["connect_timeout"])
+        read_timeout = (
+            config["read_timeout"]
+            if read_timeout_seconds is None
+            else max(1, int(read_timeout_seconds))
+        )
+        timeout = httpx.Timeout(read_timeout, connect=config["connect_timeout"])
         async with httpx.AsyncClient(timeout=timeout) as client:
             async with client.stream(
                 "POST",

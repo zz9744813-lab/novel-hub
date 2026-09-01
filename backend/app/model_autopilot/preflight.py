@@ -239,6 +239,12 @@ async def bootstrap_catalog_and_probes() -> dict:
             *((catalog, False) for catalog in other_candidates[:remaining]),
         ]
 
+        # Catalog sync/materialization may have opened a transaction.  Never
+        # keep it idle while an upstream model stream can take minutes: commit
+        # the catalog state first, then persist each completed probe in its own
+        # short transaction below.
+        await db.commit()
+
         from app.model_autopilot.catalog import ensure_capability_for_catalog
         from app.model_autopilot.classification import promote_configured_text_model
 

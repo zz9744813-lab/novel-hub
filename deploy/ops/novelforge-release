@@ -380,6 +380,39 @@ validate_sha() {
     || die 65 "sha is not on origin/$DEPLOY_BRANCH"
 }
 
+verify_release_checkout() { # $1=release path $2=expected sha; read-only
+  local release=$1 sha=$2 actual_sha residue
+  actual_sha=$(git -C "$release" rev-parse HEAD 2>/dev/null) \
+    || die 73 "release worktree is not a readable git checkout: $release"
+  [ "$actual_sha" = "$sha" ] \
+    || die 73 "release HEAD mismatch: expected $sha, found $actual_sha"
+  git -C "$release" diff --quiet -- \
+    || die 73 "release worktree has modified tracked files: $release"
+  git -C "$release" diff --cached --quiet -- \
+    || die 73 "release worktree has staged tracked changes: $release"
+  # Docker build contexts include the release root/backend.  Refuse untracked
+  # and ignored residue too, except for the two root-owned runtime symlinks
+  # materialized below.  Otherwise the built bytes would not be bound to SHA.
+  residue=$(git -C "$release" status --porcelain=v1 --untracked-files=all \
+    --ignored=matching -- . ':(exclude)deploy/.env' ':(exclude)data')
+  [ -z "$residue" ] \
+    || die 73 "release worktree has untracked or ignored files: $release"
+}
+
+verify_release_links() { # $1=release path; read-only
+  local release=$1 env_target data_target
+  [ -L "$release/deploy/.env" ] \
+    || die 73 "release deploy/.env is not a symlink: $release"
+  [ -L "$release/data" ] \
+    || die 73 "release data is not a symlink: $release"
+  env_target=$(readlink -f "$release/deploy/.env" 2>/dev/null || true)
+  data_target=$(readlink -f "$release/data" 2>/dev/null || true)
+  [ "$env_target" = "$(readlink -f "$SHARED/.env")" ] \
+    || die 73 "release deploy/.env points outside shared state: $release"
+  [ "$data_target" = "$(readlink -f "$SHARED/data")" ] \
+    || die 73 "release data points outside shared state: $release"
+}
+
 prepare_release() {
   local sha=$1
   local release="$RELEASES/$sha"
@@ -387,6 +420,7 @@ prepare_release() {
     [ ! -e "$release" ] || die 73 "invalid pre-existing release path"
     git --git-dir="$MIRROR" worktree add --detach "$release" "$sha" >&2
   fi
+  verify_release_checkout "$release" "$sha"
   [ -f "$SHARED/.env" ] || die 78 "missing $SHARED/.env"
   install -d -m 0750 -o 10001 -g 10001 \
     "$SHARED/data/books" "$SHARED/data/exports" \
@@ -399,6 +433,7 @@ prepare_release() {
     die 73 "release contains a non-symlink data path"
   fi
   ln -sfn "$SHARED/data" "$release/data"
+  verify_release_links "$release"
   printf '%s\n' "$release"
 }
 
@@ -769,7 +804,10 @@ rollback_sha() {
   fetch_main
   validate_sha "$sha"
   [ -d "$release" ] || die 66 "release not prepared: $sha"
+  verify_release_checkout "$release" "$sha"
+  verify_release_links "$release"
   write_release_tag_file "$release"
+  compose "$release" config --quiet
   local svc
   for svc in api worker web; do
     app_image_digest "novelforge-$svc:$sha" >/dev/null \

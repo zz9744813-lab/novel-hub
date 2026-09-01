@@ -8,9 +8,10 @@ preflight remains health-only and never launches an expensive benchmark.
 """
 from __future__ import annotations
 
+import os
 import uuid
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
@@ -37,9 +38,41 @@ KNOWN_CONFIGURED_MODEL_ALIASES = {
 }
 
 
+class EffectiveTargets(dict):
+    """Primary target map plus the complete route map used by the release gate.
+
+    The dict-compatible primary view preserves callers that only need the
+    current primary assignment.  ``route_targets`` additionally records every
+    fallback, its roles, and its route kind so release evidence cannot silently
+    omit the models that will actually be used after a primary failure.
+    """
+
+    route_targets: dict[tuple[str, str, str], set[str]]
+
+    def __init__(
+        self,
+        primary_targets: dict[tuple[str, str], set[str]],
+        route_targets: dict[tuple[str, str, str], set[str]],
+    ) -> None:
+        super().__init__(primary_targets)
+        self.route_targets = route_targets
+
+
+def _route_targets_for(
+    targets: dict[tuple[str, str], set[str]],
+) -> dict[tuple[str, str, str], set[str]]:
+    """Fallback for patched/legacy callers that only provide primary targets."""
+
+    return {
+        (provider, model, "primary"): set(roles)
+        for (provider, model), roles in targets.items()
+    }
+
+
 async def _effective_targets(db, book_id: uuid.UUID) -> tuple[dict, list[str]]:
     service = ModelBindingService(db)
     targets: dict[tuple[str, str], set[str]] = defaultdict(set)
+    route_targets: dict[tuple[str, str, str], set[str]] = defaultdict(set)
     missing: list[str] = []
     for role in required_roles():
         binding = await service.get_binding(role, book_id)
@@ -47,7 +80,14 @@ async def _effective_targets(db, book_id: uuid.UUID) -> tuple[dict, list[str]]:
             missing.append(role)
             continue
         targets[(binding.provider, binding.primary_model)].add(role)
-    return dict(targets), missing
+        route_targets[(binding.provider, binding.primary_model, "primary")].add(role)
+        if binding.fallback_model:
+            # The current binding schema has one legacy fallback_model and its
+            # provider is the binding provider.  Session route plans may carry
+            # provider-diverse fallbacks, but those are not yet persisted on a
+            # production binding; this still gates every persisted fallback.
+            route_targets[(binding.provider, binding.fallback_model, "fallback")].add(role)
+    return EffectiveTargets(dict(targets), dict(route_targets)), missing
 
 
 def _required_context(roles: set[str]) -> int:
@@ -294,6 +334,13 @@ async def ensure_configured_model_evidence(pack: ProductionPack) -> dict:
     async with async_session_factory() as db:
         initial_targets, missing_bindings = await _effective_targets(db, book_id)
 
+    initial_route_targets = getattr(
+        initial_targets, "route_targets", _route_targets_for(initial_targets)
+    )
+    evaluation_targets: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for (provider, model_id, _route_kind), roles in initial_route_targets.items():
+        evaluation_targets[(provider, model_id)].update(roles)
+
     # Every successfully qualified configured model gets one context profile.
     # This lets the role selector compare candidates without launching a new
     # long-context test merely because a later binding moves between roles.
@@ -302,7 +349,11 @@ async def ensure_configured_model_evidence(pack: ProductionPack) -> dict:
     evaluations: dict[tuple[str, str], dict] = {}
     gate_errors: dict[tuple[str, str], dict] = {}
 
-    for (provider, model_id), roles in sorted(initial_targets.items()):
+    health_ttl = timedelta(
+        seconds=int(os.environ.get("MODEL_PREWRITE_HEALTH_TTL_SECONDS", "300"))
+    )
+    health_cutoff = datetime.now(timezone.utc) - health_ttl
+    for (provider, model_id), roles in sorted(evaluation_targets.items()):
         async with async_session_factory() as db:
             catalog = (
                 await db.execute(
@@ -335,6 +386,18 @@ async def ensure_configured_model_evidence(pack: ProductionPack) -> dict:
                 gate_errors[(provider, model_id)] = {
                     "code": "CONFIGURED_MODEL_UNHEALTHY",
                     "health_status": snapshot.health_status if snapshot else "missing",
+                }
+                continue
+            last_probe_at = snapshot.last_probe_at
+            if last_probe_at is not None and last_probe_at.tzinfo is None:
+                last_probe_at = last_probe_at.replace(tzinfo=timezone.utc)
+            if last_probe_at is None or last_probe_at < health_cutoff:
+                gate_errors[(provider, model_id)] = {
+                    "code": "CONFIGURED_MODEL_HEALTH_STALE",
+                    "last_probe_at": last_probe_at.isoformat()
+                    if last_probe_at
+                    else None,
+                    "freshness_seconds": int(health_ttl.total_seconds()),
                 }
                 continue
 
@@ -377,6 +440,9 @@ async def ensure_configured_model_evidence(pack: ProductionPack) -> dict:
                 "provider": provider,
                 "model": model_id,
                 "initial_roles": sorted(roles),
+                "health_status": snapshot.health_status,
+                "last_probe_at": last_probe_at.isoformat(),
+                "health_fresh": True,
                 "ability": ability,
                 "context": context,
                 "state": state,
@@ -395,12 +461,15 @@ async def ensure_configured_model_evidence(pack: ProductionPack) -> dict:
         await db.commit()
     async with async_session_factory() as db:
         final_targets, final_missing = await _effective_targets(db, book_id)
+    final_route_targets = getattr(
+        final_targets, "route_targets", _route_targets_for(final_targets)
+    )
 
     blockers: list[dict] = [
         {"code": "MODEL_BINDING_MISSING", "role": role}
         for role in sorted(set(missing_bindings) | set(final_missing))
     ]
-    for (provider, model_id), roles in sorted(final_targets.items()):
+    for (provider, model_id, route_kind), roles in sorted(final_route_targets.items()):
         evaluation = evaluations.get((provider, model_id))
         if evaluation is None:
             error = gate_errors.get((provider, model_id)) or {
@@ -411,6 +480,7 @@ async def ensure_configured_model_evidence(pack: ProductionPack) -> dict:
                     **error,
                     "provider": provider,
                     "model": model_id,
+                    "route_kind": route_kind,
                     "roles": sorted(roles),
                 }
             )
@@ -431,6 +501,7 @@ async def ensure_configured_model_evidence(pack: ProductionPack) -> dict:
                     "code": "MODEL_ROLE_QUALIFICATION_FAILED",
                     "provider": provider,
                     "model": model_id,
+                    "route_kind": route_kind,
                     "roles": role_failures,
                 }
             )
@@ -442,6 +513,7 @@ async def ensure_configured_model_evidence(pack: ProductionPack) -> dict:
                     "code": "MODEL_CONTEXT_INSUFFICIENT",
                     "provider": provider,
                     "model": model_id,
+                    "route_kind": route_kind,
                     "required_context": required_context,
                     "effective_context": effective_context,
                 }
@@ -479,6 +551,9 @@ async def ensure_configured_model_evidence(pack: ProductionPack) -> dict:
                 "model": model_id,
                 "initial_roles": evaluation["initial_roles"],
                 "roles": final_roles,
+                "health_status": evaluation.get("health_status"),
+                "last_probe_at": evaluation.get("last_probe_at"),
+                "health_fresh": evaluation.get("health_fresh", False),
                 "ability_state": (state.get("ability") or {}).get("state"),
                 "ability_reused": bool(ability.get("reused")),
                 "ability_gateway_calls": int(ability.get("gateway_calls") or 0),
@@ -493,6 +568,71 @@ async def ensure_configured_model_evidence(pack: ProductionPack) -> dict:
                 "effective_context": effective_context,
                 "required_context": required_context or None,
                 "role_scores": role_scores,
+                "routes": [
+                    {
+                        "route_kind": route_kind,
+                        "roles": sorted(route_roles),
+                        "provider": provider,
+                        "model": model_id,
+                        "health_status": evaluation.get("health_status"),
+                        "health_fresh": evaluation.get("health_fresh", False),
+                        "ability_gateway_calls": int(
+                            ability.get("gateway_calls") or 0
+                        ),
+                        "ability_source_run_id": ability.get("source_run_id"),
+                        "context_gateway_calls": int(
+                            (context or {}).get("gateway_calls") or 0
+                        ),
+                        "context_source_run_id": (context or {}).get(
+                            "source_run_id"
+                        ),
+                    }
+                    for (route_provider, route_model, route_kind), route_roles in sorted(
+                        final_route_targets.items()
+                    )
+                    if route_provider == provider and route_model == model_id
+                ],
+            }
+        )
+
+    route_reports: list[dict] = []
+    for (provider, model_id, route_kind), roles in sorted(final_route_targets.items()):
+        evaluation = evaluations.get((provider, model_id))
+        route_reports.append(
+            {
+                "provider": provider,
+                "model": model_id,
+                "route_kind": route_kind,
+                "roles": sorted(roles),
+                "gateway_calls": (
+                    int(evaluation["ability"].get("gateway_calls") or 0)
+                    + int((evaluation.get("context") or {}).get("gateway_calls") or 0)
+                    if evaluation
+                    else 0
+                ),
+                "source_run_ids": [
+                    source_id
+                    for source_id in (
+                        (evaluation or {}).get("ability", {}).get("source_run_id"),
+                        ((evaluation or {}).get("context") or {}).get("source_run_id"),
+                    )
+                    if source_id
+                ],
+                "health_status": (evaluation or {}).get(
+                    "health_status", gate_errors.get((provider, model_id), {}).get("health_status")
+                ),
+                "health_fresh": bool((evaluation or {}).get("health_fresh")),
+                "evidence_state": (
+                    (evaluation or {}).get("state", {}).get("ability", {}).get("state")
+                    if evaluation
+                    else "missing"
+                ),
+                "context_state": (
+                    (evaluation or {}).get("state", {}).get("context", {}).get("state")
+                    if evaluation
+                    else "missing"
+                ),
+                "error": gate_errors.get((provider, model_id)),
             }
         )
 
@@ -514,6 +654,7 @@ async def ensure_configured_model_evidence(pack: ProductionPack) -> dict:
             ],
         },
         "models": model_reports,
+        "routes": route_reports,
         "blockers": blockers,
         "counts": {
             "configured_models": len(final_targets),

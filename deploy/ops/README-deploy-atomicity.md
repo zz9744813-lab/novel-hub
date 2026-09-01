@@ -68,6 +68,9 @@ status
 - Candidate never touches production data: books/exports/imports are
   per-attempt named volumes, references are read-only, the postgres backups
   bind is absent, the network is attempt-unique.
+  The isolated api/worker containers map only the production gateway DNS name
+  `new-api` to Docker's `host-gateway`, allowing model qualification through
+  the gateway's published port without joining `novelforge_internal`.
 - Snapshot restore runs inside the RUNNING candidate postgres (`compose exec
   -T`, dump streamed via stdin) — never a second container mounting the same
   PGDATA.

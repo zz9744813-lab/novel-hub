@@ -616,10 +616,21 @@ candidate_sha() {
     python scripts/production_pack.py validate --pack "$PACK" \
     >"$raw_dir/validate.raw" || validate_rc=$?
 
-  # 4) model evidence against the real gateway (writes to throwaway db only).
-  compose_candidate "$release" "$attempt" run --rm --no-deps api \
-    python scripts/production_pack.py qualify --pack "$PACK" \
-    >"$raw_dir/qualify.raw" || qualify_rc=$?
+  # 4) Model evidence against the real gateway.  Prefer the migrated
+  # production snapshot so content-addressed evidence from prior releases is
+  # reusable; the fresh database is only the bootstrap fallback when no
+  # production backup exists.  Both databases remain inside this attempt's
+  # throwaway candidate project.
+  if [ "$snapshot_state" = "passed" ]; then
+    compose_candidate "$release" "$attempt" run --rm --no-deps \
+      api python -c 'import os, subprocess, sys; from urllib.parse import quote; user=quote(os.environ["POSTGRES_USER"], safe=""); password=quote(os.environ["POSTGRES_PASSWORD"], safe=""); os.environ["DATABASE_URL"]=f"postgresql+asyncpg://{user}:{password}@postgres:5432/{sys.argv[1]}"; raise SystemExit(subprocess.call(sys.argv[2:]))' \
+      snapshot_check python scripts/production_pack.py qualify --pack "$PACK" \
+      >"$raw_dir/qualify.raw" || qualify_rc=$?
+  else
+    compose_candidate "$release" "$attempt" run --rm --no-deps api \
+      python scripts/production_pack.py qualify --pack "$PACK" \
+      >"$raw_dir/qualify.raw" || qualify_rc=$?
+  fi
 
   extract_json_payload() {
     local raw=$1 out=$2

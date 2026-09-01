@@ -355,6 +355,10 @@ s04_snapshot_restore_fail_reject() {
   new_sandbox
   printf 'FAKE-DUMP\n' >"$SHARED/data/backups/pre-x.dump"
   run_controller candidate "$SHA1" >/dev/null 2>&1
+  local qualify_call
+  qualify_call=$(docker_log | grep 'ONEOFF_CMD=.*production_pack.py qualify' | tail -1)
+  assert_contains "$qualify_call" "snapshot_check" \
+    "model qualification reuses migrated production evidence"
   SNAPSHOT_RESTORE_RC=1
   run_controller candidate "$SHA1" >/dev/null 2>&1
   assert_eq "$(envelope_state "$SHA1")" "failed" "snapshot restore failure invalidates envelope"

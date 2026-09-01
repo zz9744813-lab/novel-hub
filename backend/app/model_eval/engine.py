@@ -364,7 +364,7 @@ def _catalog_payload(catalog: ModelCatalog) -> dict:
 
 
 async def _default_gateway(**kwargs):
-    from app.gateway.model_gateway import stream_completion_and_collect
+    from app.gateway.model_gateway import _request_model, stream_completion_and_collect
 
     model = kwargs["model"]
     max_tokens = kwargs.get("max_tokens", 512)
@@ -374,10 +374,14 @@ async def _default_gateway(**kwargs):
         # one-time evidence case enough room to reach final content even then;
         # lightweight recurring health probes keep their separate small cap.
         max_tokens = max(2048, int(max_tokens or 0))
+    # Ability evidence is the one place that needs a deterministic no-thinking
+    # DeepSeek request.  Keep the New API suffix out of lightweight health
+    # probes so a channel that only advertises the base alias remains healthy.
+    request_model = _request_model(model, reasoning_mode="disabled")
     return await stream_completion_and_collect(
         system_prompt=kwargs["system_prompt"],
         user_content=kwargs["user_content"],
-        model=model,
+        model=request_model,
         temperature=kwargs.get("temperature", 0),
         max_tokens=max_tokens,
         provider_role="primary",

@@ -52,6 +52,42 @@ ROLE_CONTEXT_ESTIMATE = {
 }
 
 UNKNOWN = "unknown"
+_DIAGNOSTIC_MODEL_FAMILIES = (
+    "claude",
+    "deepseek",
+    "gemini",
+    "glm",
+    "gpt",
+    "kimi",
+    "qwen",
+    "step",
+)
+
+
+def _diagnostic_model_inventory(catalogs: list[ModelCatalog], *, limit: int = 80) -> dict:
+    """Return a bounded, credential-free inventory for release diagnostics."""
+
+    candidates = []
+    for catalog in sorted(catalogs, key=lambda row: (row.provider, row.model_id)):
+        normalized = str(catalog.model_id or "").casefold()
+        if not catalog.text_generation_eligible and not any(
+            family in normalized for family in _DIAGNOSTIC_MODEL_FAMILIES
+        ):
+            continue
+        candidates.append(
+            {
+                "provider": catalog.provider,
+                "model": catalog.model_id,
+                "kind": catalog.model_kind,
+                "text_generation_eligible": bool(catalog.text_generation_eligible),
+                "auto_route_enabled": bool(catalog.auto_route_enabled),
+                "availability_status": catalog.availability_status,
+            }
+        )
+    return {
+        "models": candidates[:limit],
+        "truncated": len(candidates) > limit,
+    }
 
 
 def _providers_from_env() -> list[tuple[str, str, str]]:
@@ -157,6 +193,9 @@ async def bootstrap_catalog_and_probes() -> dict:
                 )
             ).scalars().all()
         )
+        inventory = _diagnostic_model_inventory(catalogs)
+        report["discovered_candidates"] = inventory["models"]
+        report["discovered_candidates_truncated"] = inventory["truncated"]
         by_key = {(catalog.provider, catalog.model_id): catalog for catalog in catalogs}
         configured_catalogs = []
         for provider, model in sorted(configured_keys):

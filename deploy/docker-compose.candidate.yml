@@ -23,6 +23,11 @@ services:
   api:
     env_file: !override
       - ${CANDIDATE_ENV_FILE:?candidate env snapshot is required}
+    # Production reaches New-API by its Docker DNS name.  The candidate must
+    # not join the production network, so resolve only that gateway name to
+    # the host-published port instead.
+    extra_hosts: !override
+      - "new-api:host-gateway"
     volumes: !override
       - candidate_books:/app/data/books
       - candidate_exports:/app/data/exports
@@ -32,6 +37,8 @@ services:
   worker:
     env_file: !override
       - ${CANDIDATE_ENV_FILE:?candidate env snapshot is required}
+    extra_hosts: !override
+      - "new-api:host-gateway"
     volumes: !override
       - candidate_books:/app/data/books
       - candidate_exports:/app/data/exports

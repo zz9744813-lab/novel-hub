@@ -419,6 +419,8 @@ s06_no_production_writable_mounts() {
   assert_contains "$cfg" "novelforge_candidate_\${CANDIDATE_ATTEMPT:-unset}" \
     "network is per-attempt"
   assert_not_contains "$cfg" "novelforge_internal" "production network absent"
+  assert_eq "$(printf '%s' "$cfg" | grep -c 'new-api:host-gateway')" "2" \
+    "api and worker reach only the host-published model gateway"
 
   # Real-CLI structural check (skipped when docker-compose is absent):
   # render the merged config THROUGH the real controller wrapper
@@ -452,6 +454,8 @@ s06_no_production_writable_mounts() {
     assert_not_contains "$rendered" "novelforge_internal"       "real merged config has no production network"
     assert_not_contains "$rendered" "novelforge_candidate_unset"       "real merged config has no unset attempt network"
     assert_contains "$rendered" "novelforge_candidate_$attempt"       "real merged config uses the exact attempt network"
+    assert_eq "$(printf '%s' "$rendered" | grep -c 'new-api=host-gateway')" "2" \
+      "real merged config maps the model gateway for api and worker"
     if printf '%s' "$rendered" | grep -qE '\.\./data/(books|exports|imports|backups)'; then
       assert_fail_record "real merged config has production-writable bind"
     fi

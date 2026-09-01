@@ -115,7 +115,7 @@ it no longer carries a hardcoded commit.
 
 ## Tests
 
-`deploy/ops/tests/run_tests.sh` — 17 scenarios, exact final line
+`deploy/ops/tests/run_tests.sh` — 19 scenarios, exact final line
 `SCENARIOS=17 PASSED=<n> FAILED=<n>`. Run as root inside WSL/Linux (the
 controller needs symlinks and flock); docker-compose enables the real-CLI
 merged-config check in scenario 6; the PostgreSQL scenario performs a REAL
@@ -127,4 +127,27 @@ and after the run.
 
 ```bash
 wsl -u root -e bash -c "cd <repo>/deploy/ops/tests && bash run_tests.sh"
+
+## Restricted management SSH fallback
+
+`enable-management-ssh.sh` starts a separate OpenSSH daemon on TCP 22022 for
+the existing `novelops` account. It does not edit or restart the primary SSH
+service on port 22. The listener enforces public-key authentication, denies
+root and every user except `novelops`, disables forwarding and PTYs, and the
+existing authorized key remains restricted to `/usr/local/sbin/novelforge-ops`.
+If validation, service startup, listener verification, or the active UFW rule
+fails, the script restores the previous unit automatically.
+
+The console bootstrap enables this listener automatically. To repair an
+already-bootstrapped host, run the pinned copy from the desired main commit:
+
+```bash
+bash deploy/ops/enable-management-ssh.sh 22022
+```
+
+Behavior tests:
+
+```bash
+bash deploy/ops/tests/test-enable-management-ssh.sh
+```
 ```

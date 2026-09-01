@@ -37,7 +37,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for file in bootstrap-novelops.sh novelforge-ops novelforge-release; do
+for file in \
+  bootstrap-novelops.sh \
+  enable-management-ssh.sh \
+  novelforge-ops \
+  novelforge-release; do
   curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
     --connect-timeout 15 --max-time 120 --retry 3 --retry-all-errors \
     "$RAW_BASE/$OPS_COMMIT/deploy/ops/$file" \
@@ -50,6 +54,7 @@ ssh-keygen -l -f "$BOOTSTRAP_DIR/novelforge_ops.pub" >/dev/null \
 
 bash "$BOOTSTRAP_DIR/bootstrap-novelops.sh" \
   "$REPOSITORY_URL" "$BOOTSTRAP_DIR/novelforge_ops.pub"
+bash "$BOOTSTRAP_DIR/enable-management-ssh.sh" 22022
 
 readonly ENV_TARGET=/srv/novelforge/shared/.env
 if [[ -f $ENV_TARGET ]]; then

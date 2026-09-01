@@ -1,5 +1,6 @@
 Host novel-hub
     HostName 107.172.138.14
+    Port 22022
     User novelops
     IdentityFile ~/.ssh/novelforge_ops
     IdentitiesOnly yes

@@ -38,6 +38,16 @@ def _configured_handshake_max_tokens() -> int:
     return max(512, min(4096, configured))
 
 
+def _health_probe_read_timeout() -> int:
+    """Bound recurring connectivity checks independently from long model work."""
+
+    try:
+        configured = int(os.environ.get("MODEL_HEALTH_READ_TIMEOUT_SECONDS", "120"))
+    except ValueError:
+        configured = 120
+    return max(15, min(300, configured))
+
+
 def _provider_config(provider: str):
     from app.gateway.model_gateway import _get_provider_config
 
@@ -100,6 +110,7 @@ async def probe_model_ping(
             provider_role="primary",
             provider=catalog.provider,
             reasoning_mode="disabled",
+            read_timeout_seconds=_health_probe_read_timeout(),
         )
         retried = False
         first_error = result.error
@@ -115,6 +126,7 @@ async def probe_model_ping(
                 provider_role="primary",
                 provider=catalog.provider,
                 reasoning_mode="disabled",
+                read_timeout_seconds=_health_probe_read_timeout(),
             )
         probe.latency_ms = result.latency_ms
         probe.first_token_ms = result.first_token_ms  # measured TTFT (v9.6 §44)

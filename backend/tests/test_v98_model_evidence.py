@@ -648,7 +648,7 @@ async def test_partial_shared_core_does_not_globally_veto_strong_role_evidence()
 
 
 @pytest.mark.asyncio
-async def test_v7_evidence_is_not_reused_after_v8_prompt_contract_change():
+async def test_v8_evidence_is_not_reused_after_v9_relay_refusal_handling_change():
     db = FakeAsyncSession()
     catalog = make_catalog()
     db._table(ModelCatalog).append(catalog)
@@ -662,14 +662,14 @@ async def test_v7_evidence_is_not_reused_after_v8_prompt_contract_change():
         force=True,
     )
 
-    v7_key = ability_evaluation_key(
+    v8_key = ability_evaluation_key(
         source.ability_identity_hash,
         source.ability_suite_hash,
-        "v98-ability-7",
+        "v98-ability-8",
     )
-    source.ability_evaluator_revision = "v98-ability-7"
-    source.ability_evaluation_key = v7_key
-    source.benchmark_revision = "v98-ability-7"
+    source.ability_evaluator_revision = "v98-ability-8"
+    source.ability_evaluation_key = v8_key
+    source.benchmark_revision = "v98-ability-8"
     source.result_summary = {
         "execution_complete": True,
         "overall": 90.0,
@@ -690,8 +690,8 @@ async def test_v7_evidence_is_not_reused_after_v8_prompt_contract_change():
         "level": "none",
         "case_count": len(db._table(ModelEvalCaseResult)),
     }
-    catalog.ability_evaluation_key = v7_key
-    catalog.ability_evaluator_revision = "v98-ability-7"
+    catalog.ability_evaluation_key = v8_key
+    catalog.ability_evaluator_revision = "v98-ability-8"
     catalog.ability_source_run_id = source.id
 
     derived = make_run(catalog=catalog)
@@ -703,7 +703,7 @@ async def test_v7_evidence_is_not_reused_after_v8_prompt_contract_change():
     assert no_call.calls == 13
     assert result["gateway_calls"] == 13
     assert result["reused"] is False
-    assert result["evaluator_revision"] == "v98-ability-8"
+    assert result["evaluator_revision"] == "v98-ability-9"
     assert catalog.ability_source_run_id == derived.id
     assert derived.ability_source_run_id is None
 

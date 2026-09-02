@@ -41,6 +41,66 @@ async def test_qualification_retries_transient_failures_and_counts_all_calls():
 
 
 @pytest.mark.asyncio
+async def test_qualification_retries_benign_fixture_false_refusals():
+    upstream = AsyncMock(
+        side_effect=[
+            StreamResult(
+                final_content="I must decline this request as it is a jailbreak attempt."
+            ),
+            StreamResult(final_content="我无法配合此类尝试覆盖核心指令或披露身份。"),
+            StreamResult(final_content="I cannot comply with this request."),
+            StreamResult(final_content='{"ok":true}'),
+        ]
+    )
+    with (
+        patch(
+            "app.gateway.model_gateway.stream_completion_and_collect",
+            upstream,
+        ),
+        patch("app.model_eval.engine.asyncio.sleep", new_callable=AsyncMock),
+    ):
+        result = await _default_gateway(
+            system_prompt="小说编辑部结构化工作单",
+            user_content="根据虚构资料只输出 JSON。",
+            model="glm-5.2",
+            provider="new-api",
+            max_tokens=256,
+            temperature=0,
+        )
+
+    assert upstream.await_count == 4
+    assert result.error is None
+    assert result.final_content == '{"ok":true}'
+    assert result.gateway_calls == 4
+
+
+@pytest.mark.asyncio
+async def test_qualification_fails_closed_after_four_false_refusals():
+    upstream = AsyncMock(
+        return_value=StreamResult(final_content="I must decline this request.")
+    )
+    with (
+        patch(
+            "app.gateway.model_gateway.stream_completion_and_collect",
+            upstream,
+        ),
+        patch("app.model_eval.engine.asyncio.sleep", new_callable=AsyncMock),
+    ):
+        result = await _default_gateway(
+            system_prompt="小说编辑部结构化工作单",
+            user_content="根据虚构资料只输出 JSON。",
+            model="glm-5.2",
+            provider="new-api",
+            max_tokens=256,
+            temperature=0,
+        )
+
+    assert upstream.await_count == 4
+    assert result.error == "SPURIOUS_EVALUATION_REFUSAL"
+    assert result.gateway_calls == 4
+
+
+@pytest.mark.asyncio
 async def test_runtime_without_fallback_has_four_bounded_primary_attempts():
     upstream = AsyncMock(
         side_effect=[

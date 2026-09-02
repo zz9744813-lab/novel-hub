@@ -306,12 +306,12 @@ def _defined_case(case_key: str) -> dict:
     raise AssertionError(f"missing synthetic case: {case_key}")
 
 
-def test_v5_ability_contract_exposes_every_machine_graded_label_without_invalidating_context():
+def test_v6_ability_contract_exposes_every_machine_graded_label_without_invalidating_context():
     definitions = v98_suite_definitions()
     ability = [suite for suite in definitions if suite["mode"] == "qualification"]
     context = [suite for suite in definitions if suite["mode"] == "context_ladder"]
-    assert SUITE_VERSION == "5"
-    assert {suite["version"] for suite in ability} == {"5"}
+    assert SUITE_VERSION == "6"
+    assert {suite["version"] for suite in ability} == {"6"}
     assert CONTEXT_SUITE_VERSION == "2"
     assert {suite["version"] for suite in context} == {"2"}
     assert {case["case_version"] for suite in context for case in suite["cases"]} == {"2"}
@@ -340,7 +340,7 @@ def test_v5_ability_contract_exposes_every_machine_graded_label_without_invalida
         assert all(label in prompt for label in labels), case_key
 
 
-def test_every_v5_ability_case_has_a_contract_compliant_passing_response():
+def test_every_v6_ability_case_has_a_contract_compliant_passing_response():
     responses = {
         "core-causal-chain-v2": (
             '{"outcome":"inside_access_required","chain":['
@@ -416,6 +416,62 @@ def test_every_v5_ability_case_has_a_contract_compliant_passing_response():
             assert score >= floor, (case["case_key"], score, detail)
             seen.add(case["case_key"])
     assert seen == set(responses)
+
+
+@pytest.mark.asyncio
+async def test_v8_ability_work_order_is_neutral_and_contains_no_override_language():
+    captured = []
+
+    async def gateway(**kwargs):
+        captured.append(kwargs)
+        return "yes", None
+
+    suite = {
+        "suite_key": "neutral-work-order",
+        "version": SUITE_VERSION,
+        "name": "neutral work order",
+        "purpose": "prompt regression",
+        "target_role": "draft_writer",
+        "difficulty": "easy",
+        "mode": "qualification",
+        "pass_threshold": 0.7,
+        "is_active": True,
+        "is_private": True,
+        "cases": [
+            {
+                "case_key": "neutral-output",
+                "case_version": SUITE_VERSION,
+                "role": "draft_writer",
+                "category": "format",
+                "prompt_template": "只输出 yes。",
+                "expected_answer": "yes",
+                "grader_type": "exact_match",
+                "grader_config": {},
+                "temperature": 0,
+                "max_output_tokens": 8,
+                "active": True,
+            }
+        ],
+    }
+
+    result = await run_qualification_core(
+        catalog={
+            "provider": "test",
+            "model_id": "test-model",
+            "model_kind": "text_generation",
+            "text_generation_eligible": True,
+        },
+        suites=[suite],
+        gateway=gateway,
+        force=True,
+    )
+
+    assert result["status"] == "succeeded"
+    assert len(captured) == 1
+    system_prompt = captured[0]["system_prompt"]
+    assert "小说编辑部" in system_prompt
+    for trigger in ("身份", "覆盖", "系统指令", "泄露提示词", "拒绝", "越权", "jailbreak"):
+        assert trigger not in system_prompt
 
 
 def test_scene_contract_records_prohibitions_without_being_penalized_as_violations():
@@ -592,7 +648,7 @@ async def test_partial_shared_core_does_not_globally_veto_strong_role_evidence()
 
 
 @pytest.mark.asyncio
-async def test_v5_evidence_is_not_reused_after_v7_prompt_contract_change():
+async def test_v7_evidence_is_not_reused_after_v8_prompt_contract_change():
     db = FakeAsyncSession()
     catalog = make_catalog()
     db._table(ModelCatalog).append(catalog)
@@ -606,14 +662,14 @@ async def test_v5_evidence_is_not_reused_after_v7_prompt_contract_change():
         force=True,
     )
 
-    v5_key = ability_evaluation_key(
+    v7_key = ability_evaluation_key(
         source.ability_identity_hash,
         source.ability_suite_hash,
-        "v98-ability-5",
+        "v98-ability-7",
     )
-    source.ability_evaluator_revision = "v98-ability-5"
-    source.ability_evaluation_key = v5_key
-    source.benchmark_revision = "v98-ability-5"
+    source.ability_evaluator_revision = "v98-ability-7"
+    source.ability_evaluation_key = v7_key
+    source.benchmark_revision = "v98-ability-7"
     source.result_summary = {
         "execution_complete": True,
         "overall": 90.0,
@@ -634,8 +690,8 @@ async def test_v5_evidence_is_not_reused_after_v7_prompt_contract_change():
         "level": "none",
         "case_count": len(db._table(ModelEvalCaseResult)),
     }
-    catalog.ability_evaluation_key = v5_key
-    catalog.ability_evaluator_revision = "v98-ability-5"
+    catalog.ability_evaluation_key = v7_key
+    catalog.ability_evaluator_revision = "v98-ability-7"
     catalog.ability_source_run_id = source.id
 
     derived = make_run(catalog=catalog)
@@ -647,7 +703,7 @@ async def test_v5_evidence_is_not_reused_after_v7_prompt_contract_change():
     assert no_call.calls == 13
     assert result["gateway_calls"] == 13
     assert result["reused"] is False
-    assert result["evaluator_revision"] == "v98-ability-7"
+    assert result["evaluator_revision"] == "v98-ability-8"
     assert catalog.ability_source_run_id == derived.id
     assert derived.ability_source_run_id is None
 
@@ -1497,7 +1553,7 @@ async def test_async_seed_deterministic_idempotent():
     db = FakeAsyncSession()
     n1 = await seed_suites(db)
     assert n1 == 7, n1
-    assert _suite_id("draft-v2", "5") == _suite_id("draft-v2", "5")
+    assert _suite_id("draft-v2", "6") == _suite_id("draft-v2", "6")
     assert _suite_id("context-v2", "2") == _suite_id("context-v2", "2")
     n2 = await seed_suites(db)
     assert n2 == 0, "seed must be idempotent"
@@ -1505,9 +1561,9 @@ async def test_async_seed_deterministic_idempotent():
     assert draft and draft[0].target_role == "draft_writer" and draft[0].mode == "qualification"
     ctx = [s for s in db._table(ModelEvalSuite) if s.suite_key == "context-v2"]
     assert ctx and ctx[0].mode == "context_ladder"
-    # Ability contract v5 is independent from the still-valid context v2 bank.
+    # Ability contract v6 is independent from the still-valid context v2 bank.
     versions = {s.suite_key: s.version for s in db._table(ModelEvalSuite)}
-    assert versions["draft-v2"] == "5"
+    assert versions["draft-v2"] == "6"
     assert versions["context-v2"] == "2"
 
 

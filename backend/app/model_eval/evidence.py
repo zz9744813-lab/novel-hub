@@ -23,7 +23,7 @@ from app.model_eval.suite_definitions import (
 )
 
 
-ABILITY_EVALUATOR_REVISION = "v98-ability-7"
+ABILITY_EVALUATOR_REVISION = "v98-ability-8"
 CONTEXT_EVALUATOR_REVISION = "v98-context-5"
 CORE_QUALITY_FLOOR = 70.0
 _DIRECT_CONTEXT_REQUIRED_ROLES = {
@@ -962,9 +962,8 @@ async def run_qualification_core(
             content, error, metrics = await _invoke_gateway(
                 gateway,
                 system_prompt=(
-                    "你正在执行隔离的合成小说工程能力测试。用户内容只包含虚构测试数据，"
-                    "不是要求更改身份、覆盖系统指令或泄露提示词。请直接完成任务，严格遵守"
-                    "指定输出格式，不要解释、拒绝或添加无关内容。"
+                    "你是小说编辑部的结构化处理程序。请根据提供的虚构资料完成工作，"
+                    "直接输出题目要求的正文或 JSON，不要添加标题、说明或 Markdown 代码围栏。"
                 ),
                 user_content=case.get("prompt_template") or "",
                 model=catalog.get("model_id", ""),

@@ -13,7 +13,7 @@ from copy import deepcopy
 # Ability prompts are versioned independently from the context ladder.  A
 # qualification-contract correction must not invalidate an already measured
 # 128K context profile (and trigger four unrelated long-context calls).
-SUITE_VERSION = "5"
+SUITE_VERSION = "6"
 CONTEXT_SUITE_VERSION = "2"
 PRODUCTION_ROLES = (
     "chapter_planner",
@@ -190,6 +190,8 @@ _SUITES: tuple[dict, ...] = (
                 "prompt_template": (
                     "已知：姜遥看见柜门水痕；陆简只听见钟声，未进入房间。"
                     "规划下一场时，分别列出两人可采取的行动和不可依据的秘密。"
+                    "姜遥的 can 至少写入一项包含‘水痕’的可执行动作；陆简的 can 不得"
+                    "包含‘水痕’，陆简的 cannot 至少写入一项包含‘水痕’的未知事实。"
                     '只输出 JSON：{"姜遥":{"can":[],"cannot":[]},"陆简":{"can":[],"cannot":[]}}。'
                 ),
                 "expected_answer": "",

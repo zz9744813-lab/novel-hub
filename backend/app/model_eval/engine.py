@@ -435,6 +435,7 @@ async def _default_gateway(**kwargs):
             provider_role="primary",
             provider=kwargs.get("provider"),
             reasoning_mode=reasoning_mode,
+            stream=not (is_glm and reasoning_mode == "disabled"),
         )
         if not result.error and not result.final_content.strip():
             result.error = "empty_response"

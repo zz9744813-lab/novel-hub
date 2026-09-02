@@ -200,6 +200,55 @@ def _strip_inline_reasoning(text: str) -> tuple[str, bool]:
     return text.strip(), found
 
 
+def _collect_openai_payload(
+    data: dict,
+    *,
+    result: StreamResult,
+    inline_parser: InlineReasoningParser,
+    start_time: float,
+) -> None:
+    """Collect either one SSE delta or one non-stream Chat Completion body."""
+
+    choices = data.get("choices", [])
+    if choices:
+        choice = choices[0]
+        if choice.get("finish_reason") is not None:
+            result.finish_reason = str(choice["finish_reason"])
+        delta = choice.get("delta") or choice.get("message") or {}
+
+        for field_name in REASONING_FIELDS:
+            val = delta.get(field_name)
+            if val:
+                if result.first_token_ms is None:
+                    result.first_token_ms = int((time.time() - start_time) * 1000)
+                result.reasoning_detected = True
+                result.reasoning_text += str(val)
+
+        content_val = delta.get("content")
+        if content_val:
+            if result.first_token_ms is None:
+                result.first_token_ms = int((time.time() - start_time) * 1000)
+            events = inline_parser.feed(str(content_val))
+            for evt_type, evt_text in events:
+                if evt_type == CanonicalEventType.REASONING:
+                    result.reasoning_detected = True
+                    result.reasoning_text += evt_text
+                    result.inline_leak_detected = True
+                elif evt_type == CanonicalEventType.FINAL:
+                    result.final_content += evt_text
+                elif evt_type == CanonicalEventType.UNKNOWN:
+                    logger.debug("Unknown event quarantined")
+
+        if delta.get("tool_calls"):
+            logger.debug("Tool call delta detected, quarantined")
+
+    usage = data.get("usage")
+    if usage:
+        result.prompt_tokens = usage.get("prompt_tokens", 0)
+        result.completion_tokens = usage.get("completion_tokens", 0)
+        result.reasoning_tokens = usage.get("reasoning_tokens", 0)
+
+
 async def stream_completion_and_collect(
     system_prompt: str,
     user_content: str,
@@ -211,8 +260,9 @@ async def stream_completion_and_collect(
     response_format: dict | None = None,
     reasoning_mode: str | None = None,
     read_timeout_seconds: int | None = None,
+    stream: bool = True,
 ) -> StreamResult:
-    """Stream and collect all chunks from a single provider attempt."""
+    """Collect one Chat Completion using streaming or a full JSON response."""
     config = _get_provider_config(provider_role, provider=provider)
 
     headers = {
@@ -226,7 +276,7 @@ async def stream_completion_and_collect(
             {"role": "user", "content": user_content},
         ],
         "temperature": temperature,
-        "stream": True,
+        "stream": stream,
         **_generation_controls(
             model,
             max_tokens=max_tokens,
@@ -259,64 +309,32 @@ async def stream_completion_and_collect(
                 json=payload,
             ) as response:
                 response.raise_for_status()
-
-                async for line in response.aiter_lines():
-                    if not line or line.startswith(":"):
-                        continue
-                    if line.startswith("data: "):
-                        line = line[6:]
-                    if line.strip() == "[DONE]":
-                        break
-                    try:
-                        data = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-
-                    choices = data.get("choices", [])
-                    if not choices:
-                        usage = data.get("usage")
-                        if usage:
-                            result.prompt_tokens = usage.get("prompt_tokens", 0)
-                            result.completion_tokens = usage.get("completion_tokens", 0)
-                            result.reasoning_tokens = usage.get("reasoning_tokens", 0)
-                        continue
-
-                    choice = choices[0]
-                    if choice.get("finish_reason") is not None:
-                        result.finish_reason = str(choice["finish_reason"])
-                    delta = choice.get("delta", {})
-
-                    for field_name in REASONING_FIELDS:
-                        val = delta.get(field_name)
-                        if val:
-                            if result.first_token_ms is None:
-                                result.first_token_ms = int((time.time() - start_time) * 1000)
-                            result.reasoning_detected = True
-                            result.reasoning_text += val
-
-                    content_val = delta.get("content")
-                    if content_val:
-                        if result.first_token_ms is None:
-                            result.first_token_ms = int((time.time() - start_time) * 1000)
-                        events = inline_parser.feed(content_val)
-                        for evt_type, evt_text in events:
-                            if evt_type == CanonicalEventType.REASONING:
-                                result.reasoning_detected = True
-                                result.reasoning_text += evt_text
-                                result.inline_leak_detected = True
-                            elif evt_type == CanonicalEventType.FINAL:
-                                result.final_content += evt_text
-                            elif evt_type == CanonicalEventType.UNKNOWN:
-                                logger.debug("Unknown event quarantined")
-
-                    if delta.get("tool_calls"):
-                        logger.debug("Tool call delta detected, quarantined")
-
-                    usage = data.get("usage")
-                    if usage:
-                        result.prompt_tokens = usage.get("prompt_tokens", 0)
-                        result.completion_tokens = usage.get("completion_tokens", 0)
-                        result.reasoning_tokens = usage.get("reasoning_tokens", 0)
+                if stream:
+                    async for line in response.aiter_lines():
+                        if not line or line.startswith(":"):
+                            continue
+                        if line.startswith("data: "):
+                            line = line[6:]
+                        if line.strip() == "[DONE]":
+                            break
+                        try:
+                            data = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        _collect_openai_payload(
+                            data,
+                            result=result,
+                            inline_parser=inline_parser,
+                            start_time=start_time,
+                        )
+                else:
+                    await response.aread()
+                    _collect_openai_payload(
+                        response.json(),
+                        result=result,
+                        inline_parser=inline_parser,
+                        start_time=start_time,
+                    )
 
                 remaining = inline_parser.flush()
                 for evt_type, evt_text in remaining:
@@ -357,6 +375,9 @@ async def stream_completion_and_collect(
         return result
 
     result.final_content, inline_found = _strip_inline_reasoning(result.final_content)
+    if "\ufffd" in result.final_content:
+        logger.warning("Removed Unicode replacement marker from provider final content")
+        result.final_content = result.final_content.replace("\ufffd", "")
     if inline_found:
         result.inline_leak_detected = True
 
@@ -450,6 +471,7 @@ async def stream_with_retry(
             provider=use_provider,
             response_format=response_format,
             reasoning_mode=reasoning_mode,
+            stream=reasoning_mode != "disabled",
         )
         completed = datetime.now(timezone.utc)
         success = bool(result.final_content and not result.error)

@@ -72,6 +72,9 @@ async def test_qualification_retries_http_200_empty_responses():
     assert upstream.await_args_list[0].kwargs["reasoning_mode"] == "enabled"
     assert upstream.await_args_list[1].kwargs["reasoning_mode"] == "disabled"
     assert upstream.await_args_list[2].kwargs["reasoning_mode"] == "disabled"
+    assert upstream.await_args_list[0].kwargs["stream"] is True
+    assert upstream.await_args_list[1].kwargs["stream"] is False
+    assert upstream.await_args_list[2].kwargs["stream"] is False
 
 
 @pytest.mark.asyncio
@@ -187,6 +190,8 @@ async def test_glm_runtime_disables_thinking_after_reasoning_only_response():
     assert upstream.await_count == 2
     assert upstream.await_args_list[0].kwargs["reasoning_mode"] == "enabled"
     assert upstream.await_args_list[1].kwargs["reasoning_mode"] == "disabled"
+    assert upstream.await_args_list[0].kwargs["stream"] is True
+    assert upstream.await_args_list[1].kwargs["stream"] is False
 
 
 @pytest.mark.asyncio

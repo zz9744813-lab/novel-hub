@@ -408,7 +408,6 @@ async def _default_gateway(**kwargs):
     # Ability evidence is the one place that needs a deterministic no-thinking
     # DeepSeek request.  Keep the New API suffix out of lightweight health
     # probes so a channel that only advertises the base alias remains healthy.
-    request_model = _request_model(model, reasoning_mode=reasoning_mode)
     transient_errors = {
         "CONNECT_TIMEOUT",
         "empty_response",
@@ -426,6 +425,7 @@ async def _default_gateway(**kwargs):
     # unbounded retry loop. Every real upstream call remains auditable.
     result = None
     for attempt in range(1, 5):
+        request_model = _request_model(model, reasoning_mode=reasoning_mode)
         result = await stream_completion_and_collect(
             system_prompt=kwargs["system_prompt"],
             user_content=kwargs["user_content"],
@@ -445,6 +445,11 @@ async def _default_gateway(**kwargs):
         result.gateway_calls = attempt
         if result.error not in transient_errors:
             break
+        if is_glm and result.error in {"final_content_empty", "empty_response"}:
+            # The live relay can end GLM's reasoning stream without sending a
+            # final answer. Retry the same fixed benign case with thinking
+            # explicitly disabled, which is also the production retry shape.
+            reasoning_mode = "disabled"
         if attempt < 4:
             base_delay = 1 if result.error == "SPURIOUS_EVALUATION_REFUSAL" else 4
             await asyncio.sleep(float(base_delay * (2 ** (attempt - 1))))

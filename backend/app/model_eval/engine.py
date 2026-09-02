@@ -411,6 +411,7 @@ async def _default_gateway(**kwargs):
     request_model = _request_model(model, reasoning_mode=reasoning_mode)
     transient_errors = {
         "CONNECT_TIMEOUT",
+        "empty_response",
         "HTTP_429",
         "HTTP_500",
         "HTTP_502",
@@ -435,6 +436,8 @@ async def _default_gateway(**kwargs):
             provider=kwargs.get("provider"),
             reasoning_mode=reasoning_mode,
         )
+        if not result.error and not result.final_content.strip():
+            result.error = "empty_response"
         if not result.error and _is_spurious_evaluation_refusal(
             result.final_content
         ):

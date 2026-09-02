@@ -13,7 +13,7 @@ from copy import deepcopy
 # Ability prompts are versioned independently from the context ladder.  A
 # qualification-contract correction must not invalidate an already measured
 # 128K context profile (and trigger four unrelated long-context calls).
-SUITE_VERSION = "6"
+SUITE_VERSION = "7"
 CONTEXT_SUITE_VERSION = "2"
 PRODUCTION_ROLES = (
     "chapter_planner",
@@ -225,9 +225,10 @@ _SUITES: tuple[dict, ...] = (
                 "role": "draft_writer",
                 "category": "scene_execution",
                 "prompt_template": (
-                    "以姜遥单一限知视角写 180—260 字微场景。连续性：密函仍封口、桌边有新水痕。"
+                    "以姜遥单一限知视角写 220—280 字微场景。连续性：密函仍封口、桌边有新水痕。"
                     "必须出现动作‘擦去水痕’和‘把信封推回’，至少两句带引号对白，并用对白表现双方"
-                    "都在回避守夜人的去向。不得拆信，不得写陆简内心，不得使用‘突然意识到’或‘不由得’。"
+                    "都在回避守夜人的去向；对白中必须原样出现‘守夜人’和‘去向’。"
+                    "不得拆信，不得写陆简内心，不得使用‘突然意识到’或‘不由得’。"
                 ),
                 "expected_answer": "",
                 "grader_type": "draft_scene",
@@ -239,7 +240,7 @@ _SUITES: tuple[dict, ...] = (
                     "subtext_anchors": ["守夜人", "去哪", "去向", "没见"],
                     "forbidden_substrings": ["拆开密函", "打开密函", "陆简心想", "突然意识到", "不由得"],
                 },
-                "temperature": 0.25,
+                "temperature": 0.0,
                 "max_output_tokens": 700,
             },
             {
@@ -259,7 +260,7 @@ _SUITES: tuple[dict, ...] = (
                     "forbidden_knowledge": ["找到暗格", "暗格就在", "打开暗格"],
                     "requires_dialogue": True,
                 },
-                "temperature": 0.25,
+                "temperature": 0.0,
                 "max_output_tokens": 600,
             },
         ],

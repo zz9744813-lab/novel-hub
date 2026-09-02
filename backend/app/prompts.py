@@ -3,6 +3,8 @@ Per §附录A v7.3 spec.
 """
 import os as _os
 
+from app.model_autopilot.retired_models import normalize_production_model as _normalize_model
+
 PROMPTS = {
     "outline_parser": {
         "version": "v1",
@@ -219,23 +221,23 @@ attributions 只能从输入提供的 core_anchor_ids / belief_keys / goal_keys 
 }
 
 # Model assignment per agent
-# FIX: deepseek-ai/deepseek-v4-pro is too slow (>250s for chapter planning, often times out)
-# Switched to deepseek-v4-flash which returns valid JSON in ~18s.
-# Model names can be overridden via environment variables (PLANNER_MODEL, WRITER_MODEL, etc.)
-
+# Production default is the release-qualified GLM-5.2 route.  Exact retired
+# model ids in legacy environment files are normalized below so a missing
+# binding cannot silently recreate a route that the release gate rejected.
+# Other explicit model names remain valid overrides.
 _DEFAULT_MODELS = {
-    "outline_parser": "deepseek-v4-flash",
-    "blank_planner": "deepseek-v4-flash",
-    "chapter_planner": "deepseek-v4-flash",
-    "draft_writer": "stepfun-ai/step-3.7-flash",
-    "review_agent": "deepseek-v4-flash",
-    "local_rewrite_editor": "deepseek-v4-flash",
-    "state_extractor": "deepseek-v4-flash",
-    "drift_audit": "deepseek-v4-flash",
-    "query_planner": "deepseek-v4-flash",
-    "evidence_ranker": "deepseek-v4-flash",
-    "style_analyzer": "deepseek-v4-flash",
-    "memory_compiler": "deepseek-v4-flash",
+    "outline_parser": "glm-5.2",
+    "blank_planner": "glm-5.2",
+    "chapter_planner": "glm-5.2",
+    "draft_writer": "glm-5.2",
+    "review_agent": "glm-5.2",
+    "local_rewrite_editor": "glm-5.2",
+    "state_extractor": "glm-5.2",
+    "drift_audit": "glm-5.2",
+    "query_planner": "glm-5.2",
+    "evidence_ranker": "glm-5.2",
+    "style_analyzer": "glm-5.2",
+    "memory_compiler": "glm-5.2",
 }
 
 _ENV_MAP = {
@@ -254,7 +256,7 @@ _ENV_MAP = {
 }
 
 AGENT_MODELS = {
-    role: _os.environ.get(_ENV_MAP.get(role, ""), default)
+    role: _normalize_model(_os.environ.get(_ENV_MAP.get(role, ""), default))
     for role, default in _DEFAULT_MODELS.items()
 }
 

@@ -348,8 +348,11 @@ async def ensure_required_bindings():
     default_model = (
         os.environ.get("WRITER_MODEL")
         or os.environ.get("PLANNER_MODEL")
-        or "deepseek-v4-flash"
+        or "glm-5.2"
     )
+    from app.model_autopilot.retired_models import normalize_production_model
+
+    default_model = normalize_production_model(default_model) or "glm-5.2"
 
     roles = dict(AGENT_MODELS)
     for role in REQUIRED_ROLES:

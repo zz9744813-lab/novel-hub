@@ -4,10 +4,10 @@ import uuid
 import json
 import logging
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, update
+from sqlalchemy import select, update
 from app.gateway.model_gateway import stream_completion_and_collect
 from app.gateway.normalizer import normalize_json
-from app.models import OutlineVersion, OutlineNode, OutlineDependency, CharacterCard, WorldRule, PlotThread
+from app.models import OutlineVersion, OutlineNode, CharacterCard, WorldRule, PlotThread
 
 logger = logging.getLogger("novelforge.outline_parser")
 
@@ -31,8 +31,9 @@ async def parse_outline(
     thread_list = [{"id": str(t.id), "name": t.name, "status": t.status} for t in threads.scalars().all()]
 
     # Build LLM input
-    from app.prompts import PROMPTS
+    from app.prompts import AGENT_MODELS, PROMPTS
     prompt_config = PROMPTS["outline_parser"]
+    model = AGENT_MODELS["outline_parser"]
     user_content = json.dumps({
         "book_id": str(book_id),
         "outline_version": 1,
@@ -44,15 +45,16 @@ async def parse_outline(
     }, ensure_ascii=False)
 
     # Call LLM with extra logging
-    logger.warning(f"OUTLINE_PARSER: calling LLM model=deepseek-v4-flash, user_content_len={len(user_content)}")
-    print(f"OUTLINE_PARSER: calling LLM model=deepseek-v4-flash, user_content_len={len(user_content)}", flush=True)
+    logger.warning(f"OUTLINE_PARSER: calling LLM model={model}, user_content_len={len(user_content)}")
+    print(f"OUTLINE_PARSER: calling LLM model={model}, user_content_len={len(user_content)}", flush=True)
 
     result = await stream_completion_and_collect(
         system_prompt=prompt_config["system_prompt"],
         user_content=user_content,
-        model="deepseek-v4-flash",
+        model=model,
         temperature=0.1,
         max_tokens=16384,
+        reasoning_mode="disabled",
     )
 
     logger.warning(f"OUTLINE_PARSER: result error={result.error}, final_content_len={len(result.final_content)}, reasoning_len={len(result.reasoning_text)}, latency={result.latency_ms}ms")

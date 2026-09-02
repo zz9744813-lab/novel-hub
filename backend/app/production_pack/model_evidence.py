@@ -32,7 +32,7 @@ from .service import stable_id
 
 
 KNOWN_CONFIGURED_MODEL_ALIASES = {
-    ("new-api", "deepseek-v4-flash-free"): ("new-api", "deepseek-v4-flash"),
+    ("new-api", "deepseek-v4-flash-free"): ("new-api", "glm-5.2"),
     ("new-api", "z-ai/glm-5.2"): ("new-api", "glm-5.2"),
     ("openrouter", "z-ai/glm-5.2"): ("new-api", "glm-5.2"),
 }

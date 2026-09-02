@@ -85,6 +85,42 @@ async def test_configured_handshake_retries_transient_relay_errors_four_times():
         "HTTP_503",
         "HTTP_500",
     ]
+    assert {
+        call.kwargs["max_tokens"] for call in gateway.await_args_list
+    } == {2048}
+    assert {
+        call.kwargs["reasoning_mode"] for call in gateway.await_args_list
+    } == {"enabled"}
+
+
+@pytest.mark.asyncio
+async def test_configured_handshake_retries_http_200_empty_text_output():
+    catalog = SimpleNamespace(
+        id=uuid.uuid4(),
+        model_id="glm-5.2",
+        provider="new-api",
+    )
+    gateway = AsyncMock(
+        side_effect=[
+            StreamResult(),
+            StreamResult(final_content="OK"),
+        ]
+    )
+
+    with (
+        patch(
+            "app.model_autopilot.probe.stream_completion_and_collect",
+            gateway,
+        ),
+        patch("app.model_autopilot.probe.asyncio.sleep", new_callable=AsyncMock),
+    ):
+        result = await probe_model_ping(None, catalog, allow_reasoning_retry=True)
+
+    assert result.status == "ok"
+    assert gateway.await_count == 2
+    assert result.detail_json["attempt_count"] == 2
+    assert result.detail_json["first_error"] == "empty_text_output"
+    assert result.detail_json["error_history"] == ["empty_text_output"]
 
 
 @pytest.mark.asyncio

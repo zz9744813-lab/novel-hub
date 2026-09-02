@@ -581,24 +581,40 @@ async def _claim_run(
     return None
 
 
-async def _cancel_requested(db: AsyncSession, run: ModelEvalRun) -> bool:
-    # ``refresh`` starts a transaction.  A model request can legitimately take
-    # longer than PostgreSQL's ``idle_in_transaction_session_timeout``; leaving
-    # this read transaction open while the gateway runs makes PostgreSQL kill
-    # the connection and the eventual evidence commit fail with
-    # PendingRollbackError.  Capture the last known value, then always finish
-    # (or roll back) the tiny polling transaction before network I/O resumes.
-    cancelled = bool(run.cancel_requested)
-    refresh = getattr(db, "refresh", None)
-    if refresh is not None:
+async def _read_cancel_requested(db: AsyncSession, run_id: uuid.UUID) -> bool:
+    run = (
+        await db.execute(select(ModelEvalRun).where(ModelEvalRun.id == run_id))
+    ).scalar_one_or_none()
+    return bool(run and run.cancel_requested)
+
+
+async def _cancel_requested(db: AsyncSession, run_id: uuid.UUID) -> bool:
+    """Poll cancellation without touching the long-lived evaluator session.
+
+    A failed refresh/rollback on the evaluator session expires every ORM object
+    in its identity map.  Reading one of those attributes later then performs
+    implicit I/O outside SQLAlchemy's async greenlet and raises
+    ``MissingGreenlet``.  Real AsyncSession callers therefore use a separate,
+    short-lived session; the lightweight in-memory test session keeps the same
+    explicit commit/rollback contract.
+    """
+
+    if isinstance(db, AsyncSession):
+        from app.database import async_session_factory
+
         try:
-            await refresh(run, attribute_names=["cancel_requested"])
-            cancelled = bool(run.cancel_requested)
-            await db.commit()
-            return cancelled
+            async with async_session_factory() as poll_db:
+                return await _read_cancel_requested(poll_db, run_id)
         except Exception:
-            await db.rollback()
-    return cancelled
+            return False
+
+    try:
+        cancelled = await _read_cancel_requested(db, run_id)
+        await db.commit()
+        return cancelled
+    except Exception:
+        await db.rollback()
+        return False
 
 
 async def _persist_case_results(
@@ -988,6 +1004,7 @@ async def run_qualification(
 
     run.reuse_reason = decision.reason
     run.triggered_by = "force" if force else decision.reason
+    run_id = run.id
     claimed_by = await _claim_run(
         db,
         catalog_id=catalog.id,
@@ -1014,7 +1031,7 @@ async def run_qualification(
             prior=prior,
             force=force,
             endpoint_identity_hash=endpoint_hash,
-            cancel_check=lambda: _cancel_requested(db, run),
+            cancel_check=lambda: _cancel_requested(db, run_id),
         )
     except Exception as exc:
         result = {
@@ -1289,6 +1306,7 @@ async def run_context_ladder(
 
     run.reuse_reason = decision.reason
     run.triggered_by = "force" if force else decision.reason
+    run_id = run.id
     claimed_by = await _claim_run(
         db,
         catalog_id=catalog.id,
@@ -1316,7 +1334,7 @@ async def run_context_ladder(
             force=force,
             declared_context_window=declared,
             endpoint_identity_hash=endpoint_hash,
-            cancel_check=lambda: _cancel_requested(db, run),
+            cancel_check=lambda: _cancel_requested(db, run_id),
         )
     except Exception as exc:
         result = {

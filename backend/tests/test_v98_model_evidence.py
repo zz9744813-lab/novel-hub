@@ -1468,8 +1468,9 @@ async def test_cancel_poll_closes_read_transaction_before_slow_gateway():
             super().__init__()
             self.read_transaction_open = False
 
-        async def refresh(self, instance, attribute_names=None):
+        async def execute(self, stmt):
             self.read_transaction_open = True
+            return await super().execute(stmt)
 
         async def commit(self):
             await super().commit()
@@ -1501,46 +1502,32 @@ async def test_cancel_poll_closes_read_transaction_before_slow_gateway():
 
 
 @pytest.mark.asyncio
-async def test_cancel_poll_rolls_back_poisoned_session_before_failure_persistence():
-    class PoisonedRefreshSession(FakeAsyncSession):
-        def __init__(self):
-            super().__init__()
-            self.pending_rollback = False
-            self.rollbacks = 0
+async def test_cancel_poll_isolates_real_async_session_identity_map():
+    from unittest.mock import AsyncMock, patch
 
-        async def refresh(self, instance, attribute_names=None):
-            self.pending_rollback = True
-            raise RuntimeError("connection terminated by idle transaction timeout")
+    from sqlalchemy.ext.asyncio import AsyncSession
 
-        async def commit(self):
-            if self.pending_rollback:
-                raise RuntimeError("PendingRollbackError")
-            await super().commit()
+    from app.model_eval.engine import _cancel_requested
 
-        async def rollback(self):
-            self.rollbacks += 1
-            self.pending_rollback = False
-            await super().rollback()
+    run = make_run(cancel_requested=True)
+    poll_db = FakeAsyncSession()
+    poll_db._table(ModelEvalRun).append(run)
+    evaluator_db = AsyncMock(spec=AsyncSession)
 
-    db = PoisonedRefreshSession()
-    cat = make_catalog()
-    db._table(ModelCatalog).append(cat)
-    run = make_run(catalog=cat)
-    db._table(ModelEvalRun).append(run)
-    await db.commit()
+    class PollContext:
+        async def __aenter__(self):
+            return poll_db
 
-    async def reasoning_only(**kwargs):
-        return "", "final_content_empty"
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
 
-    result = await run_qualification(db, run, gateway=reasoning_only, force=True)
+    with patch("app.database.async_session_factory", return_value=PollContext()):
+        cancelled = await _cancel_requested(evaluator_db, run.id)
 
-    assert result["status"] == "failed"
-    assert result["error"] == "final_content_empty"
-    assert result["gateway_calls"] == 1
-    assert db.rollbacks == 1
-    assert not db.pending_rollback
-    assert run.result_summary["error"] == "final_content_empty"
-    await db.commit()  # the caller can continue using the session
+    assert cancelled is True
+    evaluator_db.execute.assert_not_awaited()
+    evaluator_db.commit.assert_not_awaited()
+    evaluator_db.rollback.assert_not_awaited()
 
 
 # ═══════════════════════════════════════════════════════════════════════

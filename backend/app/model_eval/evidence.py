@@ -838,6 +838,7 @@ async def _invoke_gateway(gateway: Callable, **kwargs) -> tuple[str, str | None,
         content = getattr(raw, "final_content", "")
         error = getattr(raw, "error", None)
         for key in (
+            "gateway_calls",
             "prompt_tokens",
             "completion_tokens",
             "latency_ms",
@@ -969,7 +970,7 @@ async def run_qualification_core(
                 max_tokens=int(case.get("max_output_tokens") or 512),
                 provider=catalog.get("provider", ""),
             )
-            gateway_calls += 1
+            gateway_calls += max(1, int(metrics.get("gateway_calls") or 1))
             score, detail = grade_response(case, content) if not error else (0.0, {"error": error})
             role = case.get("role") or target_role
             case_passed = not error and score >= suite_threshold
@@ -988,6 +989,7 @@ async def run_qualification_core(
                     "grader_detail": detail,
                     "error_code": error,
                     "response_hash": _sha256(content),
+                    "response_preview": content[:1200],
                     "latency_ms": metrics.get("latency_ms"),
                     "first_token_ms": metrics.get("first_token_ms"),
                     "provider_prompt_tokens": metrics.get("prompt_tokens"),
@@ -1265,7 +1267,7 @@ async def run_context_ladder_core(
             max_tokens=256,
             provider=catalog.get("provider", ""),
         )
-        gateway_calls += 1
+        gateway_calls += max(1, int(metrics.get("gateway_calls") or 1))
         response_hash = _sha256(content)
         if error:
             rung_results[rung] = {

@@ -121,6 +121,40 @@ async def test_configured_handshake_retries_http_200_empty_text_output():
     assert result.detail_json["attempt_count"] == 2
     assert result.detail_json["first_error"] == "empty_text_output"
     assert result.detail_json["error_history"] == ["empty_text_output"]
+    assert gateway.await_args_list[0].kwargs["reasoning_mode"] == "enabled"
+    assert gateway.await_args_list[0].kwargs["stream"] is True
+    assert gateway.await_args_list[1].kwargs["reasoning_mode"] == "disabled"
+    assert gateway.await_args_list[1].kwargs["stream"] is False
+
+
+@pytest.mark.asyncio
+async def test_configured_handshake_retries_gateway_empty_response_nonstreaming():
+    catalog = SimpleNamespace(
+        id=uuid.uuid4(),
+        model_id="glm-5.2",
+        provider="new-api",
+    )
+    gateway = AsyncMock(
+        side_effect=[
+            StreamResult(error="empty_response"),
+            StreamResult(final_content="OK"),
+        ]
+    )
+
+    with (
+        patch(
+            "app.model_autopilot.probe.stream_completion_and_collect",
+            gateway,
+        ),
+        patch("app.model_autopilot.probe.asyncio.sleep", new_callable=AsyncMock),
+    ):
+        result = await probe_model_ping(None, catalog, allow_reasoning_retry=True)
+
+    assert result.status == "ok"
+    assert result.detail_json["error_history"] == ["empty_response"]
+    assert gateway.await_args_list[0].kwargs["stream"] is True
+    assert gateway.await_args_list[1].kwargs["reasoning_mode"] == "disabled"
+    assert gateway.await_args_list[1].kwargs["stream"] is False
 
 
 @pytest.mark.asyncio

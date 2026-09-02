@@ -100,7 +100,9 @@ async def probe_model_ping(
     try:
         transient_errors = {
             "CONNECT_TIMEOUT",
+            "empty_response",
             "empty_text_output",
+            "final_content_empty",
             "HTTP_429",
             "HTTP_500",
             "HTTP_502",
@@ -115,6 +117,7 @@ async def probe_model_ping(
         )
         use_handshake_budget = configured_glm
         reasoning_mode = "enabled" if configured_glm else "disabled"
+        use_stream = True
         adaptive_retry = False
         error_history: list[str] = []
         first_error = None
@@ -139,6 +142,7 @@ async def probe_model_ping(
                 provider=catalog.provider,
                 reasoning_mode=reasoning_mode,
                 read_timeout_seconds=_health_probe_read_timeout(),
+                stream=use_stream,
             )
             if not result.error and not result.final_content.strip():
                 result.error = "empty_text_output"
@@ -149,9 +153,16 @@ async def probe_model_ping(
                 error_history.append(result.error)
             if not allow_reasoning_retry or not result.error:
                 break
-            if result.error == "final_content_empty":
+            if result.error in {
+                "empty_response",
+                "empty_text_output",
+                "final_content_empty",
+            }:
                 adaptive_retry = True
                 use_handshake_budget = True
+                if configured_glm:
+                    reasoning_mode = "disabled"
+                    use_stream = False
                 continue
             if result.error not in transient_errors or attempt >= max_attempts:
                 break

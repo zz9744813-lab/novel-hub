@@ -13,7 +13,7 @@ from copy import deepcopy
 # Ability prompts are versioned independently from the context ladder.  A
 # qualification-contract correction must not invalidate an already measured
 # 128K context profile (and trigger four unrelated long-context calls).
-SUITE_VERSION = "4"
+SUITE_VERSION = "5"
 CONTEXT_SUITE_VERSION = "2"
 PRODUCTION_ROLES = (
     "chapter_planner",
@@ -70,9 +70,10 @@ _SUITES: tuple[dict, ...] = (
                     "被人取走；今晨青印仍在室内；外侧门封完好，但内门已经开启。请判断最"
                     "合理的进入路径，并只输出 JSON。outcome 只能从 inside_access_required"
                     "（必须有室内进入）或 outside_entry_supported（证据支持从外侧进入）中选择；"
-                    "chain 必须按因果顺序使用以下三个事实代码且不得翻译（下列说明顺序已打乱）："
-                    "opened_from_inside（从内侧开启）、white_token_removed（白签被取走）、"
-                    'seal_intact（外侧门封完好）。格式：{"outcome":"...",'
+                    "事件链定义为：先有 white_token_removed（白签被取走），再由 seal_intact"
+                    "（外侧门封完好）排除外侧进入，最终推出 opened_from_inside（从内侧开启）。"
+                    "chain 必须严格按上述因果顺序使用这三个事实代码且不得翻译。格式："
+                    '{"outcome":"...",'
                     '"chain":["...","...","..."]}。'
                 ),
                 "expected_answer": (
@@ -116,6 +117,8 @@ _SUITES: tuple[dict, ...] = (
                 "prompt_template": (
                     "事实：林澈独自把钥匙藏进北柜；顾禾在此之前离开，之后无人告诉顾禾。"
                     "问顾禾是否知道钥匙的确切位置。"
+                    "may_infer 仅表示顾禾能否从自己已知的现有事实推断出钥匙的确切位置；"
+                    "不能把读者知道的叙述事实算作顾禾知道。"
                     '只输出 JSON：{"answer":"known或unknown","may_infer":true或false}。'
                 ),
                 "expected_answer": '{"answer":"unknown","may_infer":false}',

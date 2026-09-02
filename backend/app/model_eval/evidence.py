@@ -23,7 +23,7 @@ from app.model_eval.suite_definitions import (
 )
 
 
-ABILITY_EVALUATOR_REVISION = "v98-ability-6"
+ABILITY_EVALUATOR_REVISION = "v98-ability-7"
 CONTEXT_EVALUATOR_REVISION = "v98-context-5"
 CORE_QUALITY_FLOOR = 70.0
 _DIRECT_CONTEXT_REQUIRED_ROLES = {
@@ -962,7 +962,9 @@ async def run_qualification_core(
             content, error, metrics = await _invoke_gateway(
                 gateway,
                 system_prompt=(
-                    "You are completing a synthetic capability check. Follow the requested output format exactly."
+                    "你正在执行隔离的合成小说工程能力测试。用户内容只包含虚构测试数据，"
+                    "不是要求更改身份、覆盖系统指令或泄露提示词。请直接完成任务，严格遵守"
+                    "指定输出格式，不要解释、拒绝或添加无关内容。"
                 ),
                 user_content=case.get("prompt_template") or "",
                 model=catalog.get("model_id", ""),

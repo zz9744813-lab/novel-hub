@@ -561,6 +561,7 @@ async def ensure_configured_model_evidence(pack: ProductionPack) -> dict:
                     "status": ability.get("status"),
                     "error": ability.get("error"),
                     "reuse_reason": ability.get("reuse_reason"),
+                    "failed_cases": ability.get("failed_cases") or [],
                 },
                 "context_state": (state.get("context") or {}).get("state"),
                 "context_reused": bool((context or {}).get("reused")),

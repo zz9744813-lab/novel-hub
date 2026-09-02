@@ -55,6 +55,7 @@ class StreamResult:
     successful_attempt_no: int | None = None
     first_token_ms: int | None = None  # v9.6: measured TTFT, never latency/2
     finish_reason: str | None = None
+    gateway_calls: int = 1
     attempts: list[AttemptRecord] = field(default_factory=list)
 
 

@@ -378,7 +378,7 @@ async def _default_gateway(**kwargs):
     # DeepSeek request.  Keep the New API suffix out of lightweight health
     # probes so a channel that only advertises the base alias remains healthy.
     request_model = _request_model(model, reasoning_mode="disabled")
-    return await stream_completion_and_collect(
+    result = await stream_completion_and_collect(
         system_prompt=kwargs["system_prompt"],
         user_content=kwargs["user_content"],
         model=request_model,
@@ -388,6 +388,29 @@ async def _default_gateway(**kwargs):
         provider=kwargs.get("provider"),
         reasoning_mode="disabled",
     )
+    # A one-time qualification must not be invalidated by one transient relay
+    # failure. Retry server/rate/connectivity failures exactly once and expose
+    # the real upstream attempt count to the immutable evidence record.
+    if result.error in {
+        "CONNECT_TIMEOUT",
+        "HTTP_429",
+        "HTTP_500",
+        "HTTP_502",
+        "HTTP_503",
+        "HTTP_504",
+    }:
+        result = await stream_completion_and_collect(
+            system_prompt=kwargs["system_prompt"],
+            user_content=kwargs["user_content"],
+            model=request_model,
+            temperature=kwargs.get("temperature", 0),
+            max_tokens=max_tokens,
+            provider_role="primary",
+            provider=kwargs.get("provider"),
+            reasoning_mode="disabled",
+        )
+        result.gateway_calls = 2
+    return result
 
 
 def _latest(rows: list[ModelEvalRun]) -> ModelEvalRun | None:
@@ -637,7 +660,26 @@ def _ability_prior(run: ModelEvalRun | None) -> dict | None:
         "overall": run.overall_score,
         "roles": summary.get("roles") or summary.get("role_scores") or {},
         "level": summary.get("level") or "none",
+        "failed_cases": summary.get("failed_cases") or [],
     }
+
+
+def _failed_case_diagnostics(results: list[dict]) -> list[dict]:
+    """Return bounded diagnostics for synthetic failed qualification cases."""
+
+    return [
+        {
+            "case_key": item.get("case_key"),
+            "role": item.get("role"),
+            "score": item.get("score"),
+            "error_code": item.get("error_code"),
+            "grader_detail": item.get("grader_detail") or {},
+            "response_preview": str(item.get("response_preview") or "")[:1200],
+            "latency_ms": item.get("latency_ms"),
+        }
+        for item in results
+        if not item.get("passed")
+    ]
 
 
 def _context_prior(run: ModelEvalRun | None) -> dict | None:
@@ -760,6 +802,7 @@ async def run_qualification(
             "overall": prior_run.overall_score,
             "roles": roles,
             "level": level,
+            "failed_cases": (prior_run.result_summary or {}).get("failed_cases") or [],
         }
         catalog.ability_evaluation_key = evaluation_key
         catalog.ability_identity_hash = identity
@@ -791,6 +834,7 @@ async def run_qualification(
             "evaluator_revision": ABILITY_EVALUATOR_REVISION,
             "gateway_calls": 0,
             "triggered_by": "cache_hit",
+            "failed_cases": (prior_run.result_summary or {}).get("failed_cases") or [],
         }
 
     # v6 changes only the aggregation of already persisted deterministic case
@@ -860,6 +904,7 @@ async def run_qualification(
             "qualified_roles": qualified_roles,
             "level": level,
             "case_count": len(prior_cases),
+            "failed_cases": prior_summary.get("failed_cases") or [],
         }
         catalog.ability_evaluation_key = evaluation_key
         catalog.ability_identity_hash = identity
@@ -899,6 +944,7 @@ async def run_qualification(
             "evaluator_revision": ABILITY_EVALUATOR_REVISION,
             "gateway_calls": 0,
             "triggered_by": "evaluator_aggregation",
+            "failed_cases": prior_summary.get("failed_cases") or [],
         }
 
     run.reuse_reason = decision.reason
@@ -947,7 +993,9 @@ async def run_qualification(
             "triggered_by": "force" if force else decision.reason,
         }
 
-    await _persist_case_results(db, run=run, suites=suites, results=result.get("case_results") or [])
+    case_results = result.get("case_results") or []
+    failed_cases = _failed_case_diagnostics(case_results)
+    await _persist_case_results(db, run=run, suites=suites, results=case_results)
     now = datetime.now(timezone.utc)
     run.status = result["status"]
     run.finished_at = now
@@ -965,6 +1013,7 @@ async def run_qualification(
         "qualified_roles": result.get("qualified_roles") or [],
         "level": result.get("level") or "none",
         "case_count": len(result.get("case_results") or []),
+        "failed_cases": failed_cases,
     }
     if result["status"] == "succeeded" and result.get("execution_complete"):
         run.ability_source_run_id = None
@@ -998,6 +1047,7 @@ async def run_qualification(
     result["identity_hash"] = identity
     result["suite_hash"] = suite_hash
     result["evaluator_revision"] = ABILITY_EVALUATOR_REVISION
+    result["failed_cases"] = failed_cases
     result.pop("case_results", None)
     await db.commit()
     return result

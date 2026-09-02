@@ -6,6 +6,7 @@ probes live in ``model_autopilot`` and never call this evaluator.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -378,27 +379,21 @@ async def _default_gateway(**kwargs):
     # DeepSeek request.  Keep the New API suffix out of lightweight health
     # probes so a channel that only advertises the base alias remains healthy.
     request_model = _request_model(model, reasoning_mode="disabled")
-    result = await stream_completion_and_collect(
-        system_prompt=kwargs["system_prompt"],
-        user_content=kwargs["user_content"],
-        model=request_model,
-        temperature=kwargs.get("temperature", 0),
-        max_tokens=max_tokens,
-        provider_role="primary",
-        provider=kwargs.get("provider"),
-        reasoning_mode="disabled",
-    )
-    # A one-time qualification must not be invalidated by one transient relay
-    # failure. Retry server/rate/connectivity failures exactly once and expose
-    # the real upstream attempt count to the immutable evidence record.
-    if result.error in {
+    transient_errors = {
         "CONNECT_TIMEOUT",
         "HTTP_429",
         "HTTP_500",
         "HTTP_502",
         "HTTP_503",
         "HTTP_504",
-    }:
+    }
+    # A one-time qualification must not be invalidated by one unhealthy relay
+    # channel. The live New API pool has returned healthy pings immediately
+    # followed by two sub-second 500s for the same GLM request. Three bounded
+    # attempts cross that channel pool without turning the gate into an
+    # unbounded retry loop. Every real upstream call remains auditable.
+    result = None
+    for attempt in range(1, 4):
         result = await stream_completion_and_collect(
             system_prompt=kwargs["system_prompt"],
             user_content=kwargs["user_content"],
@@ -409,7 +404,12 @@ async def _default_gateway(**kwargs):
             provider=kwargs.get("provider"),
             reasoning_mode="disabled",
         )
-        result.gateway_calls = 2
+        result.gateway_calls = attempt
+        if result.error not in transient_errors:
+            break
+        if attempt < 3:
+            await asyncio.sleep(float(2 ** (attempt - 1)))
+    assert result is not None
     return result
 
 

@@ -4,15 +4,16 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.gateway.model_gateway import StreamResult
+from app.gateway.model_gateway import StreamResult, stream_with_retry
 from app.model_eval.engine import _default_gateway, _failed_case_diagnostics
 from app.model_eval.evidence import run_qualification_core
 
 
 @pytest.mark.asyncio
-async def test_qualification_retries_one_transient_failure_and_counts_both_calls():
+async def test_qualification_retries_transient_failures_and_counts_all_calls():
     upstream = AsyncMock(
         side_effect=[
+            StreamResult(error="HTTP_500"),
             StreamResult(error="HTTP_500"),
             StreamResult(final_content='{"ok":true}'),
         ]
@@ -30,9 +31,37 @@ async def test_qualification_retries_one_transient_failure_and_counts_both_calls
             temperature=0,
         )
 
-    assert upstream.await_count == 2
+    assert upstream.await_count == 3
     assert result.error is None
-    assert result.gateway_calls == 2
+    assert result.gateway_calls == 3
+
+
+@pytest.mark.asyncio
+async def test_runtime_without_fallback_has_three_bounded_primary_attempts():
+    upstream = AsyncMock(
+        side_effect=[
+            StreamResult(error="HTTP_500"),
+            StreamResult(error="HTTP_500"),
+            StreamResult(error="HTTP_500"),
+        ]
+    )
+    with (
+        patch(
+            "app.gateway.model_gateway.stream_completion_and_collect",
+            upstream,
+        ),
+        patch("app.gateway.model_gateway.asyncio.sleep", new_callable=AsyncMock),
+    ):
+        result = await stream_with_retry(
+            system_prompt="system",
+            user_content="case",
+            model="glm-5.2",
+            provider="new-api",
+        )
+
+    assert upstream.await_count == 3
+    assert result.error == "HTTP_500"
+    assert [item.attempt_no for item in result.attempts] == [1, 2, 3]
 
 
 @pytest.mark.asyncio

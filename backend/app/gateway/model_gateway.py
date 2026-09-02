@@ -390,7 +390,8 @@ async def stream_with_retry(
     """§11.11 + P0-05 + v9.5 §49–§51: fallback list with full AttemptRecord audit.
 
     Default attempt order (spec §50):
-      Attempt 1 Primary → Attempt 2 Primary Retry → Attempt 3 Fallback 1 → Attempt 4 Fallback 2
+      With fallbacks: Primary → Primary Retry → Fallback 1 → Fallback 2.
+      Without fallbacks: Primary → Primary Retry 1 → Primary Retry 2.
     `fallbacks` is a list of {"model", "provider"} targets; the legacy
     `fallback_model`/`fallback_provider` args map onto that list for compat.
     """
@@ -408,6 +409,8 @@ async def stream_with_retry(
         (model, provider, "primary"),
         (model, provider, "retry"),
     ]
+    if not fallbacks:
+        route.append((model, provider, "retry"))
     for fb in fallbacks[:2]:
         route.append((fb.get("model") or model, fb.get("provider") or provider, "fallback"))
 
@@ -468,7 +471,15 @@ async def stream_with_retry(
             break
 
         # rate-limit / transient: backoff before next attempt
-        if result.error in {"HTTP_429", "HTTP_503", "HTTP_502", "HTTP_504", "READ_TIMEOUT"}:
+        if result.error in {
+            "CONNECT_TIMEOUT",
+            "HTTP_429",
+            "HTTP_500",
+            "HTTP_502",
+            "HTTP_503",
+            "HTTP_504",
+            "READ_TIMEOUT",
+        }:
             delay = min(45.0, 4.0 * (2 ** (attempt - 1)))
             logger.warning("Backoff %.1fs after %s (attempt %s)", delay, result.error, attempt)
             await asyncio.sleep(delay)

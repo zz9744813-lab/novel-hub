@@ -100,6 +100,7 @@ async def probe_model_ping(
     try:
         transient_errors = {
             "CONNECT_TIMEOUT",
+            "empty_text_output",
             "HTTP_429",
             "HTTP_500",
             "HTTP_502",
@@ -107,7 +108,13 @@ async def probe_model_ping(
             "HTTP_504",
         }
         max_attempts = 4 if allow_reasoning_retry else 1
-        use_handshake_budget = False
+        normalized_model = str(catalog.model_id or "").strip().casefold()
+        configured_glm = allow_reasoning_retry and (
+            normalized_model.startswith("glm-")
+            or "/glm-" in normalized_model
+        )
+        use_handshake_budget = configured_glm
+        reasoning_mode = "enabled" if configured_glm else "disabled"
         adaptive_retry = False
         error_history: list[str] = []
         first_error = None
@@ -130,9 +137,11 @@ async def probe_model_ping(
                 ),
                 provider_role="primary",
                 provider=catalog.provider,
-                reasoning_mode="disabled",
+                reasoning_mode=reasoning_mode,
                 read_timeout_seconds=_health_probe_read_timeout(),
             )
+            if not result.error and not result.final_content.strip():
+                result.error = "empty_text_output"
             if attempt == 1:
                 first_error = result.error
                 first_finish_reason = result.finish_reason

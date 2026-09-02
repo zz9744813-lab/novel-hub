@@ -13,7 +13,7 @@ from copy import deepcopy
 # Ability prompts are versioned independently from the context ladder.  A
 # qualification-contract correction must not invalidate an already measured
 # 128K context profile (and trigger four unrelated long-context calls).
-SUITE_VERSION = "3"
+SUITE_VERSION = "4"
 CONTEXT_SUITE_VERSION = "2"
 PRODUCTION_ROLES = (
     "chapter_planner",
@@ -149,7 +149,10 @@ _SUITES: tuple[dict, ...] = (
                     "本章约束：先发现湿脚印，再核对门锁，最后才可怀疑守夜人；"
                     "守夜人本章不得认罪，主角不得打开密函。生成恰好 3 个 SceneContract。"
                     "只输出 JSON 数组；每项含 scene_type、goal、required_beats、forbidden_beats、"
-                    "knowledge_delta、exit_state。"
+                    "knowledge_delta、exit_state。required_beats 必须按场景顺序分别包含且不得翻译"
+                    "以下代码：wet_footprints_found、door_lock_checked、night_watchman_suspected。"
+                    "forbidden_beats 合计必须包含且不得翻译：night_watchman_confesses、"
+                    "secret_letter_opened。"
                 ),
                 "expected_answer": "",
                 "grader_type": "scene_contract",
@@ -159,9 +162,19 @@ _SUITES: tuple[dict, ...] = (
                         "scene_type", "goal", "required_beats", "forbidden_beats",
                         "knowledge_delta", "exit_state",
                     ],
-                    "required_order": ["湿脚印", "核对门锁", "怀疑守夜人"],
-                    "forbidden_substrings": ["守夜人认罪", "打开密函", "拆开密函"],
-                    "required_forbidden_anchors": ["认罪", "密函"],
+                    "required_order": [
+                        "wet_footprints_found",
+                        "door_lock_checked",
+                        "night_watchman_suspected",
+                    ],
+                    "forbidden_substrings": [
+                        "night_watchman_confesses",
+                        "secret_letter_opened",
+                    ],
+                    "required_forbidden_anchors": [
+                        "night_watchman_confesses",
+                        "secret_letter_opened",
+                    ],
                 },
                 "temperature": 0.1,
                 "max_output_tokens": 900,

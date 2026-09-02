@@ -306,12 +306,12 @@ def _defined_case(case_key: str) -> dict:
     raise AssertionError(f"missing synthetic case: {case_key}")
 
 
-def test_v3_ability_contract_exposes_every_machine_graded_label_without_invalidating_context():
+def test_v4_ability_contract_exposes_every_machine_graded_label_without_invalidating_context():
     definitions = v98_suite_definitions()
     ability = [suite for suite in definitions if suite["mode"] == "qualification"]
     context = [suite for suite in definitions if suite["mode"] == "context_ladder"]
-    assert SUITE_VERSION == "3"
-    assert {suite["version"] for suite in ability} == {"3"}
+    assert SUITE_VERSION == "4"
+    assert {suite["version"] for suite in ability} == {"4"}
     assert CONTEXT_SUITE_VERSION == "2"
     assert {suite["version"] for suite in context} == {"2"}
     assert {case["case_version"] for suite in context for case in suite["cases"]} == {"2"}
@@ -324,6 +324,13 @@ def test_v3_ability_contract_exposes_every_machine_graded_label_without_invalida
             "opened_from_inside",
         ],
         "core-counterfactual-v2": ["blue_seal", "white_token"],
+        "planner-contract-chain-v2": [
+            "wet_footprints_found",
+            "door_lock_checked",
+            "night_watchman_suspected",
+            "night_watchman_confesses",
+            "secret_letter_opened",
+        ],
         "state-event-delta-v2": ["door", "open", "lamp", "off", "door_opened", "lamp_extinguished"],
         "style-metrics-v2": ["third_limited", "short", "low"],
         "style-consistency-v2": ["pov", "sentence_length"],
@@ -333,7 +340,7 @@ def test_v3_ability_contract_exposes_every_machine_graded_label_without_invalida
         assert all(label in prompt for label in labels), case_key
 
 
-def test_every_v3_ability_case_has_a_contract_compliant_passing_response():
+def test_every_v4_ability_case_has_a_contract_compliant_passing_response():
     responses = {
         "core-causal-chain-v2": (
             '{"outcome":"inside_access_required","chain":['
@@ -346,12 +353,12 @@ def test_every_v3_ability_case_has_a_contract_compliant_passing_response():
             '{"answer":"unknown","may_infer":false}'
         ),
         "planner-contract-chain-v2": """[
-          {"scene_type":"发现","goal":"发现湿脚印","required_beats":["发现湿脚印"],
-           "forbidden_beats":["守夜人认罪","打开密函"],"knowledge_delta":[],"exit_state":"留下疑问"},
-          {"scene_type":"核验","goal":"核对门锁","required_beats":["核对门锁"],
-           "forbidden_beats":["守夜人认罪","打开密函"],"knowledge_delta":[],"exit_state":"锁况明确"},
-          {"scene_type":"推断","goal":"怀疑守夜人","required_beats":["怀疑守夜人"],
-           "forbidden_beats":["守夜人认罪","打开密函"],"knowledge_delta":[],"exit_state":"嫌疑成立"}
+          {"scene_type":"发现","goal":"发现湿脚印","required_beats":["wet_footprints_found"],
+           "forbidden_beats":["night_watchman_confesses","secret_letter_opened"],"knowledge_delta":[],"exit_state":"留下疑问"},
+          {"scene_type":"核验","goal":"核对门锁","required_beats":["door_lock_checked"],
+           "forbidden_beats":["night_watchman_confesses","secret_letter_opened"],"knowledge_delta":[],"exit_state":"锁况明确"},
+          {"scene_type":"推断","goal":"怀疑守夜人","required_beats":["night_watchman_suspected"],
+           "forbidden_beats":["night_watchman_confesses","secret_letter_opened"],"knowledge_delta":[],"exit_state":"嫌疑成立"}
         ]""",
         "planner-knowledge-delta-v2": (
             '{"姜遥":{"can":["依据水痕检查柜门"],"cannot":[]},'
@@ -414,12 +421,12 @@ def test_every_v3_ability_case_has_a_contract_compliant_passing_response():
 def test_scene_contract_records_prohibitions_without_being_penalized_as_violations():
     case = _defined_case("planner-contract-chain-v2")
     response = """[
-      {"scene_type":"发现","goal":"发现湿脚印","required_beats":["发现湿脚印"],
-       "forbidden_beats":["守夜人认罪","打开密函"],"knowledge_delta":[],"exit_state":"留下疑问"},
-      {"scene_type":"核验","goal":"核对门锁","required_beats":["核对门锁"],
-       "forbidden_beats":["守夜人认罪","打开密函"],"knowledge_delta":[],"exit_state":"锁况明确"},
-      {"scene_type":"推断","goal":"怀疑守夜人","required_beats":["怀疑守夜人"],
-       "forbidden_beats":["守夜人认罪","打开密函"],"knowledge_delta":[],"exit_state":"嫌疑成立"}
+      {"scene_type":"发现","goal":"发现湿脚印","required_beats":["wet_footprints_found"],
+       "forbidden_beats":["night_watchman_confesses","secret_letter_opened"],"knowledge_delta":[],"exit_state":"留下疑问"},
+      {"scene_type":"核验","goal":"核对门锁","required_beats":["door_lock_checked"],
+       "forbidden_beats":["night_watchman_confesses","secret_letter_opened"],"knowledge_delta":[],"exit_state":"锁况明确"},
+      {"scene_type":"推断","goal":"怀疑守夜人","required_beats":["night_watchman_suspected"],
+       "forbidden_beats":["night_watchman_confesses","secret_letter_opened"],"knowledge_delta":[],"exit_state":"嫌疑成立"}
     ]"""
     score, detail = grade_response(case, response)
     assert score == 100.0
@@ -430,16 +437,16 @@ def test_scene_contract_records_prohibitions_without_being_penalized_as_violatio
 def test_scene_contract_still_detects_a_prohibited_beat_in_executable_fields():
     case = _defined_case("planner-contract-chain-v2")
     response = """[
-      {"scene_type":"发现","goal":"发现湿脚印","required_beats":["发现湿脚印"],
-       "forbidden_beats":["认罪","密函"],"knowledge_delta":[],"exit_state":"留下疑问"},
-      {"scene_type":"核验","goal":"核对门锁","required_beats":["核对门锁","打开密函"],
-       "forbidden_beats":["认罪","密函"],"knowledge_delta":[],"exit_state":"锁况明确"},
-      {"scene_type":"推断","goal":"怀疑守夜人","required_beats":["怀疑守夜人"],
-       "forbidden_beats":["认罪","密函"],"knowledge_delta":[],"exit_state":"嫌疑成立"}
+      {"scene_type":"发现","goal":"发现湿脚印","required_beats":["wet_footprints_found"],
+       "forbidden_beats":["night_watchman_confesses","secret_letter_opened"],"knowledge_delta":[],"exit_state":"留下疑问"},
+      {"scene_type":"核验","goal":"核对门锁","required_beats":["door_lock_checked","secret_letter_opened"],
+       "forbidden_beats":["night_watchman_confesses","secret_letter_opened"],"knowledge_delta":[],"exit_state":"锁况明确"},
+      {"scene_type":"推断","goal":"怀疑守夜人","required_beats":["night_watchman_suspected"],
+       "forbidden_beats":["night_watchman_confesses","secret_letter_opened"],"knowledge_delta":[],"exit_state":"嫌疑成立"}
     ]"""
     score, detail = grade_response(case, response)
     assert score < 72.0
-    assert "打开密函" in detail["forbidden_hits"]
+    assert "secret_letter_opened" in detail["forbidden_hits"]
 
 
 @pytest.mark.asyncio
@@ -1490,7 +1497,7 @@ async def test_async_seed_deterministic_idempotent():
     db = FakeAsyncSession()
     n1 = await seed_suites(db)
     assert n1 == 7, n1
-    assert _suite_id("draft-v2", "3") == _suite_id("draft-v2", "3")
+    assert _suite_id("draft-v2", "4") == _suite_id("draft-v2", "4")
     assert _suite_id("context-v2", "2") == _suite_id("context-v2", "2")
     n2 = await seed_suites(db)
     assert n2 == 0, "seed must be idempotent"
@@ -1498,9 +1505,9 @@ async def test_async_seed_deterministic_idempotent():
     assert draft and draft[0].target_role == "draft_writer" and draft[0].mode == "qualification"
     ctx = [s for s in db._table(ModelEvalSuite) if s.suite_key == "context-v2"]
     assert ctx and ctx[0].mode == "context_ladder"
-    # Ability contract v3 is independent from the still-valid context v2 bank.
+    # Ability contract v4 is independent from the still-valid context v2 bank.
     versions = {s.suite_key: s.version for s in db._table(ModelEvalSuite)}
-    assert versions["draft-v2"] == "3"
+    assert versions["draft-v2"] == "4"
     assert versions["context-v2"] == "2"
 
 

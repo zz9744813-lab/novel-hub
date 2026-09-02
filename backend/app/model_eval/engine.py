@@ -389,11 +389,11 @@ async def _default_gateway(**kwargs):
     }
     # A one-time qualification must not be invalidated by one unhealthy relay
     # channel. The live New API pool has returned healthy pings immediately
-    # followed by two sub-second 500s for the same GLM request. Three bounded
+    # followed by repeated sub-second 5xx responses for the same GLM request. Four bounded
     # attempts cross that channel pool without turning the gate into an
     # unbounded retry loop. Every real upstream call remains auditable.
     result = None
-    for attempt in range(1, 4):
+    for attempt in range(1, 5):
         result = await stream_completion_and_collect(
             system_prompt=kwargs["system_prompt"],
             user_content=kwargs["user_content"],
@@ -407,8 +407,8 @@ async def _default_gateway(**kwargs):
         result.gateway_calls = attempt
         if result.error not in transient_errors:
             break
-        if attempt < 3:
-            await asyncio.sleep(float(2 ** (attempt - 1)))
+        if attempt < 4:
+            await asyncio.sleep(float(4 * (2 ** (attempt - 1))))
     assert result is not None
     return result
 

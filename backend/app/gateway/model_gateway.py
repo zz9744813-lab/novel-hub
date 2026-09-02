@@ -391,7 +391,7 @@ async def stream_with_retry(
 
     Default attempt order (spec §50):
       With fallbacks: Primary → Primary Retry → Fallback 1 → Fallback 2.
-      Without fallbacks: Primary → Primary Retry 1 → Primary Retry 2.
+      Without fallbacks: Primary → Primary Retry 1 → Retry 2 → Retry 3.
     `fallbacks` is a list of {"model", "provider"} targets; the legacy
     `fallback_model`/`fallback_provider` args map onto that list for compat.
     """
@@ -410,6 +410,7 @@ async def stream_with_retry(
         (model, provider, "retry"),
     ]
     if not fallbacks:
+        route.append((model, provider, "retry"))
         route.append((model, provider, "retry"))
     for fb in fallbacks[:2]:
         route.append((fb.get("model") or model, fb.get("provider") or provider, "fallback"))

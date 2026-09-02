@@ -648,7 +648,7 @@ async def test_partial_shared_core_does_not_globally_veto_strong_role_evidence()
 
 
 @pytest.mark.asyncio
-async def test_v9_evidence_is_not_reused_after_v10_glm_request_shape_change():
+async def test_v9_evidence_is_not_reused_after_v11_glm_request_shape_change():
     db = FakeAsyncSession()
     catalog = make_catalog()
     db._table(ModelCatalog).append(catalog)
@@ -703,7 +703,7 @@ async def test_v9_evidence_is_not_reused_after_v10_glm_request_shape_change():
     assert no_call.calls == 13
     assert result["gateway_calls"] == 13
     assert result["reused"] is False
-    assert result["evaluator_revision"] == "v98-ability-10"
+    assert result["evaluator_revision"] == "v98-ability-11"
     assert catalog.ability_source_run_id == derived.id
     assert derived.ability_source_run_id is None
 

@@ -23,8 +23,8 @@ from app.model_eval.suite_definitions import (
 )
 
 
-ABILITY_EVALUATOR_REVISION = "v98-ability-10"
-CONTEXT_EVALUATOR_REVISION = "v98-context-6"
+ABILITY_EVALUATOR_REVISION = "v98-ability-11"
+CONTEXT_EVALUATOR_REVISION = "v98-context-7"
 CORE_QUALITY_FLOOR = 70.0
 _DIRECT_CONTEXT_REQUIRED_ROLES = {
     "chapter_planner",

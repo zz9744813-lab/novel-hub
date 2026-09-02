@@ -69,6 +69,9 @@ async def test_qualification_retries_http_200_empty_responses():
     assert result.error is None
     assert result.final_content == '{"ok":true}'
     assert result.gateway_calls == 3
+    assert upstream.await_args_list[0].kwargs["reasoning_mode"] == "enabled"
+    assert upstream.await_args_list[1].kwargs["reasoning_mode"] == "disabled"
+    assert upstream.await_args_list[2].kwargs["reasoning_mode"] == "disabled"
 
 
 @pytest.mark.asyncio
@@ -158,6 +161,32 @@ async def test_runtime_without_fallback_has_four_bounded_primary_attempts():
     assert upstream.await_count == 4
     assert result.error == "HTTP_500"
     assert [item.attempt_no for item in result.attempts] == [1, 2, 3, 4]
+
+
+@pytest.mark.asyncio
+async def test_glm_runtime_disables_thinking_after_reasoning_only_response():
+    upstream = AsyncMock(
+        side_effect=[
+            StreamResult(error="final_content_empty", reasoning_text="thinking"),
+            StreamResult(final_content='{"ok":true}'),
+        ]
+    )
+    with patch(
+        "app.gateway.model_gateway.stream_completion_and_collect",
+        upstream,
+    ):
+        result = await stream_with_retry(
+            system_prompt="system",
+            user_content="case",
+            model="glm-5.2",
+            provider="new-api",
+        )
+
+    assert result.error is None
+    assert result.final_content == '{"ok":true}'
+    assert upstream.await_count == 2
+    assert upstream.await_args_list[0].kwargs["reasoning_mode"] == "enabled"
+    assert upstream.await_args_list[1].kwargs["reasoning_mode"] == "disabled"
 
 
 @pytest.mark.asyncio

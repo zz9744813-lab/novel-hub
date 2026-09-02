@@ -62,6 +62,7 @@ class StreamResult:
 REASONING_FIELDS = {"reasoning_content", "reasoning", "thinking", "thought"}
 
 RETRYABLE_ERRORS = {
+    "empty_response",
     "final_content_empty",
     "UNTERMINATED_REASONING",
     "CONNECT_TIMEOUT",
@@ -138,11 +139,12 @@ def _request_model(model: str, *, reasoning_mode: str | None) -> str:
 
 
 def _runtime_reasoning_mode(model: str) -> str | None:
-    """Use the GLM mode certified by the release qualification.
+    """Use the preferred GLM mode certified by release qualification.
 
     GLM-5.2's native thinking mode is used by the established Hermes route and
-    is appropriate for long-form planning/review. Explicitly request it so the
-    benchmark and production request shapes remain identical across relays.
+    is appropriate for long-form work. ``stream_with_retry`` falls back to an
+    explicit non-thinking request if a relay emits reasoning without a final
+    answer, matching the bounded strategy used by the release gate.
     """
 
     normalized = str(model or "").casefold().strip()
@@ -360,13 +362,14 @@ async def stream_completion_and_collect(
 
     result.latency_ms = int((time.time() - start_time) * 1000)
 
-    if not result.final_content and result.reasoning_text:
-        result.error = "final_content_empty"
-        logger.warning(
-            f"REASONING_ONLY_RESPONSE blocked: "
-            f"reasoning={len(result.reasoning_text)}c final=0c "
-            f"finish={result.finish_reason or 'unknown'}"
-        )
+    if not result.final_content:
+        result.error = "final_content_empty" if result.reasoning_text else "empty_response"
+        if result.reasoning_text:
+            logger.warning(
+                f"REASONING_ONLY_RESPONSE blocked: "
+                f"reasoning={len(result.reasoning_text)}c final=0c "
+                f"finish={result.finish_reason or 'unknown'}"
+            )
 
     logger.info(
         f"Stream [{provider_role}] reasoning={len(result.reasoning_text)}c "
@@ -425,6 +428,18 @@ async def stream_with_retry(
             f"provider={use_provider} model={use_model}"
         )
 
+        reasoning_mode = _runtime_reasoning_mode(use_model)
+        if (
+            last_result is not None
+            and last_result.error in {"final_content_empty", "empty_response"}
+            and reasoning_mode == "enabled"
+        ):
+            # Some OpenAI-compatible GLM relays terminate after the reasoning
+            # stream without emitting a final answer. The next bounded attempt
+            # explicitly disables thinking instead of repeating the same bad
+            # request shape four times.
+            reasoning_mode = "disabled"
+
         result = await stream_completion_and_collect(
             system_prompt=system_prompt,
             user_content=user_content,
@@ -434,7 +449,7 @@ async def stream_with_retry(
             provider_role=provider_role,
             provider=use_provider,
             response_format=response_format,
-            reasoning_mode=_runtime_reasoning_mode(use_model),
+            reasoning_mode=reasoning_mode,
         )
         completed = datetime.now(timezone.utc)
         success = bool(result.final_content and not result.error)

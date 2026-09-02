@@ -140,6 +140,7 @@ class TestRetryableErrors:
 
     def test_empty_final_retryable(self):
         assert "final_content_empty" in RETRYABLE_ERRORS
+        assert "empty_response" in RETRYABLE_ERRORS
 
     def test_unterminated_reasoning_retryable(self):
         assert "UNTERMINATED_REASONING" in RETRYABLE_ERRORS

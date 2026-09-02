@@ -15,12 +15,16 @@ async def test_qualification_retries_transient_failures_and_counts_all_calls():
         side_effect=[
             StreamResult(error="HTTP_500"),
             StreamResult(error="HTTP_500"),
+            StreamResult(error="HTTP_500"),
             StreamResult(final_content='{"ok":true}'),
         ]
     )
-    with patch(
-        "app.gateway.model_gateway.stream_completion_and_collect",
-        upstream,
+    with (
+        patch(
+            "app.gateway.model_gateway.stream_completion_and_collect",
+            upstream,
+        ),
+        patch("app.model_eval.engine.asyncio.sleep", new_callable=AsyncMock),
     ):
         result = await _default_gateway(
             system_prompt="system",
@@ -31,15 +35,16 @@ async def test_qualification_retries_transient_failures_and_counts_all_calls():
             temperature=0,
         )
 
-    assert upstream.await_count == 3
+    assert upstream.await_count == 4
     assert result.error is None
-    assert result.gateway_calls == 3
+    assert result.gateway_calls == 4
 
 
 @pytest.mark.asyncio
-async def test_runtime_without_fallback_has_three_bounded_primary_attempts():
+async def test_runtime_without_fallback_has_four_bounded_primary_attempts():
     upstream = AsyncMock(
         side_effect=[
+            StreamResult(error="HTTP_500"),
             StreamResult(error="HTTP_500"),
             StreamResult(error="HTTP_500"),
             StreamResult(error="HTTP_500"),
@@ -59,9 +64,9 @@ async def test_runtime_without_fallback_has_three_bounded_primary_attempts():
             provider="new-api",
         )
 
-    assert upstream.await_count == 3
+    assert upstream.await_count == 4
     assert result.error == "HTTP_500"
-    assert [item.attempt_no for item in result.attempts] == [1, 2, 3]
+    assert [item.attempt_no for item in result.attempts] == [1, 2, 3, 4]
 
 
 @pytest.mark.asyncio

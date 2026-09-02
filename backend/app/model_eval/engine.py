@@ -398,15 +398,17 @@ async def _default_gateway(**kwargs):
     model = kwargs["model"]
     max_tokens = kwargs.get("max_tokens", 512)
     normalized = str(model).casefold()
-    if normalized.startswith("glm-") or "/glm-" in normalized:
-        # Some OpenAI-compatible relays ignore GLM's thinking toggle.  Give a
-        # one-time evidence case enough room to reach final content even then;
-        # lightweight recurring health probes keep their separate small cap.
-        max_tokens = max(2048, int(max_tokens or 0))
+    is_glm = normalized.startswith("glm-") or "/glm-" in normalized
+    reasoning_mode = "enabled" if is_glm else "disabled"
+    if is_glm:
+        # Production uses GLM's native thinking mode for long-form planning and
+        # writing quality. Certify that exact request shape, with enough output
+        # room for both the reasoning trace and the short graded final answer.
+        max_tokens = max(8192, int(max_tokens or 0))
     # Ability evidence is the one place that needs a deterministic no-thinking
     # DeepSeek request.  Keep the New API suffix out of lightweight health
     # probes so a channel that only advertises the base alias remains healthy.
-    request_model = _request_model(model, reasoning_mode="disabled")
+    request_model = _request_model(model, reasoning_mode=reasoning_mode)
     transient_errors = {
         "CONNECT_TIMEOUT",
         "HTTP_429",
@@ -431,7 +433,7 @@ async def _default_gateway(**kwargs):
             max_tokens=max_tokens,
             provider_role="primary",
             provider=kwargs.get("provider"),
-            reasoning_mode="disabled",
+            reasoning_mode=reasoning_mode,
         )
         if not result.error and _is_spurious_evaluation_refusal(
             result.final_content

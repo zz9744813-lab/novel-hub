@@ -24,9 +24,9 @@ def test_only_exact_failed_routes_are_normalized():
     assert is_retired_production_model(PRODUCTION_MODEL_ID) is False
 
 
-def test_glm52_runtime_uses_same_no_thinking_shape_as_release_gate():
-    assert _runtime_reasoning_mode("glm-5.2") == "disabled"
-    assert _runtime_reasoning_mode("z-ai/glm-5.2") == "disabled"
+def test_glm52_runtime_uses_same_thinking_shape_as_release_gate():
+    assert _runtime_reasoning_mode("glm-5.2") == "enabled"
+    assert _runtime_reasoning_mode("z-ai/glm-5.2") == "enabled"
     assert _runtime_reasoning_mode("glm-5.3-flash") is None
 
 

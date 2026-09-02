@@ -5,6 +5,7 @@ Probe concurrency is capped; never competes with an active chapter pipeline.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -97,37 +98,56 @@ async def probe_model_ping(
         started_at=started,
     )
     try:
-        result = await stream_completion_and_collect(
-            system_prompt="Return exactly OK.",
-            user_content="ping",
-            model=catalog.model_id,
-            temperature=0,
-            # Reasoning-capable OpenAI-compatible models may spend a tiny
-            # output budget before emitting final text.  The prompt still asks
-            # for only "OK", so this cap improves validity without turning an
-            # L1 connectivity probe into a benchmark.
-            max_tokens=_health_probe_max_tokens(),
-            provider_role="primary",
-            provider=catalog.provider,
-            reasoning_mode="disabled",
-            read_timeout_seconds=_health_probe_read_timeout(),
-        )
-        retried = False
-        first_error = result.error
-        first_finish_reason = result.finish_reason
-        if allow_reasoning_retry and result.error == "final_content_empty":
-            retried = True
+        transient_errors = {
+            "CONNECT_TIMEOUT",
+            "HTTP_429",
+            "HTTP_500",
+            "HTTP_502",
+            "HTTP_503",
+            "HTTP_504",
+        }
+        max_attempts = 4 if allow_reasoning_retry else 1
+        use_handshake_budget = False
+        adaptive_retry = False
+        error_history: list[str] = []
+        first_error = None
+        first_finish_reason = None
+        result = None
+        for attempt in range(1, max_attempts + 1):
             result = await stream_completion_and_collect(
                 system_prompt="Return exactly OK.",
                 user_content="ping",
                 model=catalog.model_id,
                 temperature=0,
-                max_tokens=_configured_handshake_max_tokens(),
+                # Reasoning-capable OpenAI-compatible models may spend a tiny
+                # output budget before emitting final text. The configured
+                # handshake can retry with a larger cap, while recurring L1
+                # probes remain single-attempt and cheap.
+                max_tokens=(
+                    _configured_handshake_max_tokens()
+                    if use_handshake_budget
+                    else _health_probe_max_tokens()
+                ),
                 provider_role="primary",
                 provider=catalog.provider,
                 reasoning_mode="disabled",
                 read_timeout_seconds=_health_probe_read_timeout(),
             )
+            if attempt == 1:
+                first_error = result.error
+                first_finish_reason = result.finish_reason
+            if result.error:
+                error_history.append(result.error)
+            if not allow_reasoning_retry or not result.error:
+                break
+            if result.error == "final_content_empty":
+                adaptive_retry = True
+                use_handshake_budget = True
+                continue
+            if result.error not in transient_errors or attempt >= max_attempts:
+                break
+            await asyncio.sleep(float(4 * (2 ** (attempt - 1))))
+        assert result is not None
         probe.latency_ms = result.latency_ms
         probe.first_token_ms = result.first_token_ms  # measured TTFT (v9.6 §44)
         probe.output_valid = bool(result.final_content.strip())
@@ -136,9 +156,11 @@ async def probe_model_ping(
         probe.detail_json = {
             "finish_reason": result.finish_reason,
             "reasoning_chars": len(result.reasoning_text),
-            "adaptive_retry": retried,
-            "first_error": first_error if retried else None,
-            "first_finish_reason": first_finish_reason if retried else None,
+            "adaptive_retry": adaptive_retry,
+            "attempt_count": attempt,
+            "error_history": error_history,
+            "first_error": first_error if attempt > 1 else None,
+            "first_finish_reason": first_finish_reason if attempt > 1 else None,
         }
     except Exception as e:  # noqa: BLE001
         probe.error_code = str(e)[:60]

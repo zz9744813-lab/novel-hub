@@ -50,3 +50,84 @@ async def test_ping_passes_short_timeout_to_every_adaptive_attempt(monkeypatch):
     assert {
         call.kwargs["read_timeout_seconds"] for call in gateway.await_args_list
     } == {120}
+
+
+@pytest.mark.asyncio
+async def test_configured_handshake_retries_transient_relay_errors_four_times():
+    catalog = SimpleNamespace(
+        id=uuid.uuid4(),
+        model_id="glm-5.2",
+        provider="new-api",
+    )
+    gateway = AsyncMock(
+        side_effect=[
+            StreamResult(error="HTTP_500"),
+            StreamResult(error="HTTP_503"),
+            StreamResult(error="HTTP_500"),
+            StreamResult(final_content="OK"),
+        ]
+    )
+
+    with (
+        patch(
+            "app.model_autopilot.probe.stream_completion_and_collect",
+            gateway,
+        ),
+        patch("app.model_autopilot.probe.asyncio.sleep", new_callable=AsyncMock),
+    ):
+        result = await probe_model_ping(None, catalog, allow_reasoning_retry=True)
+
+    assert result.status == "ok"
+    assert gateway.await_count == 4
+    assert result.detail_json["attempt_count"] == 4
+    assert result.detail_json["error_history"] == [
+        "HTTP_500",
+        "HTTP_503",
+        "HTTP_500",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_configured_handshake_does_not_retry_authentication_failure():
+    catalog = SimpleNamespace(
+        id=uuid.uuid4(),
+        model_id="glm-5.2",
+        provider="new-api",
+    )
+    gateway = AsyncMock(return_value=StreamResult(error="HTTP_401"))
+
+    with (
+        patch(
+            "app.model_autopilot.probe.stream_completion_and_collect",
+            gateway,
+        ),
+        patch("app.model_autopilot.probe.asyncio.sleep", new_callable=AsyncMock) as sleep,
+    ):
+        result = await probe_model_ping(None, catalog, allow_reasoning_retry=True)
+
+    assert result.status == "failed"
+    assert gateway.await_count == 1
+    sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_recurring_health_probe_remains_single_attempt_on_transient_error():
+    catalog = SimpleNamespace(
+        id=uuid.uuid4(),
+        model_id="glm-5.2",
+        provider="new-api",
+    )
+    gateway = AsyncMock(return_value=StreamResult(error="HTTP_500"))
+
+    with (
+        patch(
+            "app.model_autopilot.probe.stream_completion_and_collect",
+            gateway,
+        ),
+        patch("app.model_autopilot.probe.asyncio.sleep", new_callable=AsyncMock) as sleep,
+    ):
+        result = await probe_model_ping(None, catalog)
+
+    assert result.status == "failed"
+    assert gateway.await_count == 1
+    sleep.assert_not_awaited()

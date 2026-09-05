@@ -468,11 +468,16 @@ def main() -> int:
         else:
             payload = asyncio.run(_export(args.pack, args.output))
     except Exception as exc:  # noqa: BLE001 - CLI emits a machine-readable failure
+        from app.diagnostics import exception_trace
+        from sqlalchemy.exc import SQLAlchemyError
+
         report = getattr(exc, "report", None)
         payload = {
             "passed": False,
             "error": type(exc).__name__,
-            "detail": str(exc),
+            "detail": "database operation failed; see trace" if isinstance(exc, SQLAlchemyError) else str(exc),
+            "phase": args.command,
+            "trace": exception_trace(exc),
             "validation": report.model_dump(mode="json") if report else None,
         }
         print(json.dumps(payload, ensure_ascii=False, indent=2))

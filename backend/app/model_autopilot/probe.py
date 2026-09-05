@@ -103,6 +103,7 @@ async def probe_model_ping(
             "empty_response",
             "empty_text_output",
             "final_content_empty",
+            "INVALID_RESPONSE_ENCODING",
             "HTTP_429",
             "HTTP_500",
             "HTTP_502",
@@ -157,6 +158,7 @@ async def probe_model_ping(
                 "empty_response",
                 "empty_text_output",
                 "final_content_empty",
+                "INVALID_RESPONSE_ENCODING",
             }:
                 adaptive_retry = True
                 use_handshake_budget = True

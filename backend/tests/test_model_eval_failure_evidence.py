@@ -41,10 +41,11 @@ async def test_qualification_retries_transient_failures_and_counts_all_calls():
 
 
 @pytest.mark.asyncio
-async def test_qualification_retries_http_200_empty_responses():
+@pytest.mark.parametrize("first_error", [None, "empty_response", "final_content_empty", "INVALID_RESPONSE_ENCODING"])
+async def test_qualification_retries_http_200_empty_responses(first_error):
     upstream = AsyncMock(
         side_effect=[
-            StreamResult(),
+            StreamResult(error=first_error),
             StreamResult(),
             StreamResult(final_content='{"ok":true}'),
         ]
@@ -192,6 +193,29 @@ async def test_glm_runtime_disables_thinking_after_reasoning_only_response():
     assert upstream.await_args_list[1].kwargs["reasoning_mode"] == "disabled"
     assert upstream.await_args_list[0].kwargs["stream"] is True
     assert upstream.await_args_list[1].kwargs["stream"] is False
+
+
+@pytest.mark.asyncio
+async def test_glm_recovery_survives_transient_errors_without_affecting_fallback():
+    for fallback in (None, "glm-5.2"):
+        upstream = AsyncMock(side_effect=[
+            StreamResult(error="final_content_empty", reasoning_text="thinking"),
+            StreamResult(error="HTTP_503"),
+            StreamResult(final_content="OK"),
+        ])
+        with (
+            patch("app.gateway.model_gateway.stream_completion_and_collect", upstream),
+            patch("app.gateway.model_gateway.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            result = await stream_with_retry(
+                system_prompt="system", user_content="user", model="glm-5.2",
+                provider="new-api", fallback_model=fallback, fallback_provider="other-provider",
+            )
+        assert result.error is None
+        assert len(result.attempts) == 3
+        assert [call.kwargs["reasoning_mode"] for call in upstream.await_args_list] == [
+            "enabled", "disabled", "enabled" if fallback else "disabled",
+        ]
 
 
 @pytest.mark.asyncio

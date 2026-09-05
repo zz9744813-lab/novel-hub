@@ -64,6 +64,7 @@ REASONING_FIELDS = {"reasoning_content", "reasoning", "thinking", "thought"}
 RETRYABLE_ERRORS = {
     "empty_response",
     "final_content_empty",
+    "INVALID_RESPONSE_ENCODING",
     "UNTERMINATED_REASONING",
     "CONNECT_TIMEOUT",
     "READ_TIMEOUT",
@@ -376,8 +377,10 @@ async def stream_completion_and_collect(
 
     result.final_content, inline_found = _strip_inline_reasoning(result.final_content)
     if "\ufffd" in result.final_content:
-        logger.warning("Removed Unicode replacement marker from provider final content")
-        result.final_content = result.final_content.replace("\ufffd", "")
+        # Never silently edit a damaged name, fact or JSON key into a plausible
+        # answer. Preserve the received text for audit and retry the transport.
+        logger.warning("Provider final content contains Unicode replacement markers")
+        result.error = "INVALID_RESPONSE_ENCODING"
     if inline_found:
         result.inline_leak_detected = True
 
@@ -427,6 +430,7 @@ async def stream_with_retry(
 
     attempts: list[AttemptRecord] = []
     last_result: StreamResult | None = None
+    nonstream_routes: set[tuple[str | None, str]] = set()
 
     # route plan: [primary, primary-retry, *fallbacks] capped at 4 total
     route: list[tuple[str, str, str]] = [
@@ -450,15 +454,8 @@ async def stream_with_retry(
         )
 
         reasoning_mode = _runtime_reasoning_mode(use_model)
-        if (
-            last_result is not None
-            and last_result.error in {"final_content_empty", "empty_response"}
-            and reasoning_mode == "enabled"
-        ):
-            # Some OpenAI-compatible GLM relays terminate after the reasoning
-            # stream without emitting a final answer. The next bounded attempt
-            # explicitly disables thinking instead of repeating the same bad
-            # request shape four times.
+        route_key = (use_provider, use_model)
+        if reasoning_mode == "enabled" and route_key in nonstream_routes:
             reasoning_mode = "disabled"
 
         result = await stream_completion_and_collect(
@@ -503,6 +500,12 @@ async def stream_with_retry(
             return result
 
         last_result = result
+        if _runtime_reasoning_mode(use_model) == "enabled" and result.error in {
+            "final_content_empty", "empty_response", "INVALID_RESPONSE_ENCODING",
+        }:
+            # Keep recovery sticky through intervening 5xx errors, but do not
+            # impose one provider/model's transport failure on a fallback.
+            nonstream_routes.add(route_key)
 
         if result.error and result.error not in RETRYABLE_ERRORS:
             logger.warning(f"Non-retryable error: {result.error}, stopping")

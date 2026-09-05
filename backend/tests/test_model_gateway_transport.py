@@ -8,8 +8,12 @@ from app.gateway.model_gateway import stream_completion_and_collect
 
 
 @pytest.mark.asyncio
-async def test_nonstream_completion_parses_message_and_removes_decode_marker():
+@pytest.mark.parametrize("damaged", [False, True])
+async def test_nonstream_completion_preserves_text_and_rejects_decode_damage(damaged):
     captured: dict = {}
+    content = '{"姜遥":{"can":["检查水痕"]}}'
+    if damaged:
+        content = content.replace("姜", "\ufffd姜")
 
     class Response:
         async def __aenter__(self):
@@ -29,7 +33,7 @@ async def test_nonstream_completion_parses_message_and_removes_decode_marker():
                 "choices": [
                     {
                         "message": {
-                            "content": '{"\ufffd姜遥":{"can":["检查水痕"]}}',
+                            "content": content,
                         },
                         "finish_reason": "stop",
                     }
@@ -59,8 +63,8 @@ async def test_nonstream_completion_parses_message_and_removes_decode_marker():
         )
 
     assert captured["payload"]["stream"] is False
-    assert result.error is None
-    assert result.final_content == '{"姜遥":{"can":["检查水痕"]}}'
+    assert result.error == ("INVALID_RESPONSE_ENCODING" if damaged else None)
+    assert result.final_content == content
     assert result.finish_reason == "stop"
     assert result.prompt_tokens == 10
     assert result.completion_tokens == 8

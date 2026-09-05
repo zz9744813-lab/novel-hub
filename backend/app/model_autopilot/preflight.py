@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.registry import ROLE_REGISTRY, required_roles
+from app.diagnostics import exception_trace
 from app.model_autopilot.capability import DEFAULT_ROLE_QUALITY_FLOOR, required_context_for
 from app.model_autopilot.catalog import ensure_capability_for_catalog, sync_catalog_from_provider
 from app.model_autopilot.health import upsert_health_snapshot
@@ -234,25 +235,35 @@ async def bootstrap_catalog_and_probes() -> dict:
             key=lambda catalog: (catalog.provider, catalog.model_id),
         )
         remaining = max(0, probe_limit - len(configured_catalogs))
-        candidates = [
+        candidate_rows = [
             *((catalog, True) for catalog in configured_catalogs),
             *((catalog, False) for catalog in other_candidates[:remaining]),
         ]
-
-        # Catalog sync/materialization may have opened a transaction.  Never
-        # keep it idle while an upstream model stream can take minutes: commit
-        # the catalog state first, then persist each completed probe in its own
-        # short transaction below.
+        # Carry scalar identifiers across transactions, never ORM instances
+        # that a failed probe's rollback could expire (including later rows).
+        candidates = [
+            (row.id, row.provider, row.model_id, configured)
+            for row, configured in candidate_rows
+        ]
         await db.commit()
 
-        from app.model_autopilot.catalog import ensure_capability_for_catalog
-        from app.model_autopilot.classification import promote_configured_text_model
+    from app.model_autopilot.classification import promote_configured_text_model
 
-        for catalog, configured in candidates:
+    for catalog_id, provider, model_id, configured in candidates:
+        async with async_session_factory() as db:
+            catalog = (
+                await db.execute(select(ModelCatalog).where(ModelCatalog.id == catalog_id))
+            ).scalar_one_or_none()
+            if catalog is None:
+                report["errors"].append({
+                    "provider": provider, "model": model_id,
+                    "phase": "l1_ping", "error": "catalog_disappeared",
+                })
+                continue
             snapshot = (
                 await db.execute(
                     select(ModelHealthSnapshot).where(
-                        ModelHealthSnapshot.model_catalog_id == catalog.id
+                        ModelHealthSnapshot.model_catalog_id == catalog_id
                     )
                 )
             ).scalar_one_or_none()
@@ -272,6 +283,10 @@ async def bootstrap_catalog_and_probes() -> dict:
                 report["skipped_fresh"] += 1
                 continue
             try:
+                # Even read-only snapshot SELECTs start a transaction. End it
+                # before the provider wait so postgres cannot kill an idle
+                # transaction while a slow handshake is in flight.
+                await db.commit()
                 probe = await probe_model_ping(
                     db,
                     catalog,
@@ -290,27 +305,28 @@ async def bootstrap_catalog_and_probes() -> dict:
                     catalog.auto_route_enabled = False
                     catalog.availability_status = "missing"
                 await db.flush()
-                await upsert_health_snapshot(db, catalog.id)
+                await upsert_health_snapshot(db, catalog_id)
                 await db.commit()
                 report["probed"] += 1
                 if configured and (probe.status != "ok" or not probe.output_valid):
                     report["errors"].append(
                         {
-                            "provider": catalog.provider,
-                            "model": catalog.model_id,
+                            "provider": provider,
+                            "model": model_id,
                             "phase": "configured_text_handshake",
                             "error": probe.error_code or "empty_text_output",
                         }
                     )
             except Exception as e:  # noqa: BLE001
                 await db.rollback()
-                logger.warning("prewrite probe failed %s/%s: %s", catalog.provider, catalog.model_id, e)
+                logger.warning("prewrite probe failed %s/%s: %s", provider, model_id, type(e).__name__)
                 report["errors"].append(
                     {
-                        "provider": catalog.provider,
-                        "model": catalog.model_id,
+                        "provider": provider,
+                        "model": model_id,
                         "phase": "l1_ping",
                         "error": type(e).__name__,
+                        "trace": exception_trace(e),
                     }
                 )
     return report

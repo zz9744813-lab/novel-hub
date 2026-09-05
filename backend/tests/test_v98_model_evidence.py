@@ -703,7 +703,7 @@ async def test_v9_evidence_is_not_reused_after_v12_glm_request_shape_change():
     assert no_call.calls == 13
     assert result["gateway_calls"] == 13
     assert result["reused"] is False
-    assert result["evaluator_revision"] == "v98-ability-12"
+    assert result["evaluator_revision"] == ABILITY_EVALUATOR_REVISION
     assert catalog.ability_source_run_id == derived.id
     assert derived.ability_source_run_id is None
 

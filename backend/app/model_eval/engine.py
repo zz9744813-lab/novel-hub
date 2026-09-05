@@ -411,6 +411,8 @@ async def _default_gateway(**kwargs):
     transient_errors = {
         "CONNECT_TIMEOUT",
         "empty_response",
+        "final_content_empty",
+        "INVALID_RESPONSE_ENCODING",
         "HTTP_429",
         "HTTP_500",
         "HTTP_502",
@@ -446,7 +448,7 @@ async def _default_gateway(**kwargs):
         result.gateway_calls = attempt
         if result.error not in transient_errors:
             break
-        if is_glm and result.error in {"final_content_empty", "empty_response"}:
+        if is_glm and result.error in {"final_content_empty", "empty_response", "INVALID_RESPONSE_ENCODING"}:
             # The live relay can end GLM's reasoning stream without sending a
             # final answer. Retry the same fixed benign case with thinking
             # explicitly disabled, which is also the production retry shape.

@@ -47,6 +47,7 @@ async def test_ping_passes_short_timeout_to_every_adaptive_attempt(monkeypatch):
 
     assert result.status == "ok"
     assert gateway.await_count == 2
+    assert {call.kwargs["conversation_id"] for call in gateway.await_args_list} == {str(result.id)}
     assert {
         call.kwargs["read_timeout_seconds"] for call in gateway.await_args_list
     } == {120}

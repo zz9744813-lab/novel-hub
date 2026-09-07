@@ -12,6 +12,7 @@ import re
 import logging
 import os
 import asyncio
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import httpx
@@ -270,6 +271,7 @@ async def stream_completion_and_collect(
     reasoning_mode: str | None = None,
     read_timeout_seconds: int | None = None,
     stream: bool = True,
+    conversation_id: str | None = None,
 ) -> StreamResult:
     """Collect one Chat Completion using streaming or a full JSON response."""
     config = _get_provider_config(provider_role, provider=provider)
@@ -278,6 +280,15 @@ async def stream_completion_and_collect(
         "Authorization": f"Bearer {config['api_key']}",
         "Content-Type": "application/json",
     }
+    logical_provider = str(provider or "primary").lower().replace("_", "-")
+    if logical_provider in {"primary", "new-api", "newapi", "opencode", "opencode-go"}:
+        # OpenCode Go requires an application-owned, stable conversation ID.
+        # This is our own random ID, never a spoofed client identity or a
+        # prompt-derived fingerprint. A New API relay must forward this header.
+        relay_session = str(conversation_id or uuid.uuid4())
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", relay_session):
+            raise ValueError("invalid relay conversation id")
+        headers["x-opencode-session"] = relay_session
     payload = {
         "model": model,
         "messages": [
@@ -432,6 +443,7 @@ async def stream_with_retry(
     fallback_provider: str | None = None,
     fallbacks: list[dict] | None = None,
     response_format: dict | None = None,
+    conversation_id: str | None = None,
 ) -> StreamResult:
     """§11.11 + P0-05 + v9.5 §49–§51: fallback list with full AttemptRecord audit.
 
@@ -450,6 +462,7 @@ async def stream_with_retry(
     attempts: list[AttemptRecord] = []
     last_result: StreamResult | None = None
     nonstream_routes: set[tuple[str | None, str]] = set()
+    conversation_id = conversation_id or str(uuid.uuid4())
 
     # route plan: [primary, primary-retry, *fallbacks] capped at 4 total
     route: list[tuple[str, str, str]] = [
@@ -488,6 +501,7 @@ async def stream_with_retry(
             response_format=response_format,
             reasoning_mode=reasoning_mode,
             stream=reasoning_mode != "disabled",
+            conversation_id=conversation_id,
         )
         completed = datetime.now(timezone.utc)
         success = bool(result.final_content and not result.error)

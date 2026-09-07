@@ -149,6 +149,7 @@ async def probe_model_ping(
                 reasoning_mode=reasoning_mode,
                 read_timeout_seconds=_health_probe_read_timeout(),
                 stream=use_stream,
+                conversation_id=str(probe.id),
             )
             if not result.error and not result.final_content.strip():
                 result.error = "empty_text_output"

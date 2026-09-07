@@ -71,6 +71,7 @@ async def test_qualification_retries_http_200_empty_responses(first_error):
     assert result.final_content == '{"ok":true}'
     assert result.gateway_calls == 3
     assert upstream.await_args_list[0].kwargs["reasoning_mode"] == "enabled"
+    assert len({call.kwargs["conversation_id"] for call in upstream.await_args_list}) == 1
     assert upstream.await_args_list[1].kwargs["reasoning_mode"] == "disabled"
     assert upstream.await_args_list[2].kwargs["reasoning_mode"] == "disabled"
     assert upstream.await_args_list[0].kwargs["stream"] is True

@@ -96,3 +96,59 @@ async def test_streamed_http_errors_are_read_and_classified_without_body_leaks(s
     assert result.error == expected
     assert result.final_content == ""
     assert "private" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_relay_headers_use_own_session_and_keep_explicit_conversations_stable():
+    import uuid
+
+    requests = []
+
+    async def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json={"choices": [{
+            "message": {"content": "OK"}, "finish_reason": "stop",
+        }]})
+
+    real_client = httpx.AsyncClient
+    with patch("app.gateway.model_gateway.httpx.AsyncClient", side_effect=lambda **kwargs:
+               real_client(transport=httpx.MockTransport(handler), **kwargs)):
+        for provider, cid in (("new-api", None), ("new-api", None),
+                              ("new-api", "our-conversation"), ("new-api", "our-conversation"),
+                              ("openrouter", None)):
+            result = await stream_completion_and_collect(
+                "test", "test", "glm-5.3-flash", provider=provider,
+                conversation_id=cid, stream=False,
+            )
+            assert result.error is None
+        with pytest.raises(ValueError, match="invalid relay conversation id"):
+            await stream_completion_and_collect(
+                "test", "test", "glm-5.3-flash", provider="new-api",
+                conversation_id="bad\r\nInjected: header",
+            )
+    assert len(requests) == 5
+    first, second = [request.headers["x-opencode-session"] for request in requests[:2]]
+    assert uuid.UUID(first) != uuid.UUID(second)
+    assert requests[2].headers["x-opencode-session"] == requests[3].headers["x-opencode-session"]
+    assert requests[2].headers["x-opencode-session"] == "our-conversation"
+    assert "x-opencode-session" not in requests[4].headers
+    assert all("x-opencode-client" not in request.headers for request in requests)
+
+
+@pytest.mark.asyncio
+async def test_gateway_retries_keep_the_same_conversation_id():
+    from unittest.mock import AsyncMock
+    from app.gateway.model_gateway import StreamResult, stream_with_retry
+
+    gateway = AsyncMock(side_effect=[
+        StreamResult(error="final_content_empty"), StreamResult(final_content="OK"),
+        StreamResult(final_content="OK"),
+    ])
+    with (patch("app.gateway.model_gateway.stream_completion_and_collect", gateway),
+          patch("app.gateway.model_gateway.asyncio.sleep", new_callable=AsyncMock)):
+        first = await stream_with_retry("test", "test", "glm-5.3-flash", provider="new-api")
+        second = await stream_with_retry("test", "test", "glm-5.3-flash", provider="new-api")
+    assert first.error is None and second.error is None
+    calls = gateway.await_args_list
+    assert calls[0].kwargs["conversation_id"] == calls[1].kwargs["conversation_id"]
+    assert calls[2].kwargs["conversation_id"] != calls[1].kwargs["conversation_id"]

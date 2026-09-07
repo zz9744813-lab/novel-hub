@@ -426,6 +426,7 @@ async def _default_gateway(**kwargs):
     # attempts cross that channel pool without turning the gate into an
     # unbounded retry loop. Every real upstream call remains auditable.
     result = None
+    conversation_id = str(uuid.uuid4())
     for attempt in range(1, 5):
         request_model = _request_model(model, reasoning_mode=reasoning_mode)
         result = await stream_completion_and_collect(
@@ -438,6 +439,7 @@ async def _default_gateway(**kwargs):
             provider=kwargs.get("provider"),
             reasoning_mode=reasoning_mode,
             stream=not (is_glm and reasoning_mode == "disabled"),
+            conversation_id=conversation_id,
         )
         if not result.error and not result.final_content.strip():
             result.error = "empty_response"

@@ -86,8 +86,8 @@ def _generation_controls(
 ) -> dict:
     """Return provider-compatible optional generation controls.
 
-    GLM and DeepSeek reasoning can be disabled for tiny probes and deterministic
-    benchmark cases.  Step 3-family APIs recommend omitting ``max_tokens``
+    Older GLM and DeepSeek reasoning can be disabled for tiny probes; GLM-5.3
+    maps that intent to low effort. Step 3-family APIs omit ``max_tokens``
     because a cap can consume the whole allowance in reasoning and return no
     final content.  Unknown model families retain the ordinary
     OpenAI-compatible payload.
@@ -108,7 +108,16 @@ def _generation_controls(
             else int(max_tokens)
         )
     is_glm = normalized.startswith("glm-") or "/glm-" in normalized
-    if (is_glm or is_deepseek) and reasoning_mode in {"enabled", "disabled"}:
+    is_glm53 = normalized.rsplit("/", 1)[-1] in {"glm-5.3", "glm-5.3-flash"}
+    if is_glm53:
+        # 5.3 no longer accepts thinking=disabled. Translate a lightweight
+        # request to enabled/low; keep evaluation and writing at enabled/high.
+        # The same recovery transport is still allowed to switch off SSE.
+        controls["thinking"] = {"type": "enabled"}
+        controls["reasoning_effort"] = "low" if reasoning_mode == "disabled" else "high"
+        if max_tokens is not None:
+            controls["max_tokens"] = max(2048, int(max_tokens))
+    elif (is_glm or is_deepseek) and reasoning_mode in {"enabled", "disabled"}:
         controls["thinking"] = {"type": reasoning_mode}
     return controls
 
@@ -142,14 +151,13 @@ def _request_model(model: str, *, reasoning_mode: str | None) -> str:
 def _runtime_reasoning_mode(model: str) -> str | None:
     """Use the preferred GLM mode certified by release qualification.
 
-    GLM-5.2's native thinking mode is used by the established Hermes route and
-    is appropriate for long-form work. ``stream_with_retry`` falls back to an
-    explicit non-thinking request if a relay emits reasoning without a final
-    answer, matching the bounded strategy used by the release gate.
+    Normal GLM writing requests use thinking. ``stream_with_retry`` can recover
+    with a lightweight non-stream request (disabled for 5.2; low effort for
+    5.3), matching the bounded strategy used by the release gate.
     """
 
     normalized = str(model or "").casefold().strip()
-    if normalized == "glm-5.2" or normalized.endswith("/glm-5.2"):
+    if normalized.rsplit("/", 1)[-1] in {"glm-5.2", "glm-5.3", "glm-5.3-flash"}:
         return "enabled"
     return None
 
@@ -309,6 +317,11 @@ async def stream_completion_and_collect(
                 headers=headers,
                 json=payload,
             ) as response:
+                # HTTPStatusError is raised while a streaming error body is
+                # still unread. Read it before closing the response so exact
+                # upstream contract errors do not disappear behind HTTP_400.
+                if getattr(response, "status_code", 200) >= 400:
+                    await response.aread()
                 response.raise_for_status()
                 if stream:
                     async for line in response.aiter_lines():
@@ -348,12 +361,18 @@ async def stream_completion_and_collect(
     except httpx.HTTPStatusError as e:
         code = e.response.status_code
         result.error = f"HTTP_{code}"
-        # Normalize common "model not found" bodies so attempt audit is clearer
+        # Classify exact machine-readable errors, never log provider bodies
+        # (which can echo prompts/credentials). Parameter errors mentioning a
+        # model are NOT proof that the model is absent.
         try:
-            body = e.response.text[:500].lower()
-            if code in (400, 404) and ("model" in body or "not found" in body or "invalid" in body):
-                result.error = "MODEL_NOT_FOUND" if "model" in body else result.error
-        except Exception:
+            error = e.response.json().get("error", {})
+            if isinstance(error, dict):
+                tags = {str(error.get(name) or "").casefold() for name in ("code", "type")}
+                if code == 400 and "missingsessionid" in tags:
+                    result.error = "UPSTREAM_SESSION_REQUIRED"
+                elif code in (400, 404) and "model_not_found" in tags:
+                    result.error = "MODEL_NOT_FOUND"
+        except (ValueError, AttributeError):
             pass
         result.latency_ms = int((time.time() - start_time) * 1000)
         return result

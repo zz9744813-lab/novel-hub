@@ -19,6 +19,7 @@ def test_only_exact_failed_routes_are_normalized():
     assert normalize_production_model("deepseek-v4-flash") == PRODUCTION_MODEL_ID
     assert normalize_production_model("stepfun-ai/step-3.7-flash") == PRODUCTION_MODEL_ID
     assert normalize_production_model("deepseek-v4-flash-free") == PRODUCTION_MODEL_ID
+    assert normalize_production_model("glm-5.2") == PRODUCTION_MODEL_ID
     assert normalize_production_model("glm-5.3-flash") == "glm-5.3-flash"
     assert is_retired_production_model("deepseek-v4-flash") is True
     assert is_retired_production_model(PRODUCTION_MODEL_ID) is False
@@ -27,7 +28,7 @@ def test_only_exact_failed_routes_are_normalized():
 def test_glm52_runtime_uses_same_thinking_shape_as_release_gate():
     assert _runtime_reasoning_mode("glm-5.2") == "enabled"
     assert _runtime_reasoning_mode("z-ai/glm-5.2") == "enabled"
-    assert _runtime_reasoning_mode("glm-5.3-flash") is None
+    assert _runtime_reasoning_mode("glm-5.3-flash") == "enabled"
 
 
 @pytest.mark.asyncio

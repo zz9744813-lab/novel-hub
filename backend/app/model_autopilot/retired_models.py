@@ -2,19 +2,22 @@
 
 These are exact identifiers, not family/name guesses.  They are retired only
 because the production gateway has repeatedly failed the release gate for the
-exact routes, while ``new-api/glm-5.2`` is present in the live provider catalog.
+exact routes. On 2026-09-05 GLM-5.2 returned model_not_found; the replacement
+GLM-5.3-Flash answered an exact text handshake. Ability remains release-gated.
 """
 from __future__ import annotations
 
 
 PRODUCTION_MODEL_PROVIDER = "new-api"
-PRODUCTION_MODEL_ID = "glm-5.2"
+PRODUCTION_MODEL_ID = "glm-5.3-flash"
 
 RETIRED_PRODUCTION_MODELS = frozenset(
     {
         "deepseek-v4-flash",
         "deepseek-v4-flash-free",
         "stepfun-ai/step-3.7-flash",
+        "glm-5.2",
+        "z-ai/glm-5.2",
     }
 )
 

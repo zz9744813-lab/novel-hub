@@ -18,6 +18,7 @@ import logging
 import re
 import uuid
 from typing import Any
+from app.model_autopilot.retired_models import PRODUCTION_MODEL_ID, PRODUCTION_MODEL_PROVIDER
 
 logger = logging.getLogger("novelforge.agents.aileak_judge")
 
@@ -103,7 +104,7 @@ async def _resolve_judge_model(book_id: uuid.UUID | None) -> tuple[str, str, str
             if b:
                 return b.provider, b.primary_model, b.fallback_model
     # Absolute last resort — still explicit, logged by caller
-    return "new-api", "glm-5.2", None
+    return PRODUCTION_MODEL_PROVIDER, PRODUCTION_MODEL_ID, None
 
 
 async def run_aileak_judge(

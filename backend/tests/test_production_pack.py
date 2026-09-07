@@ -426,6 +426,7 @@ async def test_release_reconciles_only_allowlisted_alias_to_discovered_model():
     from unittest.mock import patch
 
     from app.production_pack.model_evidence import _reconcile_known_model_aliases
+    from app.model_autopilot.retired_models import PRODUCTION_MODEL_ID
 
     binding = SimpleNamespace(
         id=uuid.uuid4(),
@@ -435,7 +436,7 @@ async def test_release_reconciles_only_allowlisted_alias_to_discovered_model():
     target = ModelCatalog(
         id=uuid.uuid4(),
         provider="new-api",
-        model_id="glm-5.2",
+        model_id=PRODUCTION_MODEL_ID,
         enabled=True,
         availability_status="available",
     )
@@ -476,11 +477,11 @@ async def test_release_reconciles_only_allowlisted_alias_to_discovered_model():
         {
             "role": "draft_writer",
             "from": {"provider": "new-api", "model": "z-ai/glm-5.2"},
-            "to": {"provider": "new-api", "model": "glm-5.2"},
+            "to": {"provider": "new-api", "model": PRODUCTION_MODEL_ID},
         }
     ]
     assert service.updates[0][1]["new_provider"] == "new-api"
-    assert service.updates[0][1]["new_model"] == "glm-5.2"
+    assert service.updates[0][1]["new_model"] == PRODUCTION_MODEL_ID
     assert service.updates[0][1]["changed_by"] == "production_release"
 
 

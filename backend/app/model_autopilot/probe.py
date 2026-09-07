@@ -119,6 +119,11 @@ async def probe_model_ping(
         use_handshake_budget = configured_glm
         reasoning_mode = "enabled" if configured_glm else "disabled"
         use_stream = True
+        if normalized_model.rsplit("/", 1)[-1] in {"glm-5.3", "glm-5.3-flash"}:
+            # A ping asks for low effort (the adapter maps this intent to
+            # enabled/low on reasoning-only 5.3), not a long reasoning trace.
+            reasoning_mode = "disabled"
+            use_stream = False
         adaptive_retry = False
         error_history: list[str] = []
         first_error = None

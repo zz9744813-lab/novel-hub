@@ -11,7 +11,7 @@ case "${1:-}" in
   status)
     [ "$#" -eq 1 ] || exit 64
     ;;
-  deploy|rollback)
+  deploy|rollback|upgrade-controller)
     [ "$#" -eq 2 ] || exit 64
     [ "${#2}" -eq 40 ] || exit 64
     case "$2" in *[!0-9a-f]*) exit 64 ;; esac
@@ -32,7 +32,7 @@ case "${1:-}" in
     case "$2" in validate|qualify|install|start|status|monitor|audit|export|download) ;; *) exit 64 ;; esac
     ;;
   *)
-    echo "allowed: status | deploy SHA | rollback SHA | logs SERVICE LINES | candidate SHA | novel ACTION" >&2
+    echo "allowed: status | deploy SHA | rollback SHA | upgrade-controller SHA | logs SERVICE LINES | candidate SHA | novel ACTION" >&2
     exit 64
     ;;
 esac

@@ -1,6 +1,6 @@
 # NovelForge release controller: candidate / deploy / status
 
-Authoritative flow for `deploy/ops/novelforge-release` (rework round 3).
+Authoritative flow for `deploy/ops/novelforge-release` (legacy compatibility included).
 Older documents describing `release-env`, manual controller installs after a
 deploy, or the old `up -d postgres`-first deploy are obsolete.
 
@@ -37,6 +37,9 @@ deploy <sha>
     attempt_id uuid, created numeric+fresh, state=passed, migration evidence,
     env_hash == current shared .env hash (rotation forces re-candidate),
     image digests == current candidate-tag digests
+  -> inspect exactly one running api/worker/web per service; verify their
+     working-directory labels match the current release; save their actual
+     image digests as release-tags/<previous-sha>.images.yml for rollback
   -> publish release artifact tags novelforge-<svc>:<sha> from the verified
      candidate digests (a failed candidate can never re-point release tags)
   -> backup via `compose exec` only (postgres must be running; else abort)
@@ -53,6 +56,13 @@ status
   unexpected_services, provenance_complete, and mixed_release /
   app_mixed_release comparing ONLY the three app services against the current
   symlink. Both line-delimited and compact-array Compose JSON are accepted.
+  Old releases without a release-tags/<sha>.env remain readable; status does
+  not create missing metadata or restart services.
+
+upgrade-controller <sha>
+  verify main ancestry and a clean release checkout -> hand off the release
+  lock -> transactional controller/wrapper installation only
+  (no Compose, no application switch, no migration)
 ```
 
 ## Guarantees
@@ -83,6 +93,11 @@ status
   (rotation -> re-candidate).
 - Concurrent runs are excluded by the release lock; candidate/deploy/
   upgrade-controller all share it.
+- Legacy rollback loads the saved .images.yml override. It uses the image
+  bytes actually running before deploy, not shared implicit tags that an old
+  failed build may already have overwritten. A missing/multiple/mixed running
+  service aborts before publication, backup and migration; existing pins may
+  not silently be replaced with different digests.
 - Releases, backups, candidate envelopes and raw JSON accumulate for audit;
   only ephemeral secret snapshots and candidate containers/volumes/networks
   are removed.
@@ -107,6 +122,19 @@ deploys use the same pair-install guarantee. `bootstrap-console.sh` requires
 `OPS_COMMIT` (40-hex, validated) —
 it no longer carries a hardcoded commit.
 
+Once this version's wrapper/controller pair has been installed, subsequent
+reviewed controller updates can use the existing restricted management key:
+
+```bash
+ssh novel-hub upgrade-controller <40-hex-merged-main-SHA>
+```
+
+The wrapper permits exactly that verb and SHA; it does not grant a shell,
+arbitrary command arguments, forwarding, or root SSH. The target must already
+be on main, with matching HEAD and no modified/untracked checkout bytes. The
+first installation still requires the root console because the old wrapper
+cannot authorize a verb it does not implement.
+
 ## Infra image contract (plan A)
 
 - api/worker/web: `novelforge-<svc>:${RELEASE_TAG}` — release SHA bound.
@@ -118,8 +146,8 @@ it no longer carries a hardcoded commit.
 
 ## Tests
 
-`deploy/ops/tests/run_tests.sh` — 19 scenarios, exact final line
-`SCENARIOS=17 PASSED=<n> FAILED=<n>`. Run as root inside WSL/Linux (the
+`deploy/ops/tests/run_tests.sh` — 23 scenarios, exact final line
+`SCENARIOS=23 PASSED=<n> FAILED=<n>`. Run as root inside WSL/Linux (the
 controller needs symlinks and flock); docker-compose enables the real-CLI
 merged-config check in scenario 6; the PostgreSQL scenario performs a REAL
 custom-format dump, restore, Alembic migration and data-survival check; the
@@ -130,6 +158,7 @@ and after the run.
 
 ```bash
 wsl -u root -e bash -c "cd <repo>/deploy/ops/tests && bash run_tests.sh"
+```
 
 ## Restricted management SSH fallback
 
@@ -153,5 +182,4 @@ Behavior tests:
 
 ```bash
 bash deploy/ops/tests/test-enable-management-ssh.sh
-```
 ```

@@ -20,6 +20,10 @@ lookup_id() { # $1=file $2=reference
 
 resolve_image_id() { # explicit scenario map is an allow-list; state precedes fallback
   local ref=$1 id
+  if [[ $ref =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    printf '%s\n' "$ref"
+    return 0
+  fi
   if [ -n "${STUB_IMAGE_IDS:-}" ] && [ -f "$STUB_IMAGE_IDS" ]; then
     lookup_id "$STUB_IMAGE_IDS" "$ref"
     return
@@ -30,6 +34,40 @@ resolve_image_id() { # explicit scenario map is an allow-list; state precedes fa
   fi
   printf 'sha256:%s\n' "$(printf '%s' "$ref" | sha256sum | cut -d' ' -f1)"
 }
+
+# Running containers have independent image IDs, never derived from a mutable
+# Compose image tag. These reads are observable in the behavior log.
+if [ "${1:-}" = "ps" ]; then
+  svc=""
+  for arg in "$@"; do
+    case "$arg" in label=com.docker.compose.service=*) svc=${arg##*=} ;; esac
+  done
+  [ -n "$svc" ] || exit 64
+  printf 'CONTAINER_LIST SERVICE=%s\n' "$svc" >>"$DOCKER_CALL_LOG"
+  [ "${STUB_CONTAINER_MODE:-}" != missing ] || exit 0
+  printf '%s\n' "$(printf '%s' "$svc" | sha256sum | cut -d' ' -f1)"
+  [ "${STUB_CONTAINER_MODE:-}" != multiple ] || printf '%064d\n' 2
+  exit 0
+fi
+if [ "${1:-}" = "inspect" ] && [ "${2:-}" = "--format" ]; then
+  fmt=$3
+  cid=$4
+  release=$(readlink -f "$NOVELFORGE_ROOT/current")
+  for svc in api worker web; do
+    expected=$(printf '%s' "$svc" | sha256sum | cut -d' ' -f1)
+    [ "$cid" = "$expected" ] || continue
+    printf 'CONTAINER_INSPECT SERVICE=%s FORMAT=%s\n' "$svc" "$fmt" >>"$DOCKER_CALL_LOG"
+    if [ "$fmt" = '{{.Image}}' ]; then
+      printf 'sha256:%s\n' "$(printf 'running-%s-%s' "$release" "$svc" | sha256sum | cut -d' ' -f1)"
+    elif [ "${STUB_CONTAINER_MODE:-}" = mixed ]; then
+      printf '/another/release/deploy\n'
+    else
+      printf '%s/deploy\n' "$release"
+    fi
+    exit 0
+  done
+  exit 1
+fi
 
 # docker image inspect [--format FMT] REF -> image id (exit 1 when absent)
 if [ "${1:-}" = "image" ] && [ "${2:-}" = "inspect" ]; then
@@ -63,6 +101,7 @@ project=prod
 envfiles=""
 subcommand=""
 args=()
+image_pins=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --env-file)
@@ -79,6 +118,7 @@ while [ "$#" -gt 0 ]; do
     -f)
       case "$(basename "${2:-}")" in
         docker-compose.candidate.yml) project=candidate ;;
+        *.images.yml) image_pins=$2 ;;
       esac
       shift 2
       ;;
@@ -104,8 +144,8 @@ log_call() {
     value=$(sed -n 's/^RELEASE_TAG=//p' "$file" | tail -1)
     [ -n "$value" ] && release_tag=$value
   done
-  printf 'PROJECT=%s CMD=%s ARGS=%s ENVFILES=%s RELEASE_TAG=%s\n' \
-    "$project" "$subcommand" "$*" "$envfiles" "$release_tag" >>"$DOCKER_CALL_LOG"
+  printf 'PROJECT=%s CMD=%s ARGS=%s ENVFILES=%s RELEASE_TAG=%s IMAGE_PINS=%s\n' \
+    "$project" "$subcommand" "$*" "$envfiles" "$release_tag" "$image_pins" >>"$DOCKER_CALL_LOG"
 }
 
 run_oneoff() {

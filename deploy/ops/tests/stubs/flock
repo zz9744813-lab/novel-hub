@@ -2,4 +2,7 @@
 # Stub flock: the real flock cannot lock files on Windows test filesystems.
 # The controller only needs mutual exclusion within a single host; tests run
 # scenarios sequentially, so a no-op lock is sufficient.
+if [ "${STUB_USE_REAL_FLOCK:-0}" = 1 ]; then
+  exec /usr/bin/flock "$@"
+fi
 exit 0

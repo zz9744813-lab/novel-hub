@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Safe first-time activation of a new release controller (root console ONLY).
+# Safe activation of a new release controller (root console initially; later
+# the strict forced-command upgrade-controller SHA action may invoke it).
 #
 # Acceptance round-3 (P0-4 / §8): using a deploy to install the atomic
 # controller would first run the OLD, non-atomic controller against production
@@ -61,6 +62,14 @@ if [ ! -f "$release/.git" ]; then
   [ ! -e "$release" ] || die 73 "invalid pre-existing release path"
   git --git-dir="$MIRROR" worktree add --detach "$release" "$SHA" >&2
 fi
+[ "$(git -C "$release" rev-parse HEAD)" = "$SHA" ] \
+  || die 73 "upgrade release HEAD mismatch"
+git -C "$release" diff --quiet -- \
+  && git -C "$release" diff --cached --quiet -- \
+  || die 73 "upgrade release contains modified tracked files"
+residue=$(git -C "$release" status --porcelain=v1 --untracked-files=all \
+  --ignored=matching -- . ':(exclude)deploy/.env' ':(exclude)data')
+[ -z "$residue" ] || die 73 "upgrade release contains untracked or ignored files"
 [ -f "$SHARED/.env" ] || die 78 "missing $SHARED/.env"
 [ -f "$release/deploy/ops/novelforge-release" ] || die 73 "controller missing in release"
 [ -f "$release/deploy/ops/novelforge-ops" ] || die 73 "forced-command wrapper missing in release"

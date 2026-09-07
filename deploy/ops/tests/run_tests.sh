@@ -6,7 +6,7 @@
 # the controller relies on symlinks and flock).
 #
 # Output contract: the final line is exactly
-#   SCENARIOS=19 PASSED=<n> FAILED=<n>
+#   SCENARIOS=23 PASSED=<n> FAILED=<n>
 # where every scenario maps to the rework task §10.2 items.
 set -Eeuo pipefail
 
@@ -165,6 +165,7 @@ seed_deployed() { # $1 = sha previously deployed
     git --git-dir="$ROOT/repo.git" worktree add --detach "$release" "$sha" >/dev/null 2>&1
   fi
   ln -sfn "$SHARED/.env" "$release/deploy/.env"
+  ln -sfn "$SHARED/data" "$release/data"
   mkdir -p "$SHARED/release-tags"
   printf 'RELEASE_TAG=%s\n' "$sha" >"$SHARED/release-tags/$sha.env"
   ln -sfn "$release" "$ROOT/current"
@@ -218,6 +219,8 @@ run_controller() { # $@ = controller args
     export STUB_BUILD_RC="${BUILD_RC:-0}"
     export STUB_UP_RC="${UP_RC:-0}"
     export STUB_PROD_UP_RC="${PROD_UP_RC:-0}"
+    export STUB_CONTAINER_MODE="${STUB_CONTAINER_MODE:-}"
+    export STUB_USE_REAL_FLOCK="${STUB_USE_REAL_FLOCK:-0}"
     if [ "${RUN_XTRACE:-0}" = "1" ]; then
       bash -x "$CONTROLLER" "$@"
     else
@@ -903,6 +906,87 @@ s19_rollback_release_integrity_is_fail_closed() {
     "rollback residue causes zero Compose calls"
 }
 
+s20_legacy_status_without_tag_file() {
+  new_sandbox
+  seed_deployed "$SHA1"
+  rm -f "$SHARED/release-tags/$SHA1.env"
+  run_controller status
+  assert_eq "$OUT_RC" "0" "legacy status succeeds without a tag env"
+  assert_contains "$(docker_log)" "CMD=ps" "legacy service inspection actually ran"
+  [ ! -e "$SHARED/release-tags/$SHA1.env" ] \
+    || assert_fail_record "read-only status wrote legacy tag metadata"
+  assert_eq "$(prod_mutations)" "0" "status never mutates production"
+}
+
+s21_legacy_image_pins_survive_bad_tags() {
+  new_sandbox
+  # Commit an authentic legacy compose definition with implicit app images.
+  sed -i '/image: "novelforge-\(api\|worker\|web\):/d' "$SRC/deploy/docker-compose.yml"
+  git -C "$SRC" add deploy/docker-compose.yml
+  git -C "$SRC" -c user.email=test@example.com -c user.name=test commit -qm legacy
+  local legacy pins svc expected
+  legacy=$(git -C "$SRC" rev-parse HEAD)
+  seed_deployed "$legacy"
+  rm -f "$SHARED/release-tags/$legacy.env"
+  run_controller candidate "$SHA2"
+  assert_eq "$OUT_RC" "0" "candidate for the new release passes"
+  for svc in api worker web; do
+    printf 'novelforge-%s:latest sha256:%064d\n' "$svc" 9 >>"$SANDBOX/docker-image-state"
+  done
+  HEALTH_FAIL=1
+  run_controller deploy "$SHA2"
+  assert_eq "$OUT_RC" "70" "failed new health initiates rollback"
+  assert_eq "$(current_release_sha)" "$legacy" "previous release restored"
+  pins="$SHARED/release-tags/$legacy.images.yml"
+  [ -s "$pins" ] || { assert_fail_record "legacy image pins were not saved"; return; }
+  for svc in api worker web; do
+    expected=$(printf 'running-%s-%s' "$ROOT/releases/$legacy" "$svc" | sha256sum | cut -d' ' -f1)
+    assert_contains "$(cat "$pins")" "sha256:$expected" "pin $svc from its running container"
+  done
+  # The compose wrapper must actually load the saved override on rollback.
+  assert_contains "$(docker_log)" "IMAGE_PINS=$pins" "rollback consumes actual running-image pins"
+  assert_not_contains "$(cat "$pins")" "$(printf 'sha256:%064d' 9)" "bad mutable tags were ignored"
+  HEALTH_FAIL=0
+  run_controller rollback "$legacy"
+  assert_eq "$OUT_RC" "0" "explicit rollback accepts legacy image pins"
+}
+
+s22_incomplete_running_release_is_not_deployed() {
+  new_sandbox
+  seed_deployed "$SHA1"
+  run_controller candidate "$SHA2"
+  local mode
+  for mode in missing multiple mixed; do
+    STUB_CONTAINER_MODE=$mode run_controller deploy "$SHA2"
+    assert_eq "$OUT_RC" "71" "$mode running provenance rejects deploy"
+    assert_eq "$(current_release_sha)" "$SHA1" "$mode keeps current release"
+    assert_eq "$(prod_backup_calls)" "0" "$mode rejects before backup or migration"
+    assert_eq "$(prod_mutations)" "0" "$mode produces no container mutation"
+    assert_not_contains "$(docker_log)" "IMAGE_TAG" "$mode rejects before image publication"
+  done
+}
+
+s23_remote_controller_upgrade_is_strict_and_lock_safe() {
+  new_sandbox
+  seed_deployed "$SHA1"
+  STUB_USE_REAL_FLOCK=1 run_controller upgrade-controller "$SHA2"
+  assert_eq "$OUT_RC" "0" "self-upgrade re-acquires real flock without deadlock"
+  assert_contains "$(last_output)" '"action":"upgrade-controller"' "upgrade result is structured"
+  assert_eq "$(current_release_sha)" "$SHA1" "controller upgrade does not switch application"
+  assert_eq "$(prod_mutations)" "0" "controller upgrade has no Compose mutations"
+  assert_not_contains "$(docker_log)" "PROJECT=" "controller upgrade makes zero Compose calls"
+  assert_eq "$(sha256sum "$ROOT/controller-bin/novelforge-release" | cut -d' ' -f1)" \
+    "$(sha256sum "$ROOT/releases/$SHA2/deploy/ops/novelforge-release" | cut -d' ' -f1)" \
+    "controller installed exactly from verified main SHA"
+  local rc=0
+  SSH_ORIGINAL_COMMAND="upgrade-controller $SHA2 extra" \
+    sh "$REPO_ROOT/deploy/ops/novelforge-ops" >"$SANDBOX/wrapper-output" 2>&1 || rc=$?
+  assert_eq "$rc" "64" "forced command rejects extra arguments before sudo"
+  printf '\n# tracked tamper\n' >>"$ROOT/releases/$SHA2/deploy/ops/novelforge-release"
+  run_controller upgrade-controller "$SHA2"
+  assert_eq "$OUT_RC" "73" "controller upgrade rejects modified checkout bytes"
+}
+
 # ── precise scenario accounting (§10.2-14) ─────────────────────────────────
 
 # Error signatures that mark a scenario's stderr as dirty (acceptance P0-D:
@@ -940,10 +1024,10 @@ scenario() { # $1=name $2=fn
 
   if [ "$rc" -eq 0 ] && [ "$failures" = "0" ] && [ -z "$dirty" ]; then
     PASSED=$((PASSED + 1))
-    say "PASS [$SCENARIOS/19] $CURRENT_TEST"
+    say "PASS [$SCENARIOS/23] $CURRENT_TEST"
   else
     FAILED=$((FAILED + 1))
-    say "FAIL [$SCENARIOS/19] $CURRENT_TEST (rc=$rc assertions=$failures dirty_stderr=$dirty)"
+    say "FAIL [$SCENARIOS/23] $CURRENT_TEST (rc=$rc assertions=$failures dirty_stderr=$dirty)"
     sed -n '1,10p' "$TEST_HARNESS/assert-failures" 2>/dev/null
     { grep -iE "$STDERR_ERROR_RE" "$TEST_HARNESS/scenario.err" 2>/dev/null || true; } \
       | sed -n '1,4p'
@@ -978,6 +1062,10 @@ scenario "health failure rolls back and reports structurally" s13_health_failure
 scenario "status provenance variants incl. infra version and missing services" s14_status_provenance_variants
 scenario "reused release HEAD and tracked bytes are fail-closed" s18_reused_release_integrity_is_fail_closed
 scenario "rollback rejects mismatched or dirty release bytes" s19_rollback_release_integrity_is_fail_closed
+scenario "legacy status works without writing missing tag metadata" s20_legacy_status_without_tag_file
+scenario "legacy rollback uses actual running images, not mutable tags" s21_legacy_image_pins_survive_bad_tags
+scenario "missing/multiple/mixed running provenance rejects before deploy" s22_incomplete_running_release_is_not_deployed
+scenario "strict remote controller upgrade with real lock handoff" s23_remote_controller_upgrade_is_strict_and_lock_safe
 
 # P0-D guard: the test run must never modify the host's /usr/local/sbin.
 if [ "$(id -u)" = "0" ]; then

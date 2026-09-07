@@ -233,11 +233,67 @@ compose() {
   # runtime secrets, never cached) + release-tags/<sha>.env (RELEASE_TAG only).
   local release=$1
   shift
+  local tag_file="$RELEASE_TAGS_DIR/${release##*/}.env"
+  local pins_file="$RELEASE_TAGS_DIR/${release##*/}.images.yml"
+  local options=(--env-file "$SHARED/.env")
+  # Pre-per-release deployments never had this file. A read-only status/log
+  # command must still work, without creating files or guessing image tags.
+  [ ! -f "$tag_file" ] || options+=(--env-file "$tag_file")
+  options+=(--project-directory "$release/deploy" -f "$release/deploy/docker-compose.yml")
+  [ ! -f "$pins_file" ] || options+=(-f "$pins_file")
+  RELEASE_TAG="${release##*/}" \
   _compose_cli \
-    --env-file "$SHARED/.env" \
-    --env-file "$RELEASE_TAGS_DIR/${release##*/}.env" \
-    --project-directory "$release/deploy" \
-    -f "$release/deploy/docker-compose.yml" "$@"
+    "${options[@]}" "$@"
+}
+
+pin_running_release_images() { # $1=current release; metadata only, no container mutation
+  local release=$1 sha=${1##*/} svc container image working_dir temporary pins
+  local content=$'services:\n'
+  verify_release_checkout "$release" "$sha"
+  for svc in api worker web; do
+    container=$(docker ps -q \
+      --filter label=com.docker.compose.project=novelforge \
+      --filter "label=com.docker.compose.service=$svc")
+    [[ $container =~ ^[0-9a-f]{12,64}$ ]] \
+      || die 71 "cannot pin $svc: expected exactly one running production container"
+    image=$(docker inspect --format '{{.Image}}' "$container")
+    [[ $image =~ ^sha256:[0-9a-f]{64}$ ]] || die 71 "cannot pin $svc: invalid image digest"
+    working_dir=$(docker inspect --format \
+      '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$container")
+    [ "$working_dir" = "$release/deploy" ] \
+      || die 71 "cannot pin $svc: running container belongs to a different release"
+    [ "$(app_image_digest "$image")" = "$image" ] \
+      || die 71 "cannot pin $svc: running image is unavailable"
+    content+=$(printf '  %s:\n    image: "%s"\n' "$svc" "$image")
+    content+=$'\n'
+  done
+  install -d -m 0750 "$RELEASE_TAGS_DIR"
+  pins="$RELEASE_TAGS_DIR/$sha.images.yml"
+  temporary=$(mktemp "$pins.tmp.XXXXXX")
+  printf '%s' "$content" >"$temporary"
+  chmod 0640 "$temporary"
+  if [ -f "$pins" ] && ! cmp -s "$temporary" "$pins"; then
+    rm -f "$temporary"
+    die 71 "refusing to replace existing rollback image pins for $sha"
+  fi
+  mv -f "$temporary" "$pins"
+}
+
+verify_rollback_images() { # $1=release; legacy pins or normal immutable release tags
+  local release=$1 pins="$RELEASE_TAGS_DIR/${1##*/}.images.yml" image svc
+  if [ -f "$pins" ]; then
+    local images=()
+    mapfile -t images < <(sed -n 's/^    image: "\(sha256:[0-9a-f]\{64\}\)"$/\1/p' "$pins")
+    [ "${#images[@]}" -eq 3 ] || die 71 "invalid rollback image pins"
+    for image in "${images[@]}"; do
+      [ "$(app_image_digest "$image")" = "$image" ] || die 66 "rollback image $image missing"
+    done
+  else
+    for svc in api worker web; do
+      app_image_digest "novelforge-$svc:${release##*/}" >/dev/null \
+        || die 66 "rollback image novelforge-$svc:${release##*/} is missing"
+    done
+  fi
 }
 
 attempt_env_file() { printf '%s/%s.shared.env\n' "$CANDIDATE_RUNTIME_DIR" "$1"; }
@@ -769,6 +825,11 @@ deploy_sha() {
   check_candidate_passed "$sha"
   attempt=$ENV_ATTEMPT_ID
 
+  # Capture the bytes actually running BEFORE publishing any new image tags.
+  # Legacy releases had only mutable implicit Compose tags; rollback must not
+  # trust those tags after a previous failed build has re-pointed them.
+  [ -z "$previous" ] || pin_running_release_images "$previous"
+
   # Controlled release-artifact publication: the gate-verified per-attempt
   # images are tagged as the release artifacts (§9.2). Nothing running is
   # touched by this step.
@@ -819,11 +880,7 @@ rollback_sha() {
   verify_release_links "$release"
   write_release_tag_file "$release"
   compose "$release" config --quiet
-  local svc
-  for svc in api worker web; do
-    app_image_digest "novelforge-$svc:$sha" >/dev/null \
-      || die 66 "rollback image novelforge-$svc:$sha is missing"
-  done
+  verify_rollback_images "$release"
   previous=$(current_release)
   switch_to "$release"
   if ! activate_app_services "$release" || ! wait_healthy; then
@@ -970,6 +1027,17 @@ self_heal() {
   wait_healthy
 }
 
+upgrade_controller_sha() {
+  local sha=$1 release
+  fetch_main
+  validate_sha "$sha"
+  release=$(prepare_release "$sha")
+  # The upgrader independently re-acquires the same lock and revalidates the
+  # SHA. Release this descriptor before exec, otherwise it would deadlock.
+  exec 9>&-
+  exec bash "$release/deploy/ops/upgrade-controller.sh" "$sha"
+}
+
 # Test/sourcing hook: NOVELFORGE_CONTROLLER_SOURCABLE=1 stops before the
 # dispatcher so tests can call compose_candidate()/compose() through the real
 # controller code (never used in production).
@@ -984,6 +1052,7 @@ case "${1:-status}" in
   rollback) [ "$#" -eq 2 ] && rollback_sha "$2" ;;
   logs) [ "$#" -eq 3 ] && show_logs "$2" "$3" ;;
   candidate) [ "$#" -eq 2 ] && candidate_sha "$2" ;;
+  upgrade-controller) [ "$#" -eq 2 ] && upgrade_controller_sha "$2" ;;
   novel) [ "$#" -eq 2 ] && novel_action "$2" ;;
   healthcheck) [ "$#" -eq 1 ] && self_heal ;;
   *) exit 64 ;;

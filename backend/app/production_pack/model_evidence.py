@@ -20,6 +20,7 @@ from app.model_autopilot.capability import (
     CONTEXT_REQUIRED_ROLES,
     required_context_for,
 )
+from app.model_autopilot.retired_models import PRODUCTION_MODEL_ID
 from app.model_autopilot.preflight import (
     ROLE_CONTEXT_ESTIMATE,
     bootstrap_catalog_and_probes,
@@ -32,9 +33,10 @@ from .service import stable_id
 
 
 KNOWN_CONFIGURED_MODEL_ALIASES = {
-    ("new-api", "deepseek-v4-flash-free"): ("new-api", "glm-5.2"),
-    ("new-api", "z-ai/glm-5.2"): ("new-api", "glm-5.2"),
-    ("openrouter", "z-ai/glm-5.2"): ("new-api", "glm-5.2"),
+    ("new-api", "deepseek-v4-flash-free"): ("new-api", PRODUCTION_MODEL_ID),
+    ("new-api", "glm-5.2"): ("new-api", PRODUCTION_MODEL_ID),
+    ("new-api", "z-ai/glm-5.2"): ("new-api", PRODUCTION_MODEL_ID),
+    ("openrouter", "z-ai/glm-5.2"): ("new-api", PRODUCTION_MODEL_ID),
 }
 
 

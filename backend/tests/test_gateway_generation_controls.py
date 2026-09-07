@@ -39,3 +39,13 @@ def test_glm_thinking_control_preserved():
     )
     assert controls["thinking"] == {"type": "enabled"}
     assert controls["max_tokens"] == 16384
+
+
+def test_glm53_never_disables_thinking_and_budgets_a_small_probe():
+    for model in ("glm-5.3", "glm-5.3-flash", "z-ai/glm-5.3"):
+        assert _generation_controls(model, max_tokens=128, reasoning_mode="disabled") == {
+            "max_tokens": 2048, "thinking": {"type": "enabled"}, "reasoning_effort": "low",
+        }
+        assert _generation_controls(model, max_tokens=8192, reasoning_mode="enabled") == {
+            "max_tokens": 8192, "thinking": {"type": "enabled"}, "reasoning_effort": "high",
+        }

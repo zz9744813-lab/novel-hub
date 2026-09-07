@@ -136,6 +136,7 @@ async def bootstrap_catalog_and_probes() -> dict:
         "skipped_fresh": 0,
         "promoted_text": 0,
         "configured_models": 0,
+        "probe_attempts": [],
         "errors": [],
     }
     # Include logical providers from persisted bindings.  Production bindings
@@ -292,6 +293,14 @@ async def bootstrap_catalog_and_probes() -> dict:
                     catalog,
                     allow_reasoning_retry=configured,
                 )
+                detail = probe.detail_json or {}
+                report["probe_attempts"].append({
+                    "provider": provider, "model": model_id,
+                    "attempt_count": detail.get("attempt_count"),
+                    "error_history": detail.get("error_history", []),
+                    "final_error": probe.error_code,
+                    "status": probe.status,
+                })
                 db.add(probe)
                 if configured and probe.status == "ok" and probe.output_valid:
                     catalog.availability_status = "available"

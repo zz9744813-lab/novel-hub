@@ -1,6 +1,7 @@
 """Application configuration - all via env vars, no hardcoded secrets."""
 from pydantic_settings import BaseSettings
 from sqlalchemy.engine import URL
+from app.model_autopilot.retired_models import PRODUCTION_MODEL_ID
 
 
 class Settings(BaseSettings):
@@ -32,11 +33,11 @@ class Settings(BaseSettings):
     fallback_base_url: str = ""
     fallback_api_key: str = ""
 
-    planner_model: str = "glm-5.2"
-    writer_model: str = "glm-5.2"
-    review_model: str = "glm-5.2"
-    query_model: str = "glm-5.2"
-    ranker_model: str = "glm-5.2"
+    planner_model: str = PRODUCTION_MODEL_ID
+    writer_model: str = PRODUCTION_MODEL_ID
+    review_model: str = PRODUCTION_MODEL_ID
+    query_model: str = PRODUCTION_MODEL_ID
+    ranker_model: str = PRODUCTION_MODEL_ID
 
     global_llm_concurrency: int = 1
     arq_max_jobs: int = 1

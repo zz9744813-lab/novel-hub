@@ -345,14 +345,15 @@ async def ensure_required_bindings():
     else:
         default_provider = os.environ.get("DEFAULT_PROVIDER", "openrouter")
 
+    from app.model_autopilot.retired_models import PRODUCTION_MODEL_ID, normalize_production_model
+
     default_model = (
         os.environ.get("WRITER_MODEL")
         or os.environ.get("PLANNER_MODEL")
-        or "glm-5.2"
+        or PRODUCTION_MODEL_ID
     )
-    from app.model_autopilot.retired_models import normalize_production_model
 
-    default_model = normalize_production_model(default_model) or "glm-5.2"
+    default_model = normalize_production_model(default_model) or PRODUCTION_MODEL_ID
 
     roles = dict(AGENT_MODELS)
     for role in REQUIRED_ROLES:

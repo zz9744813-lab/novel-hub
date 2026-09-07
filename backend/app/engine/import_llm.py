@@ -13,12 +13,13 @@ from pydantic import BaseModel
 
 from app.contracts.import_contracts import IMPORT_CONTRACTS
 from app.gateway.model_gateway import stream_with_retry
+from app.model_autopilot.retired_models import PRODUCTION_MODEL_ID, PRODUCTION_MODEL_PROVIDER
 
 logger = logging.getLogger("novelforge.import_llm")
 
 # Reuse production model binding for outline_parser when import roles unbound
-DEFAULT_IMPORT_MODEL = "glm-5.2"
-DEFAULT_IMPORT_PROVIDER = "new-api"
+DEFAULT_IMPORT_MODEL = PRODUCTION_MODEL_ID
+DEFAULT_IMPORT_PROVIDER = PRODUCTION_MODEL_PROVIDER
 
 # process-local throttle to reduce 429 storms across sequential import agents
 _last_call_ts = 0.0

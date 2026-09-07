@@ -4,6 +4,7 @@ Per §附录A v7.3 spec.
 import os as _os
 
 from app.model_autopilot.retired_models import normalize_production_model as _normalize_model
+from app.model_autopilot.retired_models import PRODUCTION_MODEL_ID
 
 PROMPTS = {
     "outline_parser": {
@@ -221,23 +222,23 @@ attributions 只能从输入提供的 core_anchor_ids / belief_keys / goal_keys 
 }
 
 # Model assignment per agent
-# Production default is the release-qualified GLM-5.2 route.  Exact retired
+# Production default is a candidate for release qualification. Exact retired
 # model ids in legacy environment files are normalized below so a missing
 # binding cannot silently recreate a route that the release gate rejected.
 # Other explicit model names remain valid overrides.
 _DEFAULT_MODELS = {
-    "outline_parser": "glm-5.2",
-    "blank_planner": "glm-5.2",
-    "chapter_planner": "glm-5.2",
-    "draft_writer": "glm-5.2",
-    "review_agent": "glm-5.2",
-    "local_rewrite_editor": "glm-5.2",
-    "state_extractor": "glm-5.2",
-    "drift_audit": "glm-5.2",
-    "query_planner": "glm-5.2",
-    "evidence_ranker": "glm-5.2",
-    "style_analyzer": "glm-5.2",
-    "memory_compiler": "glm-5.2",
+    "outline_parser": PRODUCTION_MODEL_ID,
+    "blank_planner": PRODUCTION_MODEL_ID,
+    "chapter_planner": PRODUCTION_MODEL_ID,
+    "draft_writer": PRODUCTION_MODEL_ID,
+    "review_agent": PRODUCTION_MODEL_ID,
+    "local_rewrite_editor": PRODUCTION_MODEL_ID,
+    "state_extractor": PRODUCTION_MODEL_ID,
+    "drift_audit": PRODUCTION_MODEL_ID,
+    "query_planner": PRODUCTION_MODEL_ID,
+    "evidence_ranker": PRODUCTION_MODEL_ID,
+    "style_analyzer": PRODUCTION_MODEL_ID,
+    "memory_compiler": PRODUCTION_MODEL_ID,
 }
 
 _ENV_MAP = {

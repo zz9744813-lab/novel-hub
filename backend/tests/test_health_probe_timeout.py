@@ -201,3 +201,27 @@ async def test_recurring_health_probe_remains_single_attempt_on_transient_error(
     assert result.status == "failed"
     assert gateway.await_count == 1
     sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured", [False, True])
+async def test_glm53_ping_starts_lightweight_nonstreaming(configured):
+    from app.gateway.model_gateway import _generation_controls
+
+    catalog = SimpleNamespace(
+        id=uuid.uuid4(), model_id="glm-5.3-flash", provider="new-api",
+    )
+    gateway = AsyncMock(return_value=StreamResult(final_content="OK"))
+    with patch("app.model_autopilot.probe.stream_completion_and_collect", gateway):
+        result = await probe_model_ping(None, catalog, allow_reasoning_retry=configured)
+    assert result.status == "ok"
+    assert result.detail_json["attempt_count"] == 1
+    kwargs = gateway.await_args.kwargs
+    assert kwargs["stream"] is False
+    controls = _generation_controls(
+        kwargs["model"], max_tokens=kwargs["max_tokens"],
+        reasoning_mode=kwargs["reasoning_mode"],
+    )
+    assert controls == {
+        "max_tokens": 2048, "thinking": {"type": "enabled"}, "reasoning_effort": "low",
+    }

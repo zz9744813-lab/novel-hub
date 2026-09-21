@@ -472,6 +472,14 @@ export const api = {
       fetchJSON<ContextPackageSummary[]>(`/api/chapters/${chapterId}/context-packages`),
     runs: (chapterId: string) =>
       fetchJSON<ChapterRunSummary[]>(`/api/chapters/${chapterId}/runs`),
+    /** First-class chapter runs resource: auth, error handling and response
+     *  normalization all live here. Returns a typed list result; an empty list
+     *  resolves normally, failures throw. */
+    runsList: async (chapterId: string): Promise<ChapterRunListResult> =>
+      normalizeChapterRunList(
+        chapterId,
+        await fetchJSON<unknown>(`/api/chapters/${encodeURIComponent(chapterId)}/runs`)
+      ),
     needsHuman: (chapterId: string) =>
       fetchJSON<NeedsHumanDetail>(`/api/chapters/${chapterId}/needs-human`),
   },
@@ -1095,6 +1103,68 @@ export interface ChapterListItem {
 export interface ChapterRunSummary { run_id: string; status: string; current_step?: string | null; chapter_no?: number; }
 export interface NeedsHumanDetail { chapter_id: string; status: string; issues?: any[]; detail?: any; run?: any; active_run_id?: string | null; }
 export interface ChapterRunDetail extends ChapterRunSummary { book_id?: string; error_code?: string | null; error_detail?: any; }
+
+// ── Chapter runs: first-class resource ───────────────────────────────
+// The backend (GET /api/chapters/{chapter_id}/runs) returns a bare JSON
+// array of run records. We normalize it into an explicit list shape so
+// consumers never depend on the raw response layout.
+
+/** Normalized single run record. All optional fields tolerate missing/null values. */
+export interface ChapterRunRecord {
+  run_id: string;
+  status: string;
+  current_step: string | null;
+  control_requested: string | null;
+  error_code: string | null;
+  /** May be a string, an object (e.g. {message}), or null — kept as unknown; use displayText(). */
+  error_detail: unknown;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+/** Normalized list response. `total` mirrors the returned count; pagination is
+ *  server-limited (last N runs) and modeled explicitly rather than invented. */
+export interface ChapterRunListResult {
+  chapter_id: string;
+  runs: ChapterRunRecord[];
+  total: number;
+}
+
+function runText(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value === "string") return value === "" ? null : value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return null;
+}
+
+/** Single place that adapts the raw backend payload to ChapterRunRecord. */
+export function normalizeChapterRun(chapterId: string, raw: unknown): ChapterRunRecord {
+  const obj = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const runId = runText(obj.run_id) ?? runText(obj.id) ?? "";
+  return {
+    run_id: runId,
+    status: runText(obj.status) ?? "unknown",
+    current_step: runText(obj.current_step),
+    control_requested: runText(obj.control_requested),
+    error_code: runText(obj.error_code),
+    error_detail: obj.error_detail ?? null,
+    started_at: runText(obj.started_at),
+    finished_at: runText(obj.finished_at),
+  };
+}
+
+/** Flatten any plausible raw list payload (array | {runs: []} | malformed) into an array. */
+export function normalizeChapterRunList(chapterId: string, raw: unknown): ChapterRunListResult {
+  let rows: unknown[] = [];
+  if (Array.isArray(raw)) rows = raw;
+  else if (raw && typeof raw === "object" && Array.isArray((raw as { runs?: unknown }).runs)) {
+    rows = (raw as { runs: unknown[] }).runs;
+  }
+  const runs = rows
+    .filter((row) => row != null && typeof row === "object")
+    .map((row) => normalizeChapterRun(chapterId, row));
+  return { chapter_id: chapterId, runs, total: runs.length };
+}
 export interface WritingSessionView {
   id: string;
   book_id: string;

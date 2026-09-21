@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { api, type TaskItem } from "../../api";
-import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Clock, Loader2, Pause, Play, RefreshCw, Square, Upload, PenTool, Search } from "lucide-react";
+import { api, type ChapterRunListResult, type ChapterRunRecord, type TaskItem } from "../../api";
+import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Clock, History as HistoryIcon, Loader2, Pause, Play, RefreshCw, Square, Upload, PenTool, Search } from "lucide-react";
 import clsx from "clsx";
 
 function displayDetail(value: unknown): string {
@@ -52,6 +52,65 @@ function taskTitle(item: TaskItem): string {
   return item.current_step || "导入任务";
 }
 
+// ── Chapter run history state (decoupled from raw response shape) ────
+export type RunsState =
+  | { phase: "idle" }
+  | { phase: "loading" }
+  | { phase: "ready"; result: ChapterRunListResult }
+  | { phase: "error"; message: string };
+
+export const INITIAL_RUNS_STATE: RunsState = { phase: "idle" };
+
+/** Load runs through the API client only — never build headers or direct fetches here. */
+export async function loadChapterRuns(chapterId: string): Promise<RunsState> {
+  try {
+    const result = await api.chapters.runsList(chapterId);
+    return { phase: "ready", result };
+  } catch (e: unknown) {
+    return { phase: "error", message: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+function runTimeLabel(run: ChapterRunRecord): string {
+  return run.started_at || run.finished_at || "—";
+}
+
+/** Expandable panel: renders the normalized run list with explicit loading/empty/error states. */
+export function ChapterRunsPanel({ state, onRetry }: { state: RunsState; onRetry: () => void }) {
+  if (state.phase === "idle" || state.phase === "loading") {
+    return (
+      <div className="px-4 py-3 text-2xs text-text-disabled flex items-center gap-2">
+        <Loader2 size={12} className="animate-spin" /> 加载运行历史…
+      </div>
+    );
+  }
+  if (state.phase === "error") {
+    // Error must stay actionable — never collapse into the empty state.
+    return (
+      <div className="px-4 py-3 text-2xs text-red-400 flex items-center gap-2">
+        <AlertTriangle size={12} /> 运行历史加载失败：{state.message}
+        <button onClick={onRetry} className="btn-ghost text-2xs py-0.5 px-1.5 ml-1">重试</button>
+      </div>
+    );
+  }
+  if (state.result.total === 0) {
+    return <div className="px-4 py-3 text-2xs text-text-disabled">该章节暂无运行记录</div>;
+  }
+  return (
+    <div className="px-4 py-2 space-y-1.5" data-testid="runs-list">
+      {state.result.runs.map((run, index) => (
+        <div key={run.run_id || `run-${index}`} className="text-2xs font-mono text-text-tertiary flex flex-wrap gap-x-3 gap-y-0.5">
+          <span className="flex items-center gap-1">{statusIcon(run.status)}{run.status}</span>
+          <span>step: {displayDetail(run.current_step) || "—"}</span>
+          <span>control: {displayDetail(run.control_requested) || "none"}</span>
+          {run.error_code && <span className="text-amber-400">err: {run.error_code}{run.error_detail != null ? ` · ${displayDetail(run.error_detail)}` : ""}</span>}
+          <span className="text-text-disabled">{runTimeLabel(run)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function WritingTasksPage() {
   const [items, setItems] = useState<TaskItem[]>([]);
   const [typeFilter, setTypeFilter] = useState("");
@@ -62,6 +121,34 @@ export function WritingTasksPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyTask, setBusyTask] = useState<string | null>(null);
+  // Run history panel: keyed by task_id; state machine per chapter task.
+  const [runsByTask, setRunsByTask] = useState<Record<string, RunsState>>({});
+
+  const toggleRuns = async (item: TaskItem) => {
+    if (!item.chapter_id) return;
+    const current = runsByTask[item.task_id];
+    if (current && current.phase !== "error") {
+      setRunsByTask((prev) => {
+        const next = { ...prev };
+        delete next[item.task_id];
+        return next;
+      });
+      return;
+    }
+    const chapterId = item.chapter_id;
+    setRunsByTask((prev) => ({ ...prev, [item.task_id]: { phase: "loading" } }));
+    const state = await loadChapterRuns(chapterId);
+    setRunsByTask((prev) => ({ ...prev, [item.task_id]: state }));
+  };
+
+  const retryRuns = (item: TaskItem) => {
+    if (!item.chapter_id) return;
+    const chapterId = item.chapter_id;
+    setRunsByTask((prev) => ({ ...prev, [item.task_id]: { phase: "loading" } }));
+    void loadChapterRuns(chapterId).then((state) => {
+      setRunsByTask((prev) => ({ ...prev, [item.task_id]: state }));
+    });
+  };
 
   const load = async () => {
     setLoading(true);
@@ -189,8 +276,10 @@ export function WritingTasksPage() {
             {items.map((item) => {
               const isFailed = ["failed", "needs_human", "resource_blocked", "blocked_by_dependency"].includes(item.status);
               const isRunning = ["analyzing", "running", "drafting", "planning", "searching", "synthesizing"].includes(item.status);
+              const runsState = runsByTask[item.task_id];
               return (
-                <div key={item.task_id} className={clsx(
+                <div key={item.task_id}>
+                <div className={clsx(
                   "px-3 py-3 flex items-center gap-3 transition-colors duration-150",
                   isRunning && "bg-brand-muted/30",
                   isFailed && "bg-danger-muted/30",
@@ -211,6 +300,15 @@ export function WritingTasksPage() {
                     {item.error && <div className="text-2xs text-amber-300/80 truncate mt-0.5">{displayDetail(item.error.detail)}</div>}
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
+                    {item.task_type === "chapter" && item.chapter_id && (
+                      <button
+                        className="btn-ghost text-2xs py-1 px-2 flex items-center gap-1"
+                        onClick={() => void toggleRuns(item)}
+                        data-testid={`runs-toggle-${item.task_id}`}
+                      >
+                        <HistoryIcon size={11} /> 运行历史
+                      </button>
+                    )}
                     {item.actions.map((action) => (
                       <button
                         key={action}
@@ -227,6 +325,10 @@ export function WritingTasksPage() {
                       </button>
                     ))}
                   </div>
+                </div>
+                {runsState && (
+                  <ChapterRunsPanel state={runsState} onRetry={() => retryRuns(item)} />
+                )}
                 </div>
               );
             })}
